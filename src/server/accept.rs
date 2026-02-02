@@ -40,10 +40,10 @@ macro_rules! log {
 
 #[inline(never)]
 pub async fn accept<App, TlsAcceptor>(
-    config: ServerConfig,
     acceptor: TlsAcceptor,
-    service: AppService<App>,
     listener: TcpListener,
+    service: AppService<App>,
+    config: ServerConfig,
 ) -> ExitCode
 where
     App: Send + Sync + 'static,

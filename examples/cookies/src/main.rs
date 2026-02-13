@@ -23,7 +23,7 @@ async fn counter(request: Request, next: Next) -> via::Result {
 
     // Clone `request.app()` so we can use the secret key after ownership of
     // request is passed to the next middleware.
-    let app = request.app().clone();
+    let app = request.app_owned();
 
     // Get the value of the "counter" cookie from the request before passing
     // ownership of the request to the next middleware. In this example, we are

@@ -44,7 +44,7 @@ async fn main() -> Result<ExitCode, Error> {
     // be applied to all requests.
     app.uses(async |request: Request<Counter>, next: Next<Counter>| {
         // App is used after the response is generated.
-        let app = request.app().clone();
+        let app = request.app_owned();
 
         // Call the next middleware in the app and await the response.
         let response = next.call(request).await?;

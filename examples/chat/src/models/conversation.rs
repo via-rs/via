@@ -106,6 +106,10 @@ impl Conversation {
     pub fn with_author() -> InnerJoin<conversations::table, users::table> {
         Self::query().inner_join(users::table)
     }
+
+    pub fn channel_id(&self) -> &Id {
+        &self.channel_id
+    }
 }
 
 impl ConversationDetails {

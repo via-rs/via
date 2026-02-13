@@ -21,6 +21,12 @@ use crate::router::{Route, Router};
 ///     pool: DatabasePool,
 /// }
 ///
+/// impl Unicorn {
+///     fn pool(&self) -> &DatabasePool {
+///         &self.pool
+///     }
+/// }
+///
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
 ///     // Pass our shared state struct containing a database pool to the App
@@ -33,10 +39,8 @@ use crate::router::{Route, Router};
 ///
 ///     // We can access our database in middleware with `request.app()`.
 ///     app.uses(async |request: Request<Unicorn>, next: Next<Unicorn>| {
-///         let unicorn: &Shared<Unicorn> = request.app();
-///
 ///         // Print the debug output of our mock database pool to stdout.
-///         println!("{:?}", &unicorn.pool);
+///         println!("{:?}", request.app().pool());
 ///
 ///         // Delegate to the next middleware to get a response.
 ///         next.call(request).await

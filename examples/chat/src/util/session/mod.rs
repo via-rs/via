@@ -38,7 +38,7 @@ pub trait Session {
 }
 
 pub async fn restore(mut request: Request, next: Next) -> via::Result {
-    let app = request.app().clone();
+    let app = request.app_owned();
     let persist = match request
         .envelope()
         .cookies()
@@ -108,7 +108,7 @@ fn identify(extensions: &Extensions) -> via::Result<&Id> {
 
 impl Session for Request {
     fn user(&self) -> via::Result<&Id> {
-        identify(self.envelope().extensions())
+        identify(self.extensions())
     }
 }
 

@@ -1,8 +1,9 @@
 use std::fmt::{self, Display, Formatter};
 use std::ops::ControlFlow::{Break, Continue};
-use tokio_websockets::Error as WebSocketError;
 
 use crate::error::Error;
+
+pub use tungstenite::error::Error as WebSocketError;
 
 type ControlFlow<T> = std::ops::ControlFlow<T, T>;
 pub type Result<T = ()> = std::result::Result<T, ControlFlow<Error>>;
@@ -19,20 +20,14 @@ pub enum ErrorKind {
     Socket(WebSocketError),
 }
 
-pub fn try_rescue_ws(error: WebSocketError) -> ControlFlow<Option<ErrorKind>> {
-    let into_control_flow = match &error {
-        WebSocketError::PayloadTooLong { .. } | WebSocketError::Protocol(_) => Continue,
-        WebSocketError::Io(source) => match source.kind() {
-            std::io::ErrorKind::Interrupted
-            | std::io::ErrorKind::TimedOut
-            | std::io::ErrorKind::WouldBlock
-            | std::io::ErrorKind::WriteZero => Continue,
-            _ => Break,
-        },
-        _ => Break,
-    };
+#[inline]
+pub fn is_recoverable(error: &WebSocketError) -> bool {
+    use std::io::ErrorKind;
 
-    into_control_flow(Some(error.into()))
+    match &error {
+        WebSocketError::Io(io) => matches!(io.kind(), ErrorKind::Interrupted | ErrorKind::TimedOut),
+        _ => false,
+    }
 }
 
 impl ErrorKind {
@@ -53,6 +48,12 @@ impl Display for ErrorKind {
 impl From<Error> for ErrorKind {
     fn from(error: Error) -> Self {
         Self::Listener(error)
+    }
+}
+
+impl From<hyper::Error> for ErrorKind {
+    fn from(error: hyper::Error) -> Self {
+        Self::Listener(error.into())
     }
 }
 

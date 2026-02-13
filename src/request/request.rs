@@ -149,7 +149,7 @@ impl<App> Request<App> {
     }
 
     #[inline]
-    pub fn app(&self) -> &Shared<App> {
+    pub fn app(&self) -> &App {
         &self.app
     }
 
@@ -158,7 +158,6 @@ impl<App> Request<App> {
         &self.envelope
     }
 
-    #[inline]
     pub fn envelope_mut(&mut self) -> &mut Envelope {
         &mut self.envelope
     }
@@ -201,11 +200,14 @@ impl<App> Request<App> {
         }
     }
 
+    pub fn app_owned(&self) -> Shared<App> {
+        self.app.clone()
+    }
+
     /// Consumes the request and returns a tuple containing a future that
     /// resolves with the data and trailers of the body as well as a shared
     /// copy of `App`.
     ///
-    #[inline]
     pub fn into_future(self) -> (Coalesce, Shared<App>) {
         let Self { app, body, .. } = self;
         (Coalesce::new(body), app)
@@ -224,7 +226,7 @@ impl<App> Debug for Request<App> {
         f.debug_struct("Request")
             .field("envelope", self.envelope())
             .field("body", &self.body)
-            .field("app", self.app())
+            .field("app", &self.app)
             .finish()
     }
 }

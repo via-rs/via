@@ -1,7 +1,7 @@
 use diesel::prelude::*;
 use std::collections::HashMap;
 use via::request::Payload;
-use via::ws::{self, Channel, Message, Request, ResultExt};
+use via::ws::{self, Channel, Message, ResultExt};
 
 use crate::chat::{Chat, Event, EventContext};
 use crate::models::conversation::{Conversation, NewConversation};
@@ -15,7 +15,7 @@ macro_rules! debug {
     ($($args:tt)+) => { if cfg!(debug_assertions) { eprintln!($($args)+); } };
 }
 
-pub async fn chat(mut socket: Channel, request: Request<Chat>) -> ws::Result {
+pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result {
     // The current user that opened the websocket.
     let user_id = request.user().cloned().or_break()?;
 
@@ -34,70 +34,66 @@ pub async fn chat(mut socket: Channel, request: Request<Chat>) -> ws::Result {
         result.or_break()?.into_iter().collect()
     };
 
-    'recv: loop {
-        let new_convo = 'send: {
-            tokio::select! {
-                // Received a message from the websocket channel.
-                Some(message) = socket.recv() => match message {
+    loop {
+        let mut new_conversation = tokio::select! {
+            // Received a message from the websocket channel.
+            Some(message) = socket.recv() => {
+                match message {
                     Message::Text(payload) => {
-                        let mut new_convo = payload.json::<NewConversation>().or_continue()?;
-
-                        // Confirm that the current user can write in the
-                        // channel before we proceed.
-                        if let Some(id) = &new_convo.channel_id
-                            && let Some(claims) = subscriptions.get(id)
-                            && claims.contains(AuthClaims::WRITE)
-                        {
-                            new_convo.user_id = Some(user_id);
-                            break 'send new_convo;
-                        }
+                        payload.be_z_json::<NewConversation>().or_continue()?
                     }
                     Message::Close(close) => {
                         close.inspect(|context| debug!("{:?}", context));
-                        break 'recv Ok(());
-                    }
-                    Message::Binary(_) => {
-                        debug!("warn(chat): ignoring binary message");
+                        return Ok(());
                     }
                     ignored => {
                         debug!("warn(chat): ignoring {:?}", ignored);
-                    }
-                },
-
-                // Received an event notification from another async task.
-                Ok((ref context, message)) = pubsub.recv() => {
-                    if user_id != *context.user_id()
-                        && let Some(id) = context.channel_id()
-                        && let Some(claims) = subscriptions.get(id)
-                        && claims.contains(AuthClaims::VIEW)
-                    {
-                        socket.send(message).await?;
+                        continue;
                     }
                 }
             }
+            // Received an event notification from another async task.
+            Ok((ref event, message)) = pubsub.recv() => {
+                if user_id != *event.user_id()
+                    && let Some(id) = event.channel_id()
+                    && let Some(claims) = subscriptions.get(id)
+                    && claims.contains(AuthClaims::VIEW)
+                {
+                    socket.send(message).await?;
+                }
 
-            continue 'recv;
+                continue;
+            }
         };
+
+        // Confirm that the current user can write in the
+        // channel before we proceed.
+        if let Some(id) = &new_conversation.channel_id
+            && let Some(claims) = subscriptions.get(id)
+            && claims.contains(AuthClaims::WRITE)
+        {
+            new_conversation.user_id = Some(user_id);
+        } else {
+            continue;
+        }
+
+        // Acquire a database connection and create the message.
+        let conversation = diesel::insert_into(conversations::table)
+            .values(new_conversation)
+            .returning(Conversation::as_returning())
+            .debug_result(&mut request.app().database().await.or_continue()?)
+            .await
+            .or_continue()?;
 
         // Build the event context from the request and params. We use this to
         // determine if a message is for the current user in the second arm of
         // the select expression above.
-        let context = EventContext::new(new_convo.channel_id, user_id);
+        let data = EventContext::new(Some(*conversation.channel_id()), user_id);
 
         // Insert the message into the database and return a message event.
-        let event = {
-            // Acquire a database connection and create the message.
-            let acquire = request.app().database().await;
-            let create = diesel::insert_into(conversations::table)
-                .values(new_convo)
-                .returning(Conversation::as_returning())
-                .debug_result(&mut acquire.or_continue()?)
-                .await;
-
-            Event::Message(create.or_continue()?)
-        };
+        let event = Event::Message(conversation);
 
         // Publish the event over the broadcast channel to notify peers.
-        request.app().publish(context, event).or_continue()?;
+        request.app().publish(data, event).or_continue()?;
     }
 }

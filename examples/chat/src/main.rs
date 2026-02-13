@@ -6,7 +6,7 @@ mod util;
 
 use std::process::ExitCode;
 use via::error::{Error, Rescue};
-use via::{Cookies, Guard, Server, ws};
+use via::{Cookies, Guard, Server};
 
 use chat::Chat;
 use routes::{channel, channels, chat, home, users};
@@ -116,7 +116,7 @@ async fn main() -> Result<ExitCode, Error> {
         path.uses(Guard::new(Request::authenticate));
 
         // Upgrade to a websocket and start chatting.
-        path.route("/").to(via::get(ws::upgrade(chat)));
+        path.route("/").to(via::ws(chat));
     });
 
     api.route("/users").scope(|path| {

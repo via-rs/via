@@ -14,6 +14,9 @@ use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 use std::{ptr, slice};
 
+#[cfg(feature = "ws")]
+use tungstenite::protocol::frame::Utf8Bytes;
+
 use crate::error::{BoxError, Error};
 use crate::raise;
 
@@ -25,7 +28,7 @@ mod sealed {
     impl Sealed for super::Aggregate {}
 
     #[cfg(feature = "ws")]
-    impl Sealed for bytestring::ByteString {}
+    impl Sealed for tungstenite::protocol::frame::Utf8Bytes {}
 }
 
 /// Represents an optionally contiguous source of data received from a client.
@@ -257,13 +260,13 @@ fn release_compiler_fence() {
 /// *Note: This fn is safe as long as `bytes` is valid UTF-8.*
 ///
 #[cfg(feature = "ws")]
-fn back_to_bytestring(bytes: Bytes) -> bytestring::ByteString {
+fn back_to_utf8_bytes(bytes: Bytes) -> Utf8Bytes {
     // Safety:
     //
     // We know this is safe because `self` is guaranteed to be
     // valid UTF-8 and z_json failed before zeroizing the backing
     // buffer.
-    unsafe { bytestring::ByteString::from_bytes_unchecked(bytes) }
+    unsafe { Utf8Bytes::from_bytes_unchecked(bytes) }
 }
 
 impl Aggregate {
@@ -417,9 +420,9 @@ impl RequestPayload {
 }
 
 #[cfg(feature = "ws")]
-impl Payload for bytestring::ByteString {
+impl Payload for Utf8Bytes {
     fn coalesce(self) -> Vec<u8> {
-        let mut src = self.into_bytes();
+        let mut src = Bytes::from(self);
         let mut dest = Vec::with_capacity(src.remaining());
 
         // The transport layer sufficiently chunks each frame.
@@ -432,11 +435,11 @@ impl Payload for bytestring::ByteString {
     }
 
     fn z_coalesce(self) -> Result<Vec<u8>, Self> {
-        let mut src = self.into_bytes();
+        let mut src = Bytes::from(self);
 
         // If we do not have unique access to self, return back to the caller.
         if !src.is_unique() {
-            return Err(back_to_bytestring(src));
+            return Err(back_to_utf8_bytes(src));
         }
 
         let mut dest = Vec::with_capacity(src.remaining());
@@ -463,7 +466,7 @@ impl Payload for bytestring::ByteString {
     where
         T: DeserializeOwned,
     {
-        let mut src = self.into_bytes();
+        let mut src = Bytes::from(self);
 
         // Attempt to deserialize `T` from the bytes in self.
         let result = deserialize_json(src.as_ref());
@@ -478,11 +481,11 @@ impl Payload for bytestring::ByteString {
     where
         T: DeserializeOwned,
     {
-        let mut src = self.into_bytes();
+        let mut src = Bytes::from(self);
 
         // If we do not have unique access to self, return back to the caller.
         if !src.is_unique() {
-            return Err(back_to_bytestring(src));
+            return Err(back_to_utf8_bytes(src));
         }
 
         // Attempt to deserialize `T` from the bytes in self.

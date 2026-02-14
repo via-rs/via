@@ -1,10 +1,16 @@
+#[cfg(all(feature = "aws-lc-rs", feature = "ring"))]
+compile_error!("Features \"aws-lc-rs\" and \"ring\" are mutually exclusive.");
+
+#[cfg(not(any(feature = "aws-lc-rs", feature = "ring")))]
+compile_error!("A crypto backend must be enabled: either \"aws-lc-rs\" or \"ring\".");
+
+mod channel;
 mod error;
-mod message;
 mod upgrade;
 
+pub use channel::{Channel, CloseFrame, Message, Utf8Bytes};
 pub use error::{Result, ResultExt};
-pub use message::{Channel, CloseCode, Message};
-pub use upgrade::{Request, Upgrade};
+pub use upgrade::{Request, Ws};
 
 /// Upgrade the connection to a web socket.
 ///
@@ -43,10 +49,10 @@ pub use upgrade::{Request, Upgrade};
 /// }
 ///```
 ///
-pub fn upgrade<App, F, R>(upgraded: F) -> Upgrade<F>
+pub fn upgrade<App, F, R>(upgraded: F) -> Ws<F>
 where
     F: Fn(Channel, Request<App>) -> R + Send + Sync + 'static,
     R: Future<Output = Result> + Send,
 {
-    Upgrade::new(upgraded)
+    Ws::new(upgraded)
 }

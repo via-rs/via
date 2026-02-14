@@ -1,7 +1,6 @@
 use bb8::Pool;
 use bb8::{ManageConnection, PooledConnection, RunError};
 use bytes::Bytes;
-use bytestring::ByteString;
 use cookie::Key;
 use diesel_async::AsyncPgConnection;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
@@ -11,6 +10,7 @@ use std::env::{self, VarError};
 use tokio::sync::broadcast;
 use tokio::task::coop::unconstrained;
 use via::response::{Finalize, ResponseBuilder};
+use via::ws::Utf8Bytes;
 use via::{raise, ws};
 
 use crate::models::conversation::Conversation;
@@ -25,7 +25,7 @@ type Sender = broadcast::Sender<(EventContext, EventPayload)>;
 type Receiver = broadcast::Receiver<(EventContext, EventPayload)>;
 
 #[derive(Clone)]
-pub struct EventPayload(ByteString);
+pub struct EventPayload(Utf8Bytes);
 
 #[derive(Serialize)]
 #[serde(content = "data", rename_all = "lowercase", tag = "type")]

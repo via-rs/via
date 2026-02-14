@@ -5,11 +5,10 @@ use diesel::dsl::count;
 use diesel::prelude::*;
 use http::{Extensions, StatusCode};
 use time::{Duration, OffsetDateTime};
-use via::{Response, ws};
+use via::Response;
 
 use self::identity::Identity;
 use super::error;
-use crate::chat::Chat;
 use crate::models::user::*;
 use crate::schema::users;
 use crate::util::{DebugQueryDsl, Id};
@@ -108,13 +107,7 @@ fn identify(extensions: &Extensions) -> via::Result<&Id> {
 
 impl Session for Request {
     fn user(&self) -> via::Result<&Id> {
-        identify(self.envelope().extensions())
-    }
-}
-
-impl Session for ws::Request<Chat> {
-    fn user(&self) -> via::Result<&Id> {
-        identify(self.envelope().extensions())
+        identify(self.extensions())
     }
 }
 

@@ -12,25 +12,36 @@ repository = "https://github.com/zacharygolba/via"
 [features]
 default = ["http1"]
 
-aws-lc-rs = ["dep:aws-lc-rs", "tokio-rustls/aws-lc-rs", "tokio-websockets/aws_lc_rs"]
+aws-lc-rs = ["dep:aws-lc-rs", "tokio-rustls/aws-lc-rs"]
 
 file = ["dep:httpdate", "tokio/fs"]
 
 http1 = ["hyper/http1"]
 http2 = ["hyper/http2"]
 
-native-tls = ["dep:native-tls", "dep:tokio-native-tls"]
+native-tls = [
+    "dep:native-tls",
+    "dep:tokio-native-tls",
+    "tokio-tungstenite/native-tls",
+    "tokio-tungstenite/tokio-native-tls",
+]
 
-ring = ["dep:ring", "tokio-rustls/ring", "tokio-websockets/ring"]
+ring = ["dep:ring", "tokio-rustls/ring"]
 
-rustls = ["dep:rustls", "dep:tokio-rustls"]
+rustls = [
+    "dep:rustls",
+    "dep:tokio-rustls",
+    "tokio-tungstenite/rustls",
+    "tokio-tungstenite/tokio-rustls",
+]
 
 ws = [
     "dep:base64",
     "dep:bytestring",
     "dep:futures-sink",
     "dep:futures-util",
-    "dep:tokio-websockets",
+    "dep:tungstenite",
+    "dep:tokio-tungstenite",
 ]
 
 [dependencies]
@@ -95,9 +106,12 @@ version = "0.26"
 optional = true
 default-features = false
 
-[dependencies.tokio-websockets]
-version = "0.13"
-features = ["server"]
+[dependencies.tungstenite]
+version = "0.28"
+optional = true
+
+[dependencies.tokio-tungstenite]
+version = "0.28"
 optional = true
 
 [dev-dependencies]

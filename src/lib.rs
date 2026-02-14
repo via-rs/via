@@ -45,7 +45,7 @@ pub mod request;
 pub mod response;
 pub mod router;
 
-#[cfg(feature = "ws")]
+#[cfg(all(feature = "ws", any(feature = "aws-lc-rs", feature = "ring")))]
 pub mod ws;
 
 mod app;

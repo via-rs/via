@@ -165,9 +165,9 @@ impl<App> Clone for Request<App> {
 }
 
 impl<T> Ws<T> {
-    pub(super) fn new(upgraded: T) -> Self {
+    pub(super) fn new(listener: T) -> Self {
         Self {
-            listener: Arc::new(upgraded),
+            listener: Arc::new(listener),
             config: WebSocketConfig::default()
                 .accept_unmasked_frames(false)
                 .read_buffer_size(DEFAULT_FRAME_SIZE)

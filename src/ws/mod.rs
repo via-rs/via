@@ -49,10 +49,10 @@ pub use upgrade::{Request, Ws};
 /// }
 ///```
 ///
-pub fn ws<T, App, Await>(upgraded: T) -> Ws<T>
+pub fn ws<T, App, Await>(listener: T) -> Ws<T>
 where
     T: Fn(Channel, Request<App>) -> Await,
     Await: Future<Output = Result> + Send,
 {
-    Ws::new(upgraded)
+    Ws::new(listener)
 }

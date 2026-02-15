@@ -202,15 +202,15 @@ use std::sync::Arc;
 /// 'process: ──────────────────────────────────────────────────────────────────────────>
 ///            |                             |                              |
 ///        HTTP GET                          |                              |
-///      to_owned_app()                      |                              |
+///       app.clone()                        |                              |
 ///    incr strong_count                 HTTP GET                           |
-///            |                       to_owned_app()                       |
+///            |                        app.clone()                         |
 ///            |                     incr strong_count                  HTTP POST
-///        List Users                        |                        to_owned_app()
+///        List Users                        |                         app.clone()
 /// ┌──────────────────────┐                 |                      incr strong_count
 /// |   borrow req.app()   |        Web Socket Upgrade                      |
 /// |  acquire connection  |      ┌─────────────────────┐                   |
-/// |   respond with json  |      |     app.clone()     |              Create User
+/// |   respond with json  |      |     app_owned()     |              Create User
 /// └──────────────────────┘      |   spawn async task  |─┐     ┌──────────────────────┐
 ///     decr strong_count         | switching protocols | |     |   req.into_future()  |
 ///            |                  └─────────────────────┘ |     |     database trx     |
@@ -292,7 +292,7 @@ use std::sync::Arc;
 ///
 ///     // Spawn a task that takes ownership of all of its dependencies.
 ///     tokio::spawn({
-///         let app = request.to_owned_app();
+///         let app = request.app_owned();
 ///         let message = format!("delete: resource = users, id = {}", &id);
 ///         async move { app.telemetry.report(message).await }
 ///     });

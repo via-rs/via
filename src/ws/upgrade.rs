@@ -153,7 +153,7 @@ impl<App> Request<App> {
         &self.envelope
     }
 
-    pub fn to_owned_app(&self) -> Shared<App> {
+    pub fn app_owned(&self) -> Shared<App> {
         self.app.clone()
     }
 }

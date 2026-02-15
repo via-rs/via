@@ -38,7 +38,7 @@ pub trait Session {
 }
 
 pub async fn restore(mut request: Request, next: Next) -> via::Result {
-    let app = request.to_owned_app();
+    let app = request.app_owned();
     let persist = match request
         .envelope()
         .cookies()

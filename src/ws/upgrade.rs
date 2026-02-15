@@ -30,29 +30,6 @@ pub struct Ws<T> {
     config: WebSocketConfig,
 }
 
-macro_rules! match_control_flow {
-    ($break:tt on $flow:expr) => {{
-        use std::ops::ControlFlow;
-
-        match $flow {
-            ControlFlow::Break(err) => {
-                if let Some(error) = &err
-                    && cfg!(debug_assertions)
-                {
-                    eprintln!("error(ws): {}", error);
-                }
-
-                $break;
-            }
-            ControlFlow::Continue(error) => {
-                if cfg!(debug_assertions) {
-                    eprintln!("warn(ws): {}", error);
-                }
-            }
-        }
-    }};
-}
-
 fn from_ws_error(error: WebSocketError) -> ControlFlow<Option<Error>, Error> {
     if is_recoverable(&error) {
         ControlFlow::Continue(error.into())
@@ -115,7 +92,7 @@ where
             }
         };
 
-        match_control_flow!(break on tokio::select! {
+        match tokio::select!(
             // Send and receive messages to and from the channel.
             result = trx => {
                 result.map_or_else(|error| error, |_| ControlFlow::Break(None))
@@ -124,7 +101,20 @@ where
             result = listen => {
                 result.map_or_else(|error| error.map_break(Some), |_| ControlFlow::Break(None))
             }
-        });
+        ) {
+            ControlFlow::Break(err) => {
+                if cfg!(debug_assertions) {
+                    err.inspect(|error| eprintln!("error(ws): {}", error));
+                }
+
+                break;
+            }
+            ControlFlow::Continue(error) => {
+                if cfg!(debug_assertions) {
+                    eprintln!("warn(ws): {}", error);
+                }
+            }
+        }
     }
 
     if cfg!(debug_assertions) {

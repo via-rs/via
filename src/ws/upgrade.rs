@@ -4,7 +4,7 @@ use http::{Method, StatusCode, header};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use std::mem::swap;
-use std::ops::ControlFlow;
+use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use tokio::task::coop;
 use tungstenite::protocol::{Role, WebSocketConfig};
@@ -30,11 +30,22 @@ pub struct Ws<T> {
     config: WebSocketConfig,
 }
 
+macro_rules! debug {
+    (#[error] $error:expr) => {
+        debug!("error(ws): {}", $error)
+    };
+    ($($args:tt)*) => {{
+        if cfg!(debug_assertions) {
+            eprintln!($($args)*);
+        }
+    }};
+}
+
 fn from_ws_error(error: WebSocketError) -> ControlFlow<Option<Error>, Error> {
     if is_recoverable(&error) {
-        ControlFlow::Continue(error.into())
+        Continue(error.into())
     } else {
-        ControlFlow::Break(Some(error.into()))
+        Break(Some(error.into()))
     }
 }
 
@@ -65,10 +76,10 @@ where
     Await: Future<Output = super::Result> + Send,
 {
     loop {
-        let (rendezvous, transport) = Channel::new();
-        let listen = Box::pin(listener(rendezvous, request.clone()));
-        let trx = async {
-            let (tx, mut rx) = transport;
+        let (rendezvous, trx) = Channel::new();
+        let mut listen = Box::pin(listener(rendezvous, request.clone()));
+        let transport = async {
+            let (tx, mut rx) = trx;
 
             loop {
                 tokio::select! {
@@ -76,6 +87,7 @@ where
                     Some(message) = coop::unconstrained(rx.recv()) => {
                         stream.send(message).await.map_err(from_ws_error)?;
                     }
+
                     // Receive a message from the stream and send it to the channel.
                     next = stream.next() => {
                         let message = match next {
@@ -85,36 +97,39 @@ where
 
                         if tx.send(message).await.is_err() {
                             let error = WebSocketError::AlreadyClosed.into();
-                            break Err(ControlFlow::Break(Some(error)));
+                            break Err(Break(Some(error)));
                         }
                     }
                 }
             }
         };
 
-        match tokio::select!(
-            // Send and receive messages to and from the channel.
-            result = trx => {
-                result.map_or_else(|error| error, |_| ControlFlow::Break(None))
-            }
-            // The future returned from the listener is ready.
-            result = listen => {
-                result.map_or_else(|error| error.map_break(Some), |_| ControlFlow::Break(None))
-            }
-        ) {
-            ControlFlow::Break(err) => {
-                if cfg!(debug_assertions) {
-                    err.inspect(|error| eprintln!("error(ws): {}", error));
-                }
-
-                break;
-            }
-            ControlFlow::Continue(error) => {
-                if cfg!(debug_assertions) {
-                    eprintln!("warn(ws): {}", error);
+        break tokio::select! {
+            result = &mut listen => {
+                if let Err(op @ (Break(error) | Continue(error))) = &result {
+                    debug!(#[error] error);
+                    if op.is_continue() {
+                        continue;
+                    }
                 }
             }
-        }
+            result = transport => match result {
+                Ok(_) => {
+                    if let Err(Break(error) | Continue(error)) = listen.await {
+                        debug!(#[error] error);
+                    }
+                }
+                Err(Break(err)) => {
+                    if let Some(error) = err {
+                        debug!(#[error] error);
+                    }
+                }
+                Err(Continue(error)) => {
+                    debug!(#[error] error);
+                    continue;
+                }
+            },
+        };
     }
 
     if cfg!(debug_assertions) {

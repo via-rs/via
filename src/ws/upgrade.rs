@@ -14,7 +14,7 @@ use super::error::{WebSocketError, is_recoverable};
 use crate::request::Envelope;
 use crate::{BoxFuture, Error, Middleware, Next, Response, Shared, raise};
 
-const DEFAULT_FRAME_SIZE: usize = 16 * 1024; // 16KB
+const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 const WS_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 type WebSocketStream = tokio_tungstenite::WebSocketStream<TokioIo<Upgraded>>;
@@ -171,8 +171,7 @@ impl<T> Ws<T> {
             config: WebSocketConfig::default()
                 .accept_unmasked_frames(false)
                 .read_buffer_size(DEFAULT_FRAME_SIZE)
-                .write_buffer_size(0)
-                .max_write_buffer_size(DEFAULT_FRAME_SIZE)
+                .write_buffer_size(DEFAULT_FRAME_SIZE)
                 .max_frame_size(Some(DEFAULT_FRAME_SIZE))
                 .max_message_size(Some(DEFAULT_FRAME_SIZE)),
         }
@@ -189,13 +188,25 @@ impl<T> Ws<T> {
         }
     }
 
-    /// The maximum payload size in bytes.
+    /// The maximum message size in bytes.
     ///
     /// **Default:** `16 KB`
     ///
-    pub fn max_payload_size(self, max_payload_size: Option<usize>) -> Self {
+    pub fn max_message_size(self, max_message_size: Option<usize>) -> Self {
         Self {
-            config: self.config.max_message_size(max_payload_size),
+            config: self.config.max_message_size(max_message_size),
+            ..self
+        }
+    }
+
+    /// Read buffer capacity. The read buffer is allocated eagerly and is used
+    /// for receiving messages.
+    ///
+    /// **Default:** `16 KB`
+    ///
+    pub fn read_buffer_size(self, buffer_size: usize) -> Self {
+        Self {
+            config: self.config.read_buffer_size(buffer_size),
             ..self
         }
     }

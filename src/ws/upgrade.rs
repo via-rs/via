@@ -132,9 +132,7 @@ where
         };
     }
 
-    if cfg!(debug_assertions) {
-        eprintln!("info(ws): websocket session ended");
-    }
+    debug!("info(ws): websocket session ended");
 }
 
 impl<App> Request<App> {

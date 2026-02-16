@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use http::{Method, StatusCode, header};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
-use std::mem::swap;
+use std::mem;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use tokio::task::coop;
@@ -257,23 +257,28 @@ where
         };
 
         tokio::spawn({
-            let config = self.config;
+            let mut request = Request::upgraded(request);
             let listener = Arc::clone(&self.listener);
-            let mut request = request;
+            let config = self.config;
 
             async move {
                 let mut upgradeable = http::Request::new(());
+                let Some(envelope) = Arc::get_mut(&mut request.envelope) else {
+                    eprintln!("error(ws): an error occurred during the connection upgrade");
+                    return;
+                };
 
-                swap(request.extensions_mut(), upgradeable.extensions_mut());
+                mem::swap(upgradeable.extensions_mut(), envelope.extensions_mut());
+
                 match handshake(config, &mut upgradeable).await {
                     Ok(stream) => {
-                        swap(request.extensions_mut(), upgradeable.extensions_mut());
-                        run(stream, listener, Request::upgraded(request)).await
+                        mem::swap(upgradeable.extensions_mut(), envelope.extensions_mut());
+                        run(stream, listener, request).await;
                     }
                     Err(error) => {
                         eprintln!("error(upgrade): {}", error);
                     }
-                };
+                }
             }
         });
 

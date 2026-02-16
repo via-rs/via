@@ -38,7 +38,6 @@ rustls = [
 ws = [
     "dep:base64",
     "dep:bytestring",
-    "dep:futures-sink",
     "dep:futures-util",
     "dep:tungstenite",
     "dep:tokio-tungstenite",
@@ -73,13 +72,10 @@ optional = true
 version = "0.22"
 optional = true
 
-[dependencies.futures-sink]
-version = "0.3"
-optional = true
-
 [dependencies.futures-util]
 version = "0.3"
-features = ["sink"]
+default-features = false
+features = ["sink", "std"]
 optional = true
 
 [dependencies.native-tls]

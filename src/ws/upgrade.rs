@@ -125,17 +125,17 @@ where
         };
 
         break tokio::select! {
-            result = &mut listen => {
-                if let Err(op @ (Break(error) | Continue(error))) = &result {
+            ref result = &mut listen => {
+                if let Err(op @ (Break(error) | Continue(error))) = result {
                     debug!(#[error] error);
                     if op.is_continue() {
                         continue;
                     }
                 }
             }
-            result = transport => match result {
+            ref result = transport => match result {
                 Ok(_) => {
-                    if let Err(Break(error) | Continue(error)) = listen.await {
+                    if let Err(Break(error) | Continue(error)) = &listen.await {
                         debug!(#[error] error);
                     }
                 }

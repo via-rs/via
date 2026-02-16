@@ -1,4 +1,6 @@
 use bytes::{Buf, Bytes};
+#[cfg(feature = "tokio-websockets")]
+use bytestring::ByteString;
 use http::{HeaderMap, StatusCode};
 use http_body::Body;
 use http_body_util::{LengthLimitError, Limited};
@@ -14,7 +16,7 @@ use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 use std::{ptr, slice};
 
-#[cfg(feature = "ws")]
+#[cfg(feature = "tokio-tungstenite")]
 use tungstenite::protocol::frame::Utf8Bytes;
 
 use crate::error::{BoxError, Error};
@@ -27,8 +29,11 @@ mod sealed {
 
     impl Sealed for super::Aggregate {}
 
-    #[cfg(feature = "ws")]
+    #[cfg(feature = "tokio-tungstenite")]
     impl Sealed for tungstenite::protocol::frame::Utf8Bytes {}
+
+    #[cfg(feature = "tokio-websockets")]
+    impl Sealed for bytestring::ByteString {}
 }
 
 /// Represents an optionally contiguous source of data received from a client.
@@ -188,6 +193,97 @@ struct RequestPayload {
     trailers: Option<HeaderMap>,
 }
 
+macro_rules! impl_payload_from_bytes {
+    ($ty:ty, $into:expr, $from:expr) => {
+        impl Payload for $ty {
+            fn coalesce(self) -> Vec<u8> {
+                let mut src = $into(self);
+                let mut dest = Vec::with_capacity(src.remaining());
+
+                // The transport layer sufficiently chunks each frame.
+                dest.extend_from_slice(src.as_ref());
+
+                // Make the visible length of the frame buffer 0.
+                src.advance(src.remaining());
+
+                dest
+            }
+
+            fn z_coalesce(self) -> Result<Vec<u8>, Self> {
+                let mut src = $into(self);
+
+                // If we do not have unique access to self, return back to the caller.
+                if !src.is_unique() {
+                    return Err($from(src));
+                }
+
+                let mut dest = Vec::with_capacity(src.remaining());
+
+                // The transport layer sufficiently chunks each frame.
+                dest.extend_from_slice(src.as_ref());
+
+                // Safety:
+                //
+                // The precondition at the top of this function ensures that we
+                // have unique access to self and therefore, can mutate the buffer.
+                unsafe {
+                    unfenced_zeroize(&mut src);
+                }
+
+                // Ensures sequential access to the buffers contained in self.
+                // A necessary step after zeroization.
+                release_compiler_fence();
+
+                Ok(dest)
+            }
+
+            fn json<T>(self) -> Result<T, Error>
+            where
+                T: DeserializeOwned,
+            {
+                let mut src = $into(self);
+
+                // Attempt to deserialize `T` from the bytes in self.
+                let result = deserialize_json(src.as_ref());
+
+                // Make the visible length of the frame buffer 0.
+                src.advance(src.remaining());
+
+                result
+            }
+
+            fn z_json<T>(self) -> Result<Result<T, Error>, Self>
+            where
+                T: DeserializeOwned,
+            {
+                let mut src = $into(self);
+
+                // If we do not have unique access to self, return back to the caller.
+                if !src.is_unique() {
+                    return Err($from(src));
+                }
+
+                // Attempt to deserialize `T` from the bytes in self.
+                let result = deserialize_json(src.as_ref());
+
+                // Safety:
+                //
+                // The precondition at the top of this function ensures that we
+                // have unique access to self and therefore, can mutate the buffer.
+                unsafe {
+                    unfenced_zeroize(&mut src);
+                }
+
+                // Ensures sequential access to the buffers contained in self.
+                // A necessary step after zeroization.
+                release_compiler_fence();
+
+                Ok(result)
+            }
+        }
+    };
+}
+
 fn already_read<T>() -> Result<T, Error> {
     raise!(500, message = "The request body has already been read.")
 }
@@ -259,7 +355,7 @@ fn release_compiler_fence() {
 ///
 /// *Note: This fn is safe as long as `bytes` is valid UTF-8.*
 ///
-#[cfg(feature = "ws")]
+#[cfg(feature = "tokio-tungstenite")]
 fn back_to_utf8_bytes(bytes: Bytes) -> Utf8Bytes {
     // Safety:
     //
@@ -419,90 +515,22 @@ impl RequestPayload {
     }
 }
 
-#[cfg(feature = "ws")]
-impl Payload for Utf8Bytes {
-    fn coalesce(self) -> Vec<u8> {
-        let mut src = Bytes::from(self);
-        let mut dest = Vec::with_capacity(src.remaining());
+#[cfg(feature = "tokio-tungstenite")]
+impl_payload_from_bytes!(Utf8Bytes, Bytes::from, |bytes| unsafe {
+    // Safety:
+    //
+    // We know this is safe because `self` is guaranteed to be
+    // valid UTF-8 and z_json failed before zeroizing the backing
+    // buffer.
+    Utf8Bytes::from_bytes_unchecked(bytes)
+});
 
-        // The transport layer sufficiently chunks each frame.
-        dest.extend_from_slice(src.as_ref());
-
-        // Make the visible length of the frame buffer 0.
-        src.advance(src.remaining());
-
-        dest
-    }
-
-    fn z_coalesce(self) -> Result<Vec<u8>, Self> {
-        let mut src = Bytes::from(self);
-
-        // If we do not have unique access to self, return back to the caller.
-        if !src.is_unique() {
-            return Err(back_to_utf8_bytes(src));
-        }
-
-        let mut dest = Vec::with_capacity(src.remaining());
-
-        // The transport layer sufficiently chunks each frame.
-        dest.extend_from_slice(src.as_ref());
-
-        // Safety:
-        //
-        // The precondition at the top of this function ensures that we
-        // have unique access to self and therefore, can mutate the buffer.
-        unsafe {
-            unfenced_zeroize(&mut src);
-        }
-
-        // Ensures sequential access to the buffers contained in self.
-        // A necessary step after zeroization.
-        release_compiler_fence();
-
-        Ok(dest)
-    }
-
-    fn json<T>(self) -> Result<T, Error>
-    where
-        T: DeserializeOwned,
-    {
-        let mut src = Bytes::from(self);
-
-        // Attempt to deserialize `T` from the bytes in self.
-        let result = deserialize_json(src.as_ref());
-
-        // Make the visible length of the frame buffer 0.
-        src.advance(src.remaining());
-
-        result
-    }
-
-    fn z_json<T>(self) -> Result<Result<T, Error>, Self>
-    where
-        T: DeserializeOwned,
-    {
-        let mut src = Bytes::from(self);
-
-        // If we do not have unique access to self, return back to the caller.
-        if !src.is_unique() {
-            return Err(back_to_utf8_bytes(src));
-        }
-
-        // Attempt to deserialize `T` from the bytes in self.
-        let result = deserialize_json(src.as_ref());
-
-        // Safety:
-        //
-        // The precondition at the top of this function ensures that we
-        // have unique access to self and therefore, can mutate the buffer.
-        unsafe {
-            unfenced_zeroize(&mut src);
-        }
-
-        // Ensures sequential access to the buffers contained in self.
-        // A necessary step after zeroization.
-        release_compiler_fence();
-
-        Ok(result)
-    }
-}
+#[cfg(feature = "tokio-websockets")]
+impl_payload_from_bytes!(ByteString, ByteString::into_bytes, |bytes| unsafe {
+    // Safety:
+    //
+    // We know this is safe because `self` is guaranteed to be
+    // valid UTF-8 and z_json failed before zeroizing the backing
+    // buffer.
+    ByteString::from_bytes_unchecked(bytes)
+});

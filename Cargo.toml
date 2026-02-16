@@ -12,30 +12,18 @@ repository = "https://github.com/zacharygolba/via"
 [features]
 default = ["http1"]
 
-aws-lc-rs = ["dep:aws-lc-rs", "tokio-rustls/aws-lc-rs"]
+aws-lc-rs = ["dep:aws-lc-rs", "tokio-rustls/aws-lc-rs", "tokio-websockets/aws_lc_rs"]
+ring = ["dep:ring", "tokio-rustls/ring", "tokio-websockets/ring"]
 
 file = ["dep:httpdate", "tokio/fs"]
 
 http1 = ["hyper/http1"]
 http2 = ["hyper/http2"]
 
-native-tls = [
-    "dep:native-tls",
-    "dep:tokio-native-tls",
-    "tokio-tungstenite/native-tls",
-    "tokio-tungstenite/tokio-native-tls",
-]
+native-tls = ["dep:native-tls", "dep:tokio-native-tls"]
+rustls = ["dep:rustls", "dep:tokio-rustls"]
 
-ring = ["dep:ring", "tokio-rustls/ring"]
-
-rustls = [
-    "dep:rustls",
-    "dep:tokio-rustls",
-    "tokio-tungstenite/rustls",
-    "tokio-tungstenite/tokio-rustls",
-]
-
-ws = [
+tokio-tungstenite = [
     "dep:base64",
     "dep:bytestring",
     "dep:futures-util",
@@ -43,7 +31,16 @@ ws = [
     "dep:tokio-tungstenite",
 ]
 
+tokio-websockets = [
+    "dep:base64",
+    "dep:bytestring",
+    "dep:futures-util",
+    "dep:tokio-websockets",
+]
+
 [dependencies]
+aws-lc-rs = { version = "1", optional = true }
+base64 = { version = "0.22", optional = true }
 bitflags = "2"
 bytes = "1"
 bytestring = { version = "1", optional = true }
@@ -62,15 +59,10 @@ serde_json = "1"
 smallvec = { version = "1", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tokio-util = { version = "0.7", default-features = false }
+tungstenite = { version = "0.28", optional = true }
+tokio-tungstenite = { version = "0.28", optional = true }
+tokio-websockets = { version = "0.13", features = ["server"], optional = true }
 via-router = { version = "3.0.0-beta.32" }
-
-[dependencies.aws-lc-rs]
-version = "1"
-optional = true
-
-[dependencies.base64]
-version = "0.22"
-optional = true
 
 [dependencies.futures-util]
 version = "0.3"
@@ -101,14 +93,6 @@ default-features = false
 version = "0.26"
 optional = true
 default-features = false
-
-[dependencies.tungstenite]
-version = "0.28"
-optional = true
-
-[dependencies.tokio-tungstenite]
-version = "0.28"
-optional = true
 
 [dev-dependencies]
 bb8 = "0.9"

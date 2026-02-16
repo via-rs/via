@@ -3,7 +3,11 @@ use std::ops::ControlFlow::{Break, Continue};
 
 use crate::error::Error;
 
+#[cfg(feature = "tokio-tungstenite")]
 pub use tungstenite::error::Error as WebSocketError;
+
+#[cfg(feature = "tokio-websockets")]
+pub use tokio_websockets::error::Error as WebSocketError;
 
 type ControlFlow<T> = std::ops::ControlFlow<T, T>;
 pub type Result<T = ()> = std::result::Result<T, ControlFlow<Error>>;

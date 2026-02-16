@@ -4,16 +4,25 @@ use tokio::task::coop;
 
 use super::error::ErrorKind;
 
+#[cfg(feature = "tokio-tungstenite")]
 pub use tungstenite::Message;
+
+#[cfg(feature = "tokio-tungstenite")]
 pub use tungstenite::protocol::frame::{CloseFrame, Utf8Bytes};
 
-pub(super) type Sender = mpsc::Sender<Message>;
-pub(super) type Receiver = mpsc::Receiver<Message>;
+#[cfg(feature = "tokio-websockets")]
+pub use tokio_websockets::{CloseCode, Message};
 
-pub struct Channel(Sender, Receiver);
+#[cfg(feature = "tokio-websockets")]
+pub use bytestring::ByteString;
+
+type Tx = mpsc::Sender<Message>;
+type Rx = mpsc::Receiver<Message>;
+
+pub struct Channel(Tx, Rx);
 
 impl Channel {
-    pub(super) fn new() -> (Self, (Sender, Receiver)) {
+    pub(super) fn new() -> (Self, (Tx, Rx)) {
         let (sender, rx) = mpsc::channel(1);
         let (tx, receiver) = mpsc::channel(1);
         (Self(sender, receiver), (tx, rx))

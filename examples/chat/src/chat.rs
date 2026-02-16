@@ -10,7 +10,6 @@ use std::env::{self, VarError};
 use tokio::sync::broadcast;
 use tokio::task::coop::unconstrained;
 use via::response::{Finalize, ResponseBuilder};
-use via::ws::Utf8Bytes;
 use via::{raise, ws};
 
 use crate::models::conversation::Conversation;
@@ -25,7 +24,12 @@ type Sender = broadcast::Sender<(EventContext, EventPayload)>;
 type Receiver = broadcast::Receiver<(EventContext, EventPayload)>;
 
 #[derive(Clone)]
-pub struct EventPayload(Utf8Bytes);
+#[cfg(feature = "tokio-tungstenite")]
+pub struct EventPayload(via::ws::Utf8Bytes);
+
+#[derive(Clone)]
+#[cfg(feature = "tokio-websockets")]
+pub struct EventPayload(via::ws::ByteString);
 
 #[derive(Serialize)]
 #[serde(content = "data", rename_all = "lowercase", tag = "type")]
@@ -125,9 +129,17 @@ impl Finalize for EventPayload {
     }
 }
 
+#[cfg(feature = "tokio-tungstenite")]
 impl From<EventPayload> for ws::Message {
     fn from(payload: EventPayload) -> Self {
         ws::Message::Text(payload.0)
+    }
+}
+
+#[cfg(feature = "tokio-websockets")]
+impl From<EventPayload> for ws::Message {
+    fn from(payload: EventPayload) -> Self {
+        ws::Message::text(payload.0.into_bytes())
     }
 }
 

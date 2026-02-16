@@ -7,7 +7,6 @@ use std::mem;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use tokio::task::coop;
-use tungstenite::protocol::{Role, WebSocketConfig};
 
 use super::channel::Channel;
 use super::error::{WebSocketError, is_recoverable};
@@ -17,7 +16,11 @@ use crate::{BoxFuture, Error, Middleware, Next, Response, Shared, raise};
 const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 const WS_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+#[cfg(feature = "tokio-tungstenite")]
 type WebSocketStream = tokio_tungstenite::WebSocketStream<TokioIo<Upgraded>>;
+
+#[cfg(feature = "tokio-websockets")]
+type WebSocketStream = tokio_websockets::WebSocketStream<TokioIo<Upgraded>>;
 
 #[derive(Debug)]
 pub struct Request<App> {
@@ -68,11 +71,13 @@ fn gen_accept_key(key: &[u8]) -> String {
     base64.encode(hasher.finish())
 }
 
-#[inline]
+#[cfg(feature = "tokio-tungstenite")]
 async fn handshake(
     ws_config: WsConfig,
     request: &mut http::Request<()>,
 ) -> Result<WebSocketStream, Error> {
+    use tungstenite::protocol::{Role, WebSocketConfig};
+
     let upgraded = TokioIo::new(hyper::upgrade::on(request).await?);
     let mut config = WebSocketConfig::default()
         .accept_unmasked_frames(false)
@@ -88,6 +93,23 @@ async fn handshake(
     }
 
     Ok(WebSocketStream::from_raw_socket(upgraded, Role::Server, Some(config)).await)
+}
+
+#[cfg(feature = "tokio-websockets")]
+async fn handshake(
+    ws_config: WsConfig,
+    request: &mut http::Request<()>,
+) -> Result<WebSocketStream, Error> {
+    use tokio_websockets::server::Builder;
+    use tokio_websockets::{Config, Limits};
+
+    let stream = TokioIo::new(hyper::upgrade::on(request).await?);
+    let limits = Limits::default().max_payload_len(ws_config.max_message_size);
+    let config = Config::default()
+        .frame_size(ws_config.max_frame_size.unwrap_or(DEFAULT_FRAME_SIZE))
+        .flush_threshold(DEFAULT_FRAME_SIZE);
+
+    Ok(Builder::new().config(config).limits(limits).serve(stream))
 }
 
 async fn run<T, App, Await>(mut stream: WebSocketStream, listener: Arc<T>, request: Request<App>)
@@ -107,7 +129,6 @@ where
                     Some(message) = coop::unconstrained(rx.recv()) => {
                         stream.send(message).await.map_err(from_ws_error)?;
                     }
-
                     // Receive a message from the stream and send it to the channel.
                     next = stream.next() => {
                         let message = match next {
@@ -271,7 +292,7 @@ where
             let listener = Arc::clone(&self.listener);
             let config = self.config.clone();
 
-            async move {
+            let task = async move {
                 let mut upgradeable = http::Request::new(());
                 let Some(envelope) = Arc::get_mut(&mut request.envelope) else {
                     eprintln!("error(ws): an error occurred during the connection upgrade");
@@ -289,7 +310,10 @@ where
                         eprintln!("error(upgrade): {}", error);
                     }
                 }
-            }
+            };
+
+            println!("{}", mem::size_of_val(&task));
+            task
         });
 
         Box::pin(async {

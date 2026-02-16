@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use diesel::prelude::*;
 use std::collections::HashMap;
 use via::request::Payload;
@@ -13,6 +14,17 @@ use crate::util::{DebugQueryDsl, Id, Session};
 ///
 macro_rules! debug {
     ($($args:tt)+) => { if cfg!(debug_assertions) { eprintln!($($args)+); } };
+}
+
+#[cfg(feature = "tokio-tungstenite")]
+fn recv_text(message: Message) -> via::Result<NewConversation> {
+    message.into_text()?.json()
+}
+
+#[cfg(feature = "tokio-websockets")]
+fn recv_text(message: Message) -> via::Result<NewConversation> {
+    let data = Bytes::from(message.into_payload());
+    bytestring::ByteString::try_from(data)?.json()
 }
 
 pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result {
@@ -38,19 +50,17 @@ pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result
         let mut new_conversation = tokio::select! {
             // Received a message from the websocket channel.
             Some(message) = socket.recv() => {
-                match message {
-                    Message::Text(payload) => {
-                        payload.be_z_json::<NewConversation>().or_continue()?
-                    }
-                    Message::Close(close) => {
-                        close.inspect(|context| debug!("{:?}", context));
-                        return Ok(());
-                    }
-                    ignored => {
-                        debug!("warn(chat): ignoring {:?}", ignored);
-                        continue;
-                    }
+                if message.is_close() {
+                    debug!("info(chat): close requested by client");
+                    return Ok(());
                 }
+
+                if !message.is_text() {
+                    debug!("warn(chat): ignoring {:?}", message);
+                    continue;
+                }
+
+                recv_text(message).or_continue()?
             }
             // Received an event notification from another async task.
             Ok((ref event, message)) = pubsub.recv() => {

@@ -27,7 +27,14 @@ pub struct Request<App> {
 
 pub struct Ws<T> {
     listener: Arc<T>,
-    config: WebSocketConfig,
+    config: WsConfig,
+}
+
+#[derive(Clone, Debug)]
+struct WsConfig {
+    buffer_size: usize,
+    max_frame_size: Option<usize>,
+    max_message_size: Option<usize>,
 }
 
 macro_rules! debug {
@@ -63,10 +70,23 @@ fn gen_accept_key(key: &[u8]) -> String {
 
 #[inline]
 async fn handshake(
-    config: WebSocketConfig,
+    ws_config: WsConfig,
     request: &mut http::Request<()>,
 ) -> Result<WebSocketStream, Error> {
     let upgraded = TokioIo::new(hyper::upgrade::on(request).await?);
+    let mut config = WebSocketConfig::default()
+        .accept_unmasked_frames(false)
+        .read_buffer_size(ws_config.buffer_size)
+        .max_frame_size(ws_config.max_frame_size)
+        .max_message_size(ws_config.max_message_size);
+
+    if let Some(capacity) = ws_config
+        .max_message_size
+        .and_then(|limit| limit.checked_mul(2))
+    {
+        config = config.write_buffer_size(capacity);
+    }
+
     Ok(WebSocketStream::from_raw_socket(upgraded, Role::Server, Some(config)).await)
 }
 
@@ -171,47 +191,37 @@ impl<T> Ws<T> {
     pub(super) fn new(listener: T) -> Self {
         Self {
             listener: Arc::new(listener),
-            config: WebSocketConfig::default()
-                .accept_unmasked_frames(false)
-                .read_buffer_size(DEFAULT_FRAME_SIZE)
-                .write_buffer_size(DEFAULT_FRAME_SIZE)
-                .max_frame_size(Some(DEFAULT_FRAME_SIZE))
-                .max_message_size(Some(DEFAULT_FRAME_SIZE)),
+            config: WsConfig::default(),
         }
     }
 
-    /// The frame size used for messages in bytes.
+    /// The amount of memory to pre-allocate in bytes for buffered reads.
     ///
     /// **Default:** `16 KB`
     ///
-    pub fn frame_size(self, frame_size: usize) -> Self {
-        Self {
-            config: self.config.max_frame_size(Some(frame_size)),
-            ..self
-        }
+    pub fn buffer_size(mut self, capacity: usize) -> Self {
+        self.config.buffer_size = capacity;
+        self
+    }
+
+    /// The maximum size of a single incoming message frame.
+    ///
+    /// A `None` value indicates no frame size limit.
+    ///
+    /// **Default:** `16 KB`
+    ///
+    pub fn max_frame_size(mut self, limit: Option<usize>) -> Self {
+        self.config.max_frame_size = limit;
+        self
     }
 
     /// The maximum message size in bytes.
     ///
     /// **Default:** `16 KB`
     ///
-    pub fn max_message_size(self, max_message_size: Option<usize>) -> Self {
-        Self {
-            config: self.config.max_message_size(max_message_size),
-            ..self
-        }
-    }
-
-    /// Read buffer capacity. The read buffer is allocated eagerly and is used
-    /// for receiving messages.
-    ///
-    /// **Default:** `16 KB`
-    ///
-    pub fn read_buffer_size(self, buffer_size: usize) -> Self {
-        Self {
-            config: self.config.read_buffer_size(buffer_size),
-            ..self
-        }
+    pub fn max_message_size(mut self, limit: Option<usize>) -> Self {
+        self.config.max_message_size = limit;
+        self
     }
 }
 
@@ -259,7 +269,7 @@ where
         tokio::spawn({
             let mut request = Request::upgraded(request);
             let listener = Arc::clone(&self.listener);
-            let config = self.config;
+            let config = self.config.clone();
 
             async move {
                 let mut upgradeable = http::Request::new(());
@@ -290,5 +300,15 @@ where
                 .header(header::UPGRADE, "websocket")
                 .finish()
         })
+    }
+}
+
+impl Default for WsConfig {
+    fn default() -> Self {
+        Self {
+            buffer_size: DEFAULT_FRAME_SIZE,
+            max_frame_size: Some(DEFAULT_FRAME_SIZE),
+            max_message_size: Some(DEFAULT_FRAME_SIZE),
+        }
     }
 }

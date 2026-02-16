@@ -156,7 +156,7 @@ where
 }
 
 impl<App> Request<App> {
-    fn upgraded(request: crate::Request<App>) -> Self {
+    fn new(request: crate::Request<App>) -> Self {
         let (envelope, _, app) = request.into_parts();
 
         Self {
@@ -267,7 +267,7 @@ where
         };
 
         tokio::spawn({
-            let mut request = Request::upgraded(request);
+            let mut request = Request::new(request);
             let listener = Arc::clone(&self.listener);
             let config = self.config.clone();
 

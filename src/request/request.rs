@@ -7,7 +7,7 @@ use hyper::body::Incoming;
 use std::fmt::{self, Debug, Formatter};
 
 use super::params::{Param, PathParamEntry, PathParams};
-use super::payload::IntoFuture;
+use super::payload::Coalesce;
 use crate::app::Shared;
 use crate::error::Error;
 use crate::request::params::QueryParams;
@@ -206,9 +206,9 @@ impl<App> Request<App> {
     /// copy of `App`.
     ///
     #[inline]
-    pub fn into_future(self) -> (IntoFuture, Shared<App>) {
+    pub fn into_future(self) -> (Coalesce, Shared<App>) {
         let Self { app, body, .. } = self;
-        (IntoFuture::new(body), app)
+        (Coalesce::new(body), app)
     }
 
     /// Consumes the request and returns a tuple containing it's parts.

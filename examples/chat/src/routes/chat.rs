@@ -39,7 +39,7 @@ pub async fn chat(mut socket: Channel, request: Request<Chat>) -> ws::Result {
             tokio::select! {
                 // Received a message from the websocket channel.
                 Some(message) = socket.recv() => match message {
-                    Message::Text(mut payload) => {
+                    Message::Text(payload) => {
                         let mut new_convo = payload.json::<NewConversation>().or_continue()?;
 
                         // Confirm that the current user can write in the

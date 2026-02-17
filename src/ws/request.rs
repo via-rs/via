@@ -32,10 +32,6 @@ impl<App> Request<App> {
             app,
         }
     }
-
-    pub(super) fn envelope_mut(&mut self) -> &mut Arc<Envelope> {
-        &mut self.envelope
-    }
 }
 
 impl<App> Clone for Request<App> {

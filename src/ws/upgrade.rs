@@ -1,7 +1,7 @@
 use base64::engine::{Engine, general_purpose::STANDARD as base64};
 use futures_util::{SinkExt, StreamExt};
 use http::{Method, StatusCode, header};
-use hyper::upgrade::Upgraded;
+use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper_util::rt::TokioIo;
 use sha1::{Digest, Sha1};
 use std::mem;
@@ -55,43 +55,49 @@ fn gen_accept_key(key: &[u8]) -> String {
 
 #[cfg(feature = "tokio-tungstenite")]
 async fn handshake(
-    ws_config: WsConfig,
-    request: &mut http::Request<()>,
+    on_upgrade: OnUpgrade,
+    config: WsConfig,
 ) -> Result<WebSocketStream<TokioIo<Upgraded>>, Error> {
     use tungstenite::protocol::{Role, WebSocketConfig};
 
-    let upgraded = TokioIo::new(hyper::upgrade::on(request).await?);
+    let max_message_size = config.max_message_size;
     let mut config = WebSocketConfig::default()
         .accept_unmasked_frames(false)
-        .read_buffer_size(ws_config.buffer_size)
-        .max_frame_size(ws_config.max_frame_size)
-        .max_message_size(ws_config.max_message_size);
+        .read_buffer_size(config.buffer_size)
+        .max_frame_size(config.max_frame_size)
+        .max_message_size(max_message_size);
 
-    if let Some(capacity) = ws_config
-        .max_message_size
-        .and_then(|limit| limit.checked_mul(2))
-    {
+    if let Some(capacity) = max_message_size.and_then(|limit| limit.checked_mul(2)) {
         config = config.write_buffer_size(capacity);
     }
 
-    Ok(WebSocketStream::from_raw_socket(upgraded, Role::Server, Some(config)).await)
+    let stream = WebSocketStream::from_raw_socket(
+        TokioIo::new(on_upgrade.await?),
+        Role::Server,
+        Some(config),
+    )
+    .await;
+
+    Ok(stream)
 }
 
 #[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
 async fn handshake(
-    ws_config: WsConfig,
-    request: &mut http::Request<()>,
+    on_upgrade: OnUpgrade,
+    config: WsConfig,
 ) -> Result<WebSocketStream<TokioIo<Upgraded>>, Error> {
     use tokio_websockets::server::Builder;
     use tokio_websockets::{Config, Limits};
 
-    let stream = TokioIo::new(hyper::upgrade::on(request).await?);
-    let limits = Limits::default().max_payload_len(ws_config.max_message_size);
+    let limits = Limits::default().max_payload_len(config.max_message_size);
     let config = Config::default()
-        .frame_size(ws_config.max_frame_size.unwrap_or(DEFAULT_FRAME_SIZE))
+        .frame_size(config.max_frame_size.unwrap_or(DEFAULT_FRAME_SIZE))
         .flush_threshold(DEFAULT_FRAME_SIZE);
 
-    Ok(Builder::new().config(config).limits(limits).serve(stream))
+    Ok(Builder::new()
+        .config(config)
+        .limits(limits)
+        .serve(TokioIo::new(on_upgrade.await?)))
 }
 
 async fn run<T, App, Await>(
@@ -203,7 +209,7 @@ where
     App: Send + Sync + 'static,
     Await: Future<Output = super::Result> + Send,
 {
-    fn call(&self, request: crate::Request<App>, next: Next<App>) -> BoxFuture {
+    fn call(&self, mut request: crate::Request<App>, next: Next<App>) -> BoxFuture {
         // Confirm that the request is for a websocket upgrade.
         if request.method() != Method::GET
             || !request
@@ -234,34 +240,33 @@ where
             .map(|value| gen_accept_key(value.as_bytes()))
         else {
             return Box::pin(async {
-                raise!(400, message = "missing required header: sec-websocket-key.")
+                raise!(400, message = "missing required header: sec-websocket-key");
+            });
+        };
+
+        let Some(on_upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
+            return Box::pin(async {
+                raise!(message = "connection does not support websocket upgrades");
             });
         };
 
         tokio::spawn({
-            let mut request = Request::new(request);
             let listener = Arc::clone(&self.listener);
+            let request = Request::new(request);
             let config = self.config.clone();
-
-            async move {
-                let mut upgradeable = http::Request::new(());
-                let Some(envelope) = Arc::get_mut(request.envelope_mut()) else {
-                    eprintln!("an error occurred while upgrading the connection to a websocket");
-                    return;
-                };
-
-                mem::swap(upgradeable.extensions_mut(), envelope.extensions_mut());
-
-                match handshake(config, &mut upgradeable).await {
+            let task = async move {
+                match handshake(on_upgrade, config).await {
                     Ok(stream) => {
-                        mem::swap(upgradeable.extensions_mut(), envelope.extensions_mut());
                         run(stream, listener, request).await;
                     }
                     Err(error) => {
                         eprintln!("error(upgrade): {}", error);
                     }
                 }
-            }
+            };
+
+            println!("task size = {}", mem::size_of_val(&task));
+            task
         });
 
         Box::pin(async {

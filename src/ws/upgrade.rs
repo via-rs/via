@@ -13,7 +13,7 @@ use tokio_tungstenite::WebSocketStream;
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
-use super::error::{WebSocketError, into_control_flow};
+use super::error::into_control_flow;
 use super::{Channel, Request};
 use crate::{BoxFuture, Error, Middleware, Next, Response, raise};
 
@@ -30,17 +30,6 @@ struct WsConfig {
     buffer_size: usize,
     max_frame_size: Option<usize>,
     max_message_size: Option<usize>,
-}
-
-macro_rules! debug {
-    (#[error] $error:expr) => {
-        debug!("error(ws): {}", $error)
-    };
-    ($($args:tt)*) => {{
-        if cfg!(debug_assertions) {
-            eprintln!($($args)*);
-        }
-    }};
 }
 
 fn gen_accept_key(key: &[u8]) -> String {
@@ -114,54 +103,50 @@ async fn run<T, App, Await>(
             loop {
                 tokio::select! {
                     // Receive a message from the channel and send it to the stream.
-                    Some(message) = rendezvous.recv() => {
+                    next = rendezvous.recv() => {
+                        let Some(message) = next else {
+                            break Ok(());
+                        };
+
                         stream.send(message).await.map_err(into_control_flow)?;
                     }
                     // Receive a message from the stream and send it to the channel.
                     next = stream.next() => {
-                        let message = match next {
-                            Some(result) => result.map_err(into_control_flow)?,
-                            None => break Ok(()),
+                        let Some(result) = next else {
+                            break Ok(());
                         };
 
-                        if rendezvous.send(message).await.is_err() {
-                            let error = WebSocketError::AlreadyClosed.into();
-                            break Err(Break(Some(error)));
-                        }
+                        let message = result.map_err(into_control_flow)?;
+                        rendezvous.send(message).await?;
                     }
                 }
             }
         };
 
-        break tokio::select! {
-            ref result = &mut listen => {
-                if let Err(op @ (Break(error) | Continue(error))) = result {
-                    debug!(#[error] error);
-                    if op.is_continue() {
-                        continue;
-                    }
-                }
-            }
-            ref result = trx => match result {
-                Ok(_) => {
-                    if let Err(Break(error) | Continue(error)) = &listen.await {
-                        debug!(#[error] error);
-                    }
-                }
-                Err(Break(err)) => {
-                    if let Some(error) = err {
-                        debug!(#[error] error);
-                    }
-                }
-                Err(Continue(error)) => {
-                    debug!(#[error] error);
-                    continue;
-                }
+        let err = tokio::select! {
+            result = &mut listen => result.err(),
+            result = trx => match result {
+                Ok(_) => listen.await.err(),
+                Err(error) => Some(error),
             },
         };
+
+        if let Some(op @ (Break(error) | Continue(error))) = err.as_ref() {
+            if cfg!(debug_assertions) {
+                eprintln!("error(ws): {}", error);
+            }
+
+            if op.is_continue() {
+                continue;
+            }
+        }
+
+        break;
     }
 
-    debug!("info(ws): websocket session ended");
+    if cfg!(debug_assertions) {
+        eprintln!("info(ws): websocket session ended");
+    }
 }
 
 impl<T> Ws<T> {

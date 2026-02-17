@@ -1,8 +1,7 @@
-use bytes::Bytes;
 use diesel::prelude::*;
 use std::collections::HashMap;
 use via::request::Payload;
-use via::ws::{self, Channel, Message, ResultExt};
+use via::ws::{self, Channel, Request, ResultExt};
 
 use crate::chat::{Chat, Event, EventContext};
 use crate::models::conversation::{Conversation, NewConversation};
@@ -16,18 +15,7 @@ macro_rules! debug {
     ($($args:tt)+) => { if cfg!(debug_assertions) { eprintln!($($args)+); } };
 }
 
-#[cfg(feature = "tokio-tungstenite")]
-fn recv_text(message: Message) -> via::Result<NewConversation> {
-    message.into_text()?.json()
-}
-
-#[cfg(feature = "tokio-websockets")]
-fn recv_text(message: Message) -> via::Result<NewConversation> {
-    let data = Bytes::from(message.into_payload());
-    bytestring::ByteString::try_from(data)?.json()
-}
-
-pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result {
+pub async fn chat(mut channel: Channel, request: Request<Chat>) -> ws::Result {
     // The current user that opened the websocket.
     let user_id = request.user().cloned().or_break()?;
 
@@ -49,7 +37,7 @@ pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result
     loop {
         let mut new_conversation = tokio::select! {
             // Received a message from the websocket channel.
-            Some(message) = socket.recv() => {
+            Some(message) = channel.recv() => {
                 if message.is_close() {
                     debug!("info(chat): close requested by client");
                     return Ok(());
@@ -60,8 +48,9 @@ pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result
                     continue;
                 }
 
-                recv_text(message).or_continue()?
+                message.json::<NewConversation>().or_continue()?
             }
+
             // Received an event notification from another async task.
             Ok((ref event, message)) = pubsub.recv() => {
                 if user_id != *event.user_id()
@@ -69,7 +58,7 @@ pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result
                     && let Some(claims) = subscriptions.get(id)
                     && claims.contains(AuthClaims::VIEW)
                 {
-                    socket.send(message).await?;
+                    channel.send(message).await?;
                 }
 
                 continue;

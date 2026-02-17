@@ -3,30 +3,23 @@ use futures_util::{SinkExt, StreamExt};
 use http::{Method, StatusCode, header};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
+use sha1::{Digest, Sha1};
 use std::mem;
-use std::ops::ControlFlow::{self, Break, Continue};
+use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
-use tokio::task::coop;
 
-use super::channel::Channel;
-use super::error::{WebSocketError, is_recoverable};
-use crate::request::Envelope;
-use crate::{BoxFuture, Error, Middleware, Next, Response, Shared, raise};
+#[cfg(feature = "tokio-tungstenite")]
+use tokio_tungstenite::WebSocketStream;
+
+#[cfg(feature = "tokio-websockets")]
+use tokio_websockets::WebSocketStream;
+
+use super::error::{WebSocketError, into_control_flow};
+use super::{Channel, Request};
+use crate::{BoxFuture, Error, Middleware, Next, Response, raise};
 
 const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 const WS_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-#[cfg(feature = "tokio-tungstenite")]
-type WebSocketStream = tokio_tungstenite::WebSocketStream<TokioIo<Upgraded>>;
-
-#[cfg(feature = "tokio-websockets")]
-type WebSocketStream = tokio_websockets::WebSocketStream<TokioIo<Upgraded>>;
-
-#[derive(Debug)]
-pub struct Request<App> {
-    envelope: Arc<Envelope>,
-    app: Shared<App>,
-}
 
 pub struct Ws<T> {
     listener: Arc<T>,
@@ -51,31 +44,20 @@ macro_rules! debug {
     }};
 }
 
-fn from_ws_error(error: WebSocketError) -> ControlFlow<Option<Error>, Error> {
-    if is_recoverable(&error) {
-        Continue(error.into())
-    } else {
-        Break(Some(error.into()))
-    }
-}
-
 fn gen_accept_key(key: &[u8]) -> String {
-    #[cfg(feature = "aws-lc-rs")]
-    let mut hasher = aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY);
-
-    #[cfg(feature = "ring")]
-    let mut hasher = ring::digest::Context::new(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY);
+    let mut hasher = Sha1::new();
 
     hasher.update(key);
     hasher.update(WS_ACCEPT_GUID);
-    base64.encode(hasher.finish())
+
+    base64.encode(hasher.finalize())
 }
 
 #[cfg(feature = "tokio-tungstenite")]
 async fn handshake(
     ws_config: WsConfig,
     request: &mut http::Request<()>,
-) -> Result<WebSocketStream, Error> {
+) -> Result<WebSocketStream<TokioIo<Upgraded>>, Error> {
     use tungstenite::protocol::{Role, WebSocketConfig};
 
     let upgraded = TokioIo::new(hyper::upgrade::on(request).await?);
@@ -95,11 +77,11 @@ async fn handshake(
     Ok(WebSocketStream::from_raw_socket(upgraded, Role::Server, Some(config)).await)
 }
 
-#[cfg(feature = "tokio-websockets")]
+#[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
 async fn handshake(
     ws_config: WsConfig,
     request: &mut http::Request<()>,
-) -> Result<WebSocketStream, Error> {
+) -> Result<WebSocketStream<TokioIo<Upgraded>>, Error> {
     use tokio_websockets::server::Builder;
     use tokio_websockets::{Config, Limits};
 
@@ -112,31 +94,32 @@ async fn handshake(
     Ok(Builder::new().config(config).limits(limits).serve(stream))
 }
 
-async fn run<T, App, Await>(mut stream: WebSocketStream, listener: Arc<T>, request: Request<App>)
-where
+async fn run<T, App, Await>(
+    mut stream: WebSocketStream<TokioIo<Upgraded>>,
+    listener: Arc<T>,
+    request: Request<App>,
+) where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send,
 {
     loop {
-        let (rendezvous, trx) = Channel::new();
-        let mut listen = Box::pin(listener(rendezvous, request.clone()));
-        let transport = async {
-            let (tx, mut rx) = trx;
-
+        let (facade, mut rendezvous) = Channel::new();
+        let mut listen = Box::pin(listener(facade, request.clone()));
+        let trx = async {
             loop {
                 tokio::select! {
                     // Receive a message from the channel and send it to the stream.
-                    Some(message) = coop::unconstrained(rx.recv()) => {
-                        stream.send(message).await.map_err(from_ws_error)?;
+                    Some(message) = rendezvous.recv() => {
+                        stream.send(message).await.map_err(into_control_flow)?;
                     }
                     // Receive a message from the stream and send it to the channel.
                     next = stream.next() => {
                         let message = match next {
-                            Some(result) => result.map_err(from_ws_error)?,
+                            Some(result) => result.map_err(into_control_flow)?,
                             None => break Ok(()),
                         };
 
-                        if tx.send(message).await.is_err() {
+                        if rendezvous.send(message).await.is_err() {
                             let error = WebSocketError::AlreadyClosed.into();
                             break Err(Break(Some(error)));
                         }
@@ -154,7 +137,7 @@ where
                     }
                 }
             }
-            ref result = transport => match result {
+            ref result = trx => match result {
                 Ok(_) => {
                     if let Err(Break(error) | Continue(error)) = &listen.await {
                         debug!(#[error] error);
@@ -174,38 +157,6 @@ where
     }
 
     debug!("info(ws): websocket session ended");
-}
-
-impl<App> Request<App> {
-    fn new(request: crate::Request<App>) -> Self {
-        let (envelope, _, app) = request.into_parts();
-
-        Self {
-            envelope: Arc::new(envelope),
-            app,
-        }
-    }
-
-    pub fn app(&self) -> &App {
-        &self.app
-    }
-
-    pub fn envelope(&self) -> &Envelope {
-        &self.envelope
-    }
-
-    pub fn app_owned(&self) -> Shared<App> {
-        self.app.clone()
-    }
-}
-
-impl<App> Clone for Request<App> {
-    fn clone(&self) -> Self {
-        Self {
-            envelope: Arc::clone(&self.envelope),
-            app: self.app.clone(),
-        }
-    }
 }
 
 impl<T> Ws<T> {
@@ -292,10 +243,10 @@ where
             let listener = Arc::clone(&self.listener);
             let config = self.config.clone();
 
-            let task = async move {
+            async move {
                 let mut upgradeable = http::Request::new(());
-                let Some(envelope) = Arc::get_mut(&mut request.envelope) else {
-                    eprintln!("error(ws): an error occurred during the connection upgrade");
+                let Some(envelope) = Arc::get_mut(request.envelope_mut()) else {
+                    eprintln!("an error occurred while upgrading the connection to a websocket");
                     return;
                 };
 
@@ -310,10 +261,7 @@ where
                         eprintln!("error(upgrade): {}", error);
                     }
                 }
-            };
-
-            println!("{}", mem::size_of_val(&task));
-            task
+            }
         });
 
         Box::pin(async {

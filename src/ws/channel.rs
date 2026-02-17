@@ -1,39 +1,31 @@
-use std::ops::ControlFlow;
-use tokio::sync::mpsc;
+use std::ops::ControlFlow::Break;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::coop;
 
-use super::error::ErrorKind;
+use crate::error::Error;
 
 #[cfg(feature = "tokio-tungstenite")]
-pub use tungstenite::Message;
+pub use tungstenite::protocol::{CloseFrame, Message, frame::Utf8Bytes};
 
-#[cfg(feature = "tokio-tungstenite")]
-pub use tungstenite::protocol::frame::{CloseFrame, Utf8Bytes};
-
-#[cfg(feature = "tokio-websockets")]
+#[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
 pub use tokio_websockets::{CloseCode, Message};
 
-#[cfg(feature = "tokio-websockets")]
-pub use bytestring::ByteString;
-
-type Tx = mpsc::Sender<Message>;
-type Rx = mpsc::Receiver<Message>;
-
-pub struct Channel(Tx, Rx);
+pub struct Channel(Sender<Message>, Receiver<Message>);
 
 impl Channel {
-    pub(super) fn new() -> (Self, (Tx, Rx)) {
-        let (sender, rx) = mpsc::channel(1);
-        let (tx, receiver) = mpsc::channel(1);
-        (Self(sender, receiver), (tx, rx))
+    pub(super) fn new() -> (Self, Self) {
+        let (tx1, rx2) = mpsc::channel(1);
+        let (tx2, rx1) = mpsc::channel(1);
+
+        (Self(tx1, rx1), Self(tx2, rx2))
     }
 
     pub async fn send(&mut self, message: impl Into<Message>) -> super::Result<()> {
-        if self.0.send(message.into()).await.is_err() {
-            Err(ControlFlow::Break(ErrorKind::CLOSED.into()))
-        } else {
-            Ok(())
-        }
+        self.0.send(message.into()).await.map_err(|_| {
+            Break(Error::new(
+                "channels cannot send messages after the receiving half is dropped",
+            ))
+        })
     }
 
     pub fn recv(&mut self) -> impl Future<Output = Option<Message>> {

@@ -3,6 +3,12 @@ name = "chat"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["tokio-tungstenite"]
+
+tokio-tungstenite = ["via/tokio-tungstenite"]
+tokio-websockets = ["via/tokio-websockets"]
+
 [dependencies]
 bb8 = "0.9"
 base64 = "0.22"
@@ -19,7 +25,7 @@ serde_json = "1"
 time = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-via = { path = "../..", features = ["aws-lc-rs", "tokio-tungstenite"] }
+via = { path = "../.." }
 
 [dependencies.bytestring]
 features = ["serde"]

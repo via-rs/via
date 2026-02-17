@@ -63,7 +63,13 @@ where
 impl Error {
     /// Returns a new error with the provided status and message.
     ///
-    pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self::with_status(StatusCode::INTERNAL_SERVER_ERROR, message)
+    }
+
+    /// Returns a new error with the provided status and message.
+    ///
+    pub fn with_status(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
             status,
             kind: ErrorKind::Message(message.into()),

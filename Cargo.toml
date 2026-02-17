@@ -12,8 +12,8 @@ repository = "https://github.com/zacharygolba/via"
 [features]
 default = ["http1"]
 
-aws-lc-rs = ["dep:aws-lc-rs", "tokio-rustls/aws-lc-rs", "tokio-websockets/aws_lc_rs"]
-ring = ["dep:ring", "tokio-rustls/ring", "tokio-websockets/ring"]
+aws-lc-rs = ["dep:aws-lc-rs", "tokio-rustls/aws-lc-rs"]
+ring = ["dep:ring", "tokio-rustls/ring"]
 
 file = ["dep:httpdate", "tokio/fs"]
 
@@ -23,27 +23,14 @@ http2 = ["hyper/http2"]
 native-tls = ["dep:native-tls", "dep:tokio-native-tls"]
 rustls = ["dep:rustls", "dep:tokio-rustls"]
 
-tokio-tungstenite = [
-    "dep:base64",
-    "dep:bytestring",
-    "dep:futures-util",
-    "dep:tungstenite",
-    "dep:tokio-tungstenite",
-]
-
-tokio-websockets = [
-    "dep:base64",
-    "dep:bytestring",
-    "dep:futures-util",
-    "dep:tokio-websockets",
-]
+tokio-tungstenite = ["dep:base64", "dep:futures-util", "dep:sha1", "dep:tungstenite", "dep:tokio-tungstenite"]
+tokio-websockets = ["dep:base64", "dep:futures-util", "dep:sha1", "dep:tokio-websockets"]
 
 [dependencies]
 aws-lc-rs = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
 bitflags = "2"
 bytes = "1"
-bytestring = { version = "1", optional = true }
 cookie = { version = "0.18", features = ["percent-encode"] }
 delegate = "0.13"
 futures-core = "0.3"
@@ -56,12 +43,13 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"]  }
 serde_json = "1"
+sha1 = { version = "0.10", optional = true }
 smallvec = { version = "1", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tokio-util = { version = "0.7", default-features = false }
 tungstenite = { version = "0.28", optional = true }
 tokio-tungstenite = { version = "0.28", optional = true }
-tokio-websockets = { version = "0.13", features = ["server"], optional = true }
+tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
 via-router = { version = "3.0.0-beta.32" }
 
 [dependencies.futures-util]
@@ -103,7 +91,7 @@ time = { version = "0.3" }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [package.metadata.docs.rs]
-features = ["file", "native-tls", "rustls", "ws"]
+features = ["file", "native-tls", "rustls", "tokio-tungstenite"]
 
 [workspace]
 members = ["via-router", "examples/*"]

@@ -1,16 +1,15 @@
-#[cfg(all(feature = "aws-lc-rs", feature = "ring"))]
-compile_error!("Features \"aws-lc-rs\" and \"ring\" are mutually exclusive.");
-
-#[cfg(not(any(feature = "aws-lc-rs", feature = "ring")))]
-compile_error!("A crypto backend must be enabled: either \"aws-lc-rs\" or \"ring\".");
+#[cfg(all(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+compile_error!("Features \"tokio-tungstenite\" and \"tokio-websockets\" are mutually exclusive.");
 
 mod channel;
 mod error;
+mod request;
 mod upgrade;
 
-pub use channel::{Channel, CloseFrame, Message, Utf8Bytes};
+pub use channel::*;
 pub use error::{Result, ResultExt};
-pub use upgrade::{Request, Ws};
+pub use request::Request;
+pub use upgrade::Ws;
 
 /// Upgrade the connection to a web socket.
 ///

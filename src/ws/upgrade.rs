@@ -4,7 +4,6 @@ use http::{Method, StatusCode, header};
 use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper_util::rt::TokioIo;
 use sha1::{Digest, Sha1};
-use std::mem;
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
 
@@ -244,18 +243,19 @@ where
             });
         };
 
-        let Some(on_upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
-            return Box::pin(async {
-                raise!(message = "connection does not support websocket upgrades");
-            });
-        };
-
         tokio::spawn({
+            let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
+                return Box::pin(async {
+                    raise!(message = "connection does not support websocket upgrades");
+                });
+            };
+
             let listener = Arc::clone(&self.listener);
             let request = Request::new(request);
             let config = self.config.clone();
-            let task = async move {
-                match handshake(on_upgrade, config).await {
+
+            async move {
+                match handshake(upgrade, config).await {
                     Ok(stream) => {
                         run(stream, listener, request).await;
                     }
@@ -263,10 +263,7 @@ where
                         eprintln!("error(upgrade): {}", error);
                     }
                 }
-            };
-
-            println!("task size = {}", mem::size_of_val(&task));
-            task
+            }
         });
 
         Box::pin(async {

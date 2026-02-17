@@ -1,6 +1,7 @@
 use bb8::Pool;
 use bb8::{ManageConnection, PooledConnection, RunError};
 use bytes::Bytes;
+use bytestring::ByteString;
 use cookie::Key;
 use diesel_async::AsyncPgConnection;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
@@ -10,7 +11,6 @@ use std::env::{self, VarError};
 use tokio::sync::broadcast;
 use tokio::task::coop::unconstrained;
 use via::response::{Finalize, ResponseBuilder};
-use via::ws::Utf8Bytes;
 use via::{raise, ws};
 
 use crate::models::conversation::Conversation;
@@ -25,7 +25,7 @@ type Sender = broadcast::Sender<(EventContext, EventPayload)>;
 type Receiver = broadcast::Receiver<(EventContext, EventPayload)>;
 
 #[derive(Clone)]
-pub struct EventPayload(Utf8Bytes);
+pub struct EventPayload(ByteString);
 
 #[derive(Serialize)]
 #[serde(content = "data", rename_all = "lowercase", tag = "type")]
@@ -125,9 +125,30 @@ impl Finalize for EventPayload {
     }
 }
 
+#[cfg(feature = "tokio-tungstenite")]
 impl From<EventPayload> for ws::Message {
     fn from(payload: EventPayload) -> Self {
-        ws::Message::Text(payload.0)
+        let bytes = payload.0.into_bytes();
+
+        // Safety:
+        //
+        // EventPayload is constructed directly from the output of
+        // serde_json::to_string and is therefore, valid UTF-8.
+        ws::Message::Text(unsafe { ws::Utf8Bytes::from_bytes_unchecked(bytes) })
+    }
+}
+
+#[cfg(feature = "tokio-websockets")]
+impl From<EventPayload> for ws::Message {
+    fn from(payload: EventPayload) -> Self {
+        ws::Message::text(payload.0.into_bytes())
+    }
+}
+
+#[cfg(not(any(feature = "tokio-tungstenite", feature = "tokio-websockets")))]
+impl From<EventPayload> for ws::Message {
+    fn from(_: EventPayload) -> Self {
+        panic!("a websocket backend must be enabled");
     }
 }
 

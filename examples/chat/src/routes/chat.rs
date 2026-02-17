@@ -1,7 +1,7 @@
 use diesel::prelude::*;
 use std::collections::HashMap;
 use via::request::Payload;
-use via::ws::{self, Channel, Message, ResultExt};
+use via::ws::{self, Channel, Request, ResultExt};
 
 use crate::chat::{Chat, Event, EventContext};
 use crate::models::conversation::{Conversation, NewConversation};
@@ -15,7 +15,7 @@ macro_rules! debug {
     ($($args:tt)+) => { if cfg!(debug_assertions) { eprintln!($($args)+); } };
 }
 
-pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result {
+pub async fn chat(mut channel: Channel, request: Request<Chat>) -> ws::Result {
     // The current user that opened the websocket.
     let user_id = request.user().cloned().or_break()?;
 
@@ -37,21 +37,20 @@ pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result
     loop {
         let mut new_conversation = tokio::select! {
             // Received a message from the websocket channel.
-            Some(message) = socket.recv() => {
-                match message {
-                    Message::Text(payload) => {
-                        payload.be_z_json::<NewConversation>().or_continue()?
-                    }
-                    Message::Close(close) => {
-                        close.inspect(|context| debug!("{:?}", context));
-                        return Ok(());
-                    }
-                    ignored => {
-                        debug!("warn(chat): ignoring {:?}", ignored);
-                        continue;
-                    }
+            Some(message) = channel.recv() => {
+                if message.is_close() {
+                    debug!("info(chat): close requested by client");
+                    return Ok(());
                 }
+
+                if !message.is_text() {
+                    debug!("warn(chat): ignoring {:?}", message);
+                    continue;
+                }
+
+                message.json::<NewConversation>().or_continue()?
             }
+
             // Received an event notification from another async task.
             Ok((ref event, message)) = pubsub.recv() => {
                 if user_id != *event.user_id()
@@ -59,7 +58,7 @@ pub async fn chat(mut socket: Channel, request: ws::Request<Chat>) -> ws::Result
                     && let Some(claims) = subscriptions.get(id)
                     && claims.contains(AuthClaims::VIEW)
                 {
-                    socket.send(message).await?;
+                    channel.send(message).await?;
                 }
 
                 continue;

@@ -45,7 +45,7 @@ pub mod request;
 pub mod response;
 pub mod router;
 
-#[cfg(feature = "ws")]
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 pub mod ws;
 
 mod app;
@@ -68,5 +68,5 @@ pub use response::{Finalize, Response};
 pub use router::{connect, delete, get, head, options, patch, post, put, trace};
 pub use server::Server;
 
-#[cfg(feature = "ws")]
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 pub use ws::ws;

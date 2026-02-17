@@ -1,29 +1,24 @@
 use base64::engine::{Engine, general_purpose::STANDARD as base64};
 use futures_util::{SinkExt, StreamExt};
 use http::{Method, StatusCode, header};
-use hyper::upgrade::Upgraded;
+use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper_util::rt::TokioIo;
-use std::mem;
-use std::ops::ControlFlow::{self, Break, Continue};
+use sha1::{Digest, Sha1};
+use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
-use tokio::task::coop;
-use tungstenite::protocol::{Role, WebSocketConfig};
 
-use super::channel::Channel;
-use super::error::{WebSocketError, is_recoverable};
-use crate::request::Envelope;
-use crate::{BoxFuture, Error, Middleware, Next, Response, Shared, raise};
+#[cfg(feature = "tokio-tungstenite")]
+use tokio_tungstenite::WebSocketStream;
+
+#[cfg(feature = "tokio-websockets")]
+use tokio_websockets::WebSocketStream;
+
+use super::error::try_rescue;
+use super::{Channel, Request};
+use crate::{BoxFuture, Error, Middleware, Next, Response, raise};
 
 const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 const WS_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-type WebSocketStream = tokio_tungstenite::WebSocketStream<TokioIo<Upgraded>>;
-
-#[derive(Debug)]
-pub struct Request<App> {
-    envelope: Arc<Envelope>,
-    app: Shared<App>,
-}
 
 pub struct Ws<T> {
     listener: Arc<T>,
@@ -37,153 +32,113 @@ struct WsConfig {
     max_message_size: Option<usize>,
 }
 
-macro_rules! debug {
-    (#[error] $error:expr) => {
-        debug!("error(ws): {}", $error)
-    };
-    ($($args:tt)*) => {{
-        if cfg!(debug_assertions) {
-            eprintln!($($args)*);
-        }
-    }};
-}
-
-fn from_ws_error(error: WebSocketError) -> ControlFlow<Option<Error>, Error> {
-    if is_recoverable(&error) {
-        Continue(error.into())
-    } else {
-        Break(Some(error.into()))
-    }
-}
-
 fn gen_accept_key(key: &[u8]) -> String {
-    #[cfg(feature = "aws-lc-rs")]
-    let mut hasher = aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA1_FOR_LEGACY_USE_ONLY);
-
-    #[cfg(feature = "ring")]
-    let mut hasher = ring::digest::Context::new(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY);
+    let mut hasher = Sha1::new();
 
     hasher.update(key);
     hasher.update(WS_ACCEPT_GUID);
-    base64.encode(hasher.finish())
+
+    base64.encode(hasher.finalize())
 }
 
-#[inline]
+#[cfg(feature = "tokio-tungstenite")]
 async fn handshake(
-    ws_config: WsConfig,
-    request: &mut http::Request<()>,
-) -> Result<WebSocketStream, Error> {
-    let upgraded = TokioIo::new(hyper::upgrade::on(request).await?);
+    on_upgrade: OnUpgrade,
+    config: WsConfig,
+) -> Result<WebSocketStream<TokioIo<Upgraded>>, Error> {
+    use tungstenite::protocol::{Role, WebSocketConfig};
+
+    let max_message_size = config.max_message_size;
     let mut config = WebSocketConfig::default()
         .accept_unmasked_frames(false)
-        .read_buffer_size(ws_config.buffer_size)
-        .max_frame_size(ws_config.max_frame_size)
-        .max_message_size(ws_config.max_message_size);
+        .read_buffer_size(config.buffer_size)
+        .max_frame_size(config.max_frame_size)
+        .max_message_size(max_message_size);
 
-    if let Some(capacity) = ws_config
-        .max_message_size
-        .and_then(|limit| limit.checked_mul(2))
-    {
+    if let Some(capacity) = max_message_size.and_then(|limit| limit.checked_mul(2)) {
         config = config.write_buffer_size(capacity);
     }
 
-    Ok(WebSocketStream::from_raw_socket(upgraded, Role::Server, Some(config)).await)
+    let stream = WebSocketStream::from_raw_socket(
+        TokioIo::new(on_upgrade.await?),
+        Role::Server,
+        Some(config),
+    )
+    .await;
+
+    Ok(stream)
 }
 
-async fn run<T, App, Await>(mut stream: WebSocketStream, listener: Arc<T>, request: Request<App>)
-where
+#[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
+async fn handshake(
+    on_upgrade: OnUpgrade,
+    config: WsConfig,
+) -> Result<WebSocketStream<TokioIo<Upgraded>>, Error> {
+    use tokio_websockets::server::Builder;
+    use tokio_websockets::{Config, Limits};
+
+    let limits = Limits::default().max_payload_len(config.max_message_size);
+    let config = Config::default()
+        .frame_size(config.max_frame_size.unwrap_or(DEFAULT_FRAME_SIZE))
+        .flush_threshold(DEFAULT_FRAME_SIZE);
+
+    Ok(Builder::new()
+        .config(config)
+        .limits(limits)
+        .serve(TokioIo::new(on_upgrade.await?)))
+}
+
+async fn run<T, App, Await>(
+    mut stream: WebSocketStream<TokioIo<Upgraded>>,
+    listener: Arc<T>,
+    request: Request<App>,
+) where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send,
 {
     loop {
-        let (rendezvous, trx) = Channel::new();
-        let mut listen = Box::pin(listener(rendezvous, request.clone()));
-        let transport = async {
-            let (tx, mut rx) = trx;
-
+        let (facade, mut rendezvous) = Channel::new();
+        let mut listen = Box::pin(listener(facade, request.clone()));
+        let trx = async {
             loop {
                 tokio::select! {
                     // Receive a message from the channel and send it to the stream.
-                    Some(message) = coop::unconstrained(rx.recv()) => {
-                        stream.send(message).await.map_err(from_ws_error)?;
-                    }
-
+                    next = rendezvous.recv() => match next {
+                        Some(message) => stream.send(message).await.map_err(try_rescue)?,
+                        None => break Ok(()),
+                    },
                     // Receive a message from the stream and send it to the channel.
-                    next = stream.next() => {
-                        let message = match next {
-                            Some(result) => result.map_err(from_ws_error)?,
-                            None => break Ok(()),
-                        };
-
-                        if tx.send(message).await.is_err() {
-                            let error = WebSocketError::AlreadyClosed.into();
-                            break Err(Break(Some(error)));
-                        }
-                    }
+                    next = stream.next() => match next {
+                        Some(result) => rendezvous.send(result.map_err(try_rescue)?).await?,
+                        None => break Ok(()),
+                    },
                 }
             }
         };
 
-        break tokio::select! {
-            ref result = &mut listen => {
-                if let Err(op @ (Break(error) | Continue(error))) = result {
-                    debug!(#[error] error);
-                    if op.is_continue() {
-                        continue;
-                    }
-                }
-            }
-            ref result = transport => match result {
-                Ok(_) => {
-                    if let Err(Break(error) | Continue(error)) = &listen.await {
-                        debug!(#[error] error);
-                    }
-                }
-                Err(Break(err)) => {
-                    if let Some(error) = err {
-                        debug!(#[error] error);
-                    }
-                }
-                Err(Continue(error)) => {
-                    debug!(#[error] error);
-                    continue;
-                }
+        let err = tokio::select! {
+            result = &mut listen => result.err(),
+            result = trx => match result {
+                Ok(_) => listen.await.err(),
+                Err(error) => Some(error),
             },
         };
-    }
 
-    debug!("info(ws): websocket session ended");
-}
+        if let Some(op @ (Break(error) | Continue(error))) = err.as_ref() {
+            if cfg!(debug_assertions) {
+                eprintln!("error(ws): {}", error);
+            }
 
-impl<App> Request<App> {
-    fn new(request: crate::Request<App>) -> Self {
-        let (envelope, _, app) = request.into_parts();
-
-        Self {
-            envelope: Arc::new(envelope),
-            app,
+            if op.is_continue() {
+                continue;
+            }
         }
+
+        break;
     }
 
-    pub fn app(&self) -> &App {
-        &self.app
-    }
-
-    pub fn envelope(&self) -> &Envelope {
-        &self.envelope
-    }
-
-    pub fn app_owned(&self) -> Shared<App> {
-        self.app.clone()
-    }
-}
-
-impl<App> Clone for Request<App> {
-    fn clone(&self) -> Self {
-        Self {
-            envelope: Arc::clone(&self.envelope),
-            app: self.app.clone(),
-        }
+    if cfg!(debug_assertions) {
+        eprintln!("info(ws): websocket session ended");
     }
 }
 
@@ -231,7 +186,7 @@ where
     App: Send + Sync + 'static,
     Await: Future<Output = super::Result> + Send,
 {
-    fn call(&self, request: crate::Request<App>, next: Next<App>) -> BoxFuture {
+    fn call(&self, mut request: crate::Request<App>, next: Next<App>) -> BoxFuture {
         // Confirm that the request is for a websocket upgrade.
         if request.method() != Method::GET
             || !request
@@ -262,27 +217,24 @@ where
             .map(|value| gen_accept_key(value.as_bytes()))
         else {
             return Box::pin(async {
-                raise!(400, message = "missing required header: sec-websocket-key.")
+                raise!(400, message = "missing required header: sec-websocket-key");
             });
         };
 
         tokio::spawn({
-            let mut request = Request::new(request);
+            let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
+                return Box::pin(async {
+                    raise!(message = "connection does not support websocket upgrades");
+                });
+            };
+
             let listener = Arc::clone(&self.listener);
+            let request = Request::new(request);
             let config = self.config.clone();
 
             async move {
-                let mut upgradeable = http::Request::new(());
-                let Some(envelope) = Arc::get_mut(&mut request.envelope) else {
-                    eprintln!("error(ws): an error occurred during the connection upgrade");
-                    return;
-                };
-
-                mem::swap(upgradeable.extensions_mut(), envelope.extensions_mut());
-
-                match handshake(config, &mut upgradeable).await {
+                match handshake(upgrade, config).await {
                     Ok(stream) => {
-                        mem::swap(upgradeable.extensions_mut(), envelope.extensions_mut());
                         run(stream, listener, request).await;
                     }
                     Err(error) => {

@@ -1,65 +1,31 @@
-use std::fmt::{self, Display, Formatter};
-use std::ops::ControlFlow::{Break, Continue};
+use std::ops::ControlFlow::{self, Break, Continue};
 
 use crate::error::Error;
 
+#[cfg(feature = "tokio-tungstenite")]
 pub use tungstenite::error::Error as WebSocketError;
 
-type ControlFlow<T> = std::ops::ControlFlow<T, T>;
-pub type Result<T = ()> = std::result::Result<T, ControlFlow<Error>>;
+#[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
+pub use tokio_websockets::error::Error as WebSocketError;
+
+pub type Result<T = ()> = std::result::Result<T, ControlFlow<Error, Error>>;
 
 pub trait ResultExt {
     type Output;
+
     fn or_break(self) -> Result<Self::Output>;
     fn or_continue(self) -> Result<Self::Output>;
 }
 
-#[derive(Debug)]
-pub enum ErrorKind {
-    Listener(Error),
-    Socket(WebSocketError),
-}
-
-#[inline]
-pub fn is_recoverable(error: &WebSocketError) -> bool {
+pub fn try_rescue(error: WebSocketError) -> ControlFlow<Error, Error> {
     use std::io::ErrorKind;
 
-    match &error {
-        WebSocketError::Io(io) => matches!(io.kind(), ErrorKind::Interrupted | ErrorKind::TimedOut),
-        _ => false,
-    }
-}
-
-impl ErrorKind {
-    pub const CLOSED: Self = Self::Socket(WebSocketError::AlreadyClosed);
-}
-
-impl std::error::Error for ErrorKind {}
-
-impl Display for ErrorKind {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            Self::Listener(error) => Display::fmt(error, f),
-            Self::Socket(error) => Display::fmt(error, f),
-        }
-    }
-}
-
-impl From<Error> for ErrorKind {
-    fn from(error: Error) -> Self {
-        Self::Listener(error)
-    }
-}
-
-impl From<hyper::Error> for ErrorKind {
-    fn from(error: hyper::Error) -> Self {
-        Self::Listener(error.into())
-    }
-}
-
-impl From<WebSocketError> for ErrorKind {
-    fn from(error: WebSocketError) -> Self {
-        Self::Socket(error)
+    if let WebSocketError::Io(io) = &error
+        && let ErrorKind::Interrupted | ErrorKind::TimedOut = io.kind()
+    {
+        Continue(error.into())
+    } else {
+        Break(error.into())
     }
 }
 

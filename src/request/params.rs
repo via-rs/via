@@ -155,7 +155,7 @@ impl<'a, 'b> Param<'a, 'b> {
 
         self.optional().and_then(|option| {
             option.ok_or_else(|| {
-                Error::new(
+                Error::with_status(
                     StatusCode::BAD_REQUEST,
                     format!("missing required parameter \"{}\".", name),
                 )

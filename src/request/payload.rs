@@ -14,9 +14,6 @@ use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 use std::{ptr, slice};
 
-#[cfg(feature = "ws")]
-use tungstenite::protocol::frame::Utf8Bytes;
-
 use crate::error::{BoxError, Error};
 use crate::raise;
 
@@ -27,8 +24,13 @@ mod sealed {
 
     impl Sealed for super::Aggregate {}
 
-    #[cfg(feature = "ws")]
-    impl Sealed for tungstenite::protocol::frame::Utf8Bytes {}
+    impl Sealed for bytes::Bytes {}
+
+    #[cfg(feature = "tokio-tungstenite")]
+    impl Sealed for tungstenite::protocol::Message {}
+
+    #[cfg(feature = "tokio-websockets")]
+    impl Sealed for tokio_websockets::Message {}
 }
 
 /// Represents an optionally contiguous source of data received from a client.
@@ -254,21 +256,6 @@ fn release_compiler_fence() {
     compiler_fence(Ordering::Release);
 }
 
-/// Converts a `Bytes` instance that was previously wrapped in a `ByteString`
-/// back to a `ByteString`.
-///
-/// *Note: This fn is safe as long as `bytes` is valid UTF-8.*
-///
-#[cfg(feature = "ws")]
-fn back_to_utf8_bytes(bytes: Bytes) -> Utf8Bytes {
-    // Safety:
-    //
-    // We know this is safe because `self` is guaranteed to be
-    // valid UTF-8 and z_json failed before zeroizing the backing
-    // buffer.
-    unsafe { Utf8Bytes::from_bytes_unchecked(bytes) }
-}
-
 impl Aggregate {
     pub fn trailers(&self) -> Option<&HeaderMap> {
         self.payload.trailers.as_ref()
@@ -294,6 +281,45 @@ impl Aggregate {
             _unsend: PhantomData,
         }
     }
+}
+
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+macro_rules! impl_payload_for_bytes_like {
+    ($ty:ty) => {
+        impl_payload_for_bytes_like!($ty, |this| this, From::from);
+    };
+    ($ty:ty, $from:expr) => {
+        impl_payload_for_bytes_like!($ty, $from, From::from);
+    };
+    ($ty:ty, $from:expr, $into:expr) => {
+        impl Payload for $ty {
+            fn coalesce(self) -> Vec<u8> {
+                Payload::coalesce(Bytes::from($from(self)))
+            }
+
+            fn z_coalesce(self) -> Result<Vec<u8>, Self> {
+                Payload::z_coalesce(Bytes::from($from(self))).map_err($into)
+            }
+
+            fn json<T>(self) -> Result<T, Error>
+            where
+                T: DeserializeOwned,
+            {
+                Payload::json(Bytes::from($from(self)))
+            }
+
+            fn z_json<T>(self) -> Result<Result<T, Error>, Self>
+            where
+                T: DeserializeOwned,
+            {
+                Payload::z_json(Bytes::from($from(self))).map_err($into)
+            }
+
+            fn z_utf8(self) -> Result<Result<String, Error>, Self> {
+                Payload::z_utf8(Bytes::from($from(self))).map_err($into)
+            }
+        }
+    };
 }
 
 impl Payload for Aggregate {
@@ -348,6 +374,96 @@ impl Payload for Aggregate {
     }
 }
 
+#[cfg(feature = "tokio-tungstenite")]
+impl_payload_for_bytes_like!(tungstenite::protocol::Message);
+
+#[cfg(feature = "tokio-websockets")]
+impl_payload_for_bytes_like!(
+    tokio_websockets::Message,
+    tokio_websockets::Message::into_payload,
+    tokio_websockets::Message::binary
+);
+
+impl Payload for Bytes {
+    fn coalesce(mut self) -> Vec<u8> {
+        let mut dest = Vec::with_capacity(self.remaining());
+
+        // The transport layer sufficiently chunks each frame.
+        dest.extend_from_slice(self.as_ref());
+
+        // Make the visible length of the frame buffer 0.
+        self.advance(self.remaining());
+
+        dest
+    }
+
+    fn z_coalesce(mut self) -> Result<Vec<u8>, Self> {
+        // If we do not have unique access to self, return back to the caller.
+        if !self.is_unique() {
+            return Err(self);
+        }
+
+        let mut dest = Vec::with_capacity(self.remaining());
+
+        // The transport layer sufficiently chunks each frame.
+        dest.extend_from_slice(self.as_ref());
+
+        // Safety:
+        //
+        // The precondition at the top of this function ensures that we
+        // have unique access to self and therefore, can mutate the buffer.
+        unsafe {
+            unfenced_zeroize(&mut self);
+        }
+
+        // Ensures sequential access to the buffers contained in self.
+        // A necessary step after zeroization.
+        release_compiler_fence();
+
+        Ok(dest)
+    }
+
+    fn json<T>(mut self) -> Result<T, Error>
+    where
+        T: DeserializeOwned,
+    {
+        // Attempt to deserialize `T` from the bytes in self.
+        let result = deserialize_json(self.as_ref());
+
+        // Make the visible length of the frame buffer 0.
+        self.advance(self.remaining());
+
+        result
+    }
+
+    fn z_json<T>(mut self) -> Result<Result<T, Error>, Self>
+    where
+        T: DeserializeOwned,
+    {
+        // If we do not have unique access to self, return back to the caller.
+        if !self.is_unique() {
+            return Err(self);
+        }
+
+        // Attempt to deserialize `T` from the bytes in self.
+        let result = deserialize_json(self.as_ref());
+
+        // Safety:
+        //
+        // The precondition at the top of this function ensures that we
+        // have unique access to self and therefore, can mutate the buffer.
+        unsafe {
+            unfenced_zeroize(&mut self);
+        }
+
+        // Ensures sequential access to the buffers contained in self.
+        // A necessary step after zeroization.
+        release_compiler_fence();
+
+        Ok(result)
+    }
+}
+
 impl Coalesce {
     pub(super) fn new(body: Limited<Incoming>) -> Self {
         Self {
@@ -381,7 +497,7 @@ impl Future for Coalesce {
                 }
                 Err(frame) => {
                     let Ok(trailers) = frame.into_trailers() else {
-                        return Poll::Ready(Err(Error::new(
+                        return Poll::Ready(Err(Error::with_status(
                             StatusCode::BAD_REQUEST,
                             "unexpected frame type received while reading the request body",
                         )));
@@ -416,93 +532,5 @@ impl RequestPayload {
     #[inline]
     fn iter_mut(&mut self) -> slice::IterMut<'_, Bytes> {
         self.frames.iter_mut()
-    }
-}
-
-#[cfg(feature = "ws")]
-impl Payload for Utf8Bytes {
-    fn coalesce(self) -> Vec<u8> {
-        let mut src = Bytes::from(self);
-        let mut dest = Vec::with_capacity(src.remaining());
-
-        // The transport layer sufficiently chunks each frame.
-        dest.extend_from_slice(src.as_ref());
-
-        // Make the visible length of the frame buffer 0.
-        src.advance(src.remaining());
-
-        dest
-    }
-
-    fn z_coalesce(self) -> Result<Vec<u8>, Self> {
-        let mut src = Bytes::from(self);
-
-        // If we do not have unique access to self, return back to the caller.
-        if !src.is_unique() {
-            return Err(back_to_utf8_bytes(src));
-        }
-
-        let mut dest = Vec::with_capacity(src.remaining());
-
-        // The transport layer sufficiently chunks each frame.
-        dest.extend_from_slice(src.as_ref());
-
-        // Safety:
-        //
-        // The precondition at the top of this function ensures that we
-        // have unique access to self and therefore, can mutate the buffer.
-        unsafe {
-            unfenced_zeroize(&mut src);
-        }
-
-        // Ensures sequential access to the buffers contained in self.
-        // A necessary step after zeroization.
-        release_compiler_fence();
-
-        Ok(dest)
-    }
-
-    fn json<T>(self) -> Result<T, Error>
-    where
-        T: DeserializeOwned,
-    {
-        let mut src = Bytes::from(self);
-
-        // Attempt to deserialize `T` from the bytes in self.
-        let result = deserialize_json(src.as_ref());
-
-        // Make the visible length of the frame buffer 0.
-        src.advance(src.remaining());
-
-        result
-    }
-
-    fn z_json<T>(self) -> Result<Result<T, Error>, Self>
-    where
-        T: DeserializeOwned,
-    {
-        let mut src = Bytes::from(self);
-
-        // If we do not have unique access to self, return back to the caller.
-        if !src.is_unique() {
-            return Err(back_to_utf8_bytes(src));
-        }
-
-        // Attempt to deserialize `T` from the bytes in self.
-        let result = deserialize_json(src.as_ref());
-
-        // Safety:
-        //
-        // The precondition at the top of this function ensures that we
-        // have unique access to self and therefore, can mutate the buffer.
-        unsafe {
-            unfenced_zeroize(&mut src);
-        }
-
-        // Ensures sequential access to the buffers contained in self.
-        // A necessary step after zeroization.
-        release_compiler_fence();
-
-        Ok(result)
     }
 }

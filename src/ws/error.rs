@@ -17,7 +17,7 @@ pub trait ResultExt {
     fn or_continue(self) -> Result<Self::Output>;
 }
 
-pub fn into_control_flow(error: WebSocketError) -> ControlFlow<Error, Error> {
+pub fn try_rescue(error: WebSocketError) -> ControlFlow<Error, Error> {
     use std::io::ErrorKind;
 
     if let WebSocketError::Io(io) = &error

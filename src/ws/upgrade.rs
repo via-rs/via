@@ -13,7 +13,7 @@ use tokio_tungstenite::WebSocketStream;
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
-use super::error::into_control_flow;
+use super::error::try_rescue;
 use super::{Channel, Request};
 use crate::{BoxFuture, Error, Middleware, Next, Response, raise};
 
@@ -103,22 +103,15 @@ async fn run<T, App, Await>(
             loop {
                 tokio::select! {
                     // Receive a message from the channel and send it to the stream.
-                    next = rendezvous.recv() => {
-                        let Some(message) = next else {
-                            break Ok(());
-                        };
-
-                        stream.send(message).await.map_err(into_control_flow)?;
-                    }
+                    next = rendezvous.recv() => match next {
+                        Some(message) => stream.send(message).await.map_err(try_rescue)?,
+                        None => break Ok(()),
+                    },
                     // Receive a message from the stream and send it to the channel.
-                    next = stream.next() => {
-                        let Some(result) = next else {
-                            break Ok(());
-                        };
-
-                        let message = result.map_err(into_control_flow)?;
-                        rendezvous.send(message).await?;
-                    }
+                    next = stream.next() => match next {
+                        Some(result) => rendezvous.send(result.map_err(try_rescue)?).await?,
+                        None => break Ok(()),
+                    },
                 }
             }
         };

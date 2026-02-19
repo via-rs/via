@@ -20,17 +20,17 @@ pub use upgrade::Ws;
 /// use via::ws::{self, Channel, Message};
 /// use via::{Error, Server};
 ///
-/// async fn echo(mut channel: Channel, _: ws::Request<()>) -> ws::Result {
+/// async fn echo(mut channel: Channel, _: ws::Request) -> ws::Result {
 ///     while let Some(message) = channel.recv().await {
-///         match message {
-///             forward @ (Message::Binary(_) | Message::Text(_)) => {
-///                 channel.send(forward).await?;
-///             }
-///             ignore => {
-///                 if cfg!(debug_assertions) {
-///                     println!("{:?}", ignore);
-///                 }
-///             }
+///         if message.is_close() {
+///             println!("info: close requested by client");
+///             break;
+///         }
+///
+///         if message.is_binary() || message.is_text() {
+///             channel.send(message).await?;
+///         } else if cfg!(debug_assertions) {
+///             println!("warn: ignoring message {:?}", message);
 ///         }
 ///     }
 ///

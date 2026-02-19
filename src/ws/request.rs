@@ -4,7 +4,7 @@ use crate::app::Shared;
 use crate::request::Envelope;
 
 #[derive(Debug)]
-pub struct Request<App> {
+pub struct Request<App = ()> {
     envelope: Arc<Envelope>,
     app: Shared<App>,
 }

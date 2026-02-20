@@ -1,9 +1,8 @@
 use hyper::server::conn;
 use hyper_util::rt::TokioTimer;
-use std::error::Error;
+use std::mem;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::{io, mem};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
@@ -19,16 +18,6 @@ use crate::error::ServerError;
 
 #[derive(Clone)]
 struct InitializationToken(CancellationToken);
-
-macro_rules! joined {
-    ($result:expr) => {
-        match $result {
-            Ok(Err(error)) => handle_error(&error),
-            Err(error) => log!("error(join): {}", &error),
-            _ => {}
-        }
-    };
-}
 
 macro_rules! log {
     ($($arg:tt)*) => {
@@ -69,17 +58,19 @@ where
         let (io, _) = tokio::select! {
             // A new TCP stream was accepted from the listener.
             result = listener.accept() => match result {
-                Err(error) if is_fatal(&error) => return ExitCode::FAILURE,
-                Ok(accepted) => accepted,
-                Err(error) => {
-                    log!("error(accept): {}", error);
-                    continue;
-                }
+                Ok(stream) => stream,
+                Err(error) => return match error.raw_os_error() {
+                    Some(10024 | 10055) if cfg!(windows) => ExitCode::FAILURE,
+                    Some(12 | 23 | 24) if cfg!(unix) => ExitCode::FAILURE,
+                    _ => {
+                        log!("error(accept): {}", error);
+                        continue;
+                    }
+                },
             },
-
             // The process received a graceful shutdown signal.
             _ = shutdown.requested() => {
-                break ExitCode::FAILURE;
+                break ExitCode::SUCCESS;
             }
         };
 
@@ -127,52 +118,18 @@ where
 }
 
 async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), ServerError>>) {
-    if cfg!(debug_assertions) {
-        println!("joining {} inflight connections...", connections.len());
-    }
+    log!("joining {} inflight connections...", connections.len());
 
     while let Some(result) = connections.join_next().await {
-        joined!(result);
+        match result {
+            Ok(Ok(_)) => {}
+            Err(ref error) => log!("error(connection): {}", error),
+            Ok(Err(ref error)) => log!("error(service): {}", error),
+        }
+
         if !immediate {
             coop::consume_budget().await;
         }
-    }
-}
-
-fn handle_error(error: &ServerError) {
-    if let ServerError::Http(error) = error {
-        if error.is_canceled()
-            || error.is_incomplete_message()
-            || error.source().is_some_and(|source| {
-                source
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotConnected)
-            })
-        {
-            log!("warn(disconnect): {}", error);
-        } else {
-            log!("error(http): {}", error);
-        }
-    } else {
-        log!("error(task): {}", &error);
-    }
-}
-
-#[cfg(unix)]
-fn is_fatal(error: &io::Error) -> bool {
-    if let io::ErrorKind::Other = error.kind() {
-        matches!(error.raw_os_error(), Some(12 | 23 | 24))
-    } else {
-        false
-    }
-}
-
-#[cfg(windows)]
-fn is_fatal(error: &io::Error) -> bool {
-    if let io::ErrorKind::Other = error.kind() {
-        matches!(error.raw_os_error(), Some(10024 | 10055))
-    } else {
-        false
     }
 }
 

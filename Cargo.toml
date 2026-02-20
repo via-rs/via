@@ -83,10 +83,7 @@ optional = true
 default-features = false
 
 [dev-dependencies]
-bb8 = "0.9"
 dotenvy = "0.15"
-diesel = { features = ["chrono", "uuid"], version = "2" }
-diesel-async = { version = "0.7", features = ["bb8", "postgres"] }
 cookie = { version = "0.18", features = ["percent-encode", "private"] }
 rustls-pemfile = "2"
 time = { version = "0.3" }
@@ -112,7 +109,7 @@ path = "./examples/tls/native.rs"
 required-features = ["native-tls"]
 
 [[example]]
-name = "rustls"
+name = "rustls-example"
 path = "./examples/tls/rustls.rs"
 required-features = ["aws-lc-rs", "rustls"]
 

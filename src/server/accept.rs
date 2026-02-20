@@ -123,8 +123,8 @@ async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), 
     while let Some(result) = connections.join_next().await {
         match result {
             Ok(Ok(_)) => {}
-            Err(ref error) => log!("error(connection): {}", error),
-            Ok(Err(ref error)) => log!("error(service): {}", error),
+            Err(error) => log!("error(connection): {}", error),
+            Ok(Err(error)) => log!("error(service): {}", error),
         }
 
         if !immediate {

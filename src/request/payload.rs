@@ -48,10 +48,10 @@ mod sealed {
 /// ## Zeroization
 ///
 /// The majority of use-cases where zeroization is preferred but not strictly
-/// necessary can benefit from using the `be_z_*` prefixed versions of the
+/// necessary can benefit from using the `bez_*` prefixed versions of the
 /// methods defined in the `Payload` trait. The `be_z` prefix stands for
 /// "best-effort zeroization". If zeroization is impossible due to non-unique
-/// access of a buffer contained in the payload, `be_z_*` variations fall back
+/// access of a buffer contained in the payload, `bez_*` variations fall back
 /// to their non-zeroing counterparts.
 ///
 /// If zeroization is a hard requirement, we recommend defining a policy that
@@ -127,7 +127,7 @@ pub trait Payload: sealed::Sealed + Sized {
     ///
     /// - `Err(Error)` if `T` cannot be deserialized from the data in `self`
     ///
-    fn be_z_json<T>(self) -> Result<T, Error>
+    fn bez_json<T>(self) -> Result<T, Error>
     where
         T: DeserializeOwned,
     {
@@ -167,7 +167,7 @@ pub trait Payload: sealed::Sealed + Sized {
     ///
     /// - `Err(Error)` if the payload contains an invalid UTF-8 byte sequence
     ///
-    fn be_z_utf8(self) -> Result<String, Error> {
+    fn bez_utf8(self) -> Result<String, Error> {
         self.z_utf8().unwrap_or_else(Self::utf8)
     }
 }

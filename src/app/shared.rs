@@ -28,49 +28,33 @@ use std::sync::Arc;
 ///
 /// ### Example
 ///
-/// ```no_run
-/// # mod models {
-/// #     use diesel::prelude::*;
-/// #     use serde::Serialize;
-/// #     use uuid::Uuid;
-/// #
-/// #     diesel::table! {
-/// #        users (id) {
-/// #            id -> Uuid,
-/// #            email -> Text,
-/// #            username -> Text,
-/// #        }
-/// #     }
-/// #
-/// #     #[derive(Clone, Queryable, Selectable, Serialize)]
-/// #     pub struct User {
-/// #         id: Uuid,
-/// #         email: String,
-/// #         username: String,
-/// #     }
-/// # }
-/// #
-/// use bb8::{ManageConnection, Pool};
-/// use diesel::prelude::*;
-/// use diesel_async::{AsyncPgConnection, RunQueryDsl};
-/// use diesel_async::pooled_connection::AsyncDieselConnectionManager;
-/// use http::StatusCode;
-/// use std::process::ExitCode;
+/// ```
+/// use serde::{Deserialize, Serialize};
 /// use tokio::io::{self, AsyncWriteExt, Sink};
-/// use tokio::sync::Mutex;
+/// use tokio::sync::{Mutex, RwLock};
 /// use uuid::Uuid;
-/// use via::request::Payload;
-/// use via::{Error, Next, Request, Response, Server};
-///
-/// use models::{users, User};
+/// use via::{Next, Payload, Request, Response};
 ///
 /// /// An imaginary analytics service.
 /// struct Telemetry(Mutex<Sink>);
 ///
 /// /// Our billion dollar application.
 /// struct Unicorn {
-///     database: Pool<AsyncDieselConnectionManager<AsyncPgConnection>>,
 ///     telemetry: Telemetry,
+///     users: RwLock<Vec<User>>,
+/// }
+///
+/// #[derive(Clone, Deserialize)]
+/// struct NewUser {
+///     email: String,
+///     username: String,
+/// }
+///
+/// #[derive(Clone, Serialize)]
+/// struct User {
+///     id: Uuid,
+///     email: String,
+///     username: String,
 /// }
 ///
 /// impl Telemetry {
@@ -82,23 +66,31 @@ use std::sync::Arc;
 ///     }
 /// }
 ///
-/// impl Unicorn {
-///     fn new() -> Self {
-///         unimplemented!()
+/// impl From<NewUser> for User {
+///     fn from(new_user: NewUser) -> Self {
+///         Self {
+///             id: Uuid::new_v4(),
+///             email: new_user.email,
+///             username: new_user.username,
+///         }
 ///     }
 /// }
 ///
 /// async fn find_user(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
-///     let id = request.envelope().param("user-id").parse::<Uuid>()?;
+///     // Parse a UUID from the :user-id parameter in the request URI.
+///     let id = request.param("user-id").parse::<Uuid>()?;
 ///
-///     // Acquire a database connection and find the user.
-///     let user = users::table
-///         .select(User::as_select())
-///         .filter(users::id.eq(id))
-///         .first(&mut request.app().database.get().await?)
-///         .await?;
+///     let user = {
+///         // Acquire a read lock on the list of users.
+///         let guard = request.app().users.read().await;
 ///
-///     Response::build().json(&user)
+///         // Find the user with id = :id and clone it to keep contention low.
+///         guard.iter().find(|user| id == user.id).cloned()
+///     };
+///
+///     Response::build()
+///         .status(user.is_some().then_some(200).unwrap_or(404))
+///         .json(&user)
 /// }
 /// ```
 ///
@@ -118,47 +110,42 @@ use std::sync::Arc;
 /// ### Example
 ///
 /// ```
-/// # mod models {
-/// #     use diesel::prelude::*;
-/// #     use serde::{Deserialize, Serialize};
-/// #     use uuid::Uuid;
+/// # use serde::{Deserialize, Serialize};
+/// # use tokio::io::Sink;
+/// # use tokio::sync::{Mutex, RwLock};
+/// # use uuid::Uuid;
+/// # use via::{Next, Payload, Request, Response};
 /// #
-/// #     diesel::table! {
-/// #        users (id) {
-/// #            id -> Uuid,
-/// #            email -> Text,
-/// #            username -> Text,
-/// #        }
-/// #     }
-/// #
-/// #     #[derive(Deserialize, Insertable)]
-/// #     #[diesel(table_name = users)]
-/// #     pub struct NewUser {
-/// #         email: String,
-/// #         username: String,
-/// #     }
-/// #
-/// #     #[derive(Clone, Queryable, Selectable, Serialize)]
-/// #     pub struct User {
-/// #         id: Uuid,
-/// #         email: String,
-/// #         username: String,
-/// #     }
-/// # }
-/// #
-/// # use bb8::{ManageConnection, Pool};
-/// # use diesel::prelude::*;
-/// # use diesel_async::{AsyncPgConnection, RunQueryDsl};
-/// # use diesel_async::pooled_connection::AsyncDieselConnectionManager;
-/// # use http::StatusCode;
-/// # use via::request::Payload;
-/// # use via::{Next, Request, Response};
-/// #
-/// # use models::{users, NewUser, User};
+/// # /// An imaginary analytics service.
+/// # struct Telemetry(Mutex<Sink>);
 /// #
 /// # /// Our billion dollar application.
 /// # struct Unicorn {
-/// #     database: Pool<AsyncDieselConnectionManager<AsyncPgConnection>>,
+/// #     telemetry: Telemetry,
+/// #     users: RwLock<Vec<User>>,
+/// # }
+/// #
+/// # #[derive(Clone, Deserialize)]
+/// # struct NewUser {
+/// #     email: String,
+/// #     username: String,
+/// # }
+/// #
+/// # #[derive(Clone, Serialize)]
+/// # struct User {
+/// #     id: Uuid,
+/// #     email: String,
+/// #     username: String,
+/// # }
+/// #
+/// # impl From<NewUser> for User {
+/// #     fn from(new_user: NewUser) -> Self {
+/// #         Self {
+/// #             id: Uuid::new_v4(),
+/// #             email: new_user.email,
+/// #             username: new_user.username,
+/// #         }
+/// #     }
 /// # }
 /// #
 /// async fn create_user(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
@@ -170,15 +157,16 @@ use std::sync::Arc;
 ///     // This is correct so long as `app` is dropped before the function
 ///     // returns.
 ///
-///     let user = diesel::insert_into(users::table)
-///         .values(future.await?.json::<NewUser>()?)
-///         .returning(User::as_returning())
-///         .get_result(&mut app.database.get().await?)
-///         .await?;
+///     // Deserialize a NewUser struct from the JSON request body.
+///     // Then, convert it to a User struct with a generated UUID.
+///     let user: User = future.await?.json::<NewUser>()?.into();
 ///
-///     Response::build()
-///         .status(StatusCode::CREATED)
-///         .json(&user)
+///     // Acquire a write lock on the list of users and insert a clone.
+///     // Dropping the lock as soon as we can beats the cost of memcpy.
+///     app.users.write().await.push(user.clone());
+///
+///     // 201 Created!
+///     Response::build().status(201).json(&user)
 /// }
 /// ```
 ///
@@ -242,67 +230,6 @@ use std::sync::Arc;
 /// the Arc is dropped deterministically as the middleware future resolves,
 /// leaks and unintended retention become significantly easier to detect.
 ///
-/// ### Example
-///
-/// ```
-/// # mod models {
-/// #     use uuid::Uuid;
-/// #
-/// #     diesel::table! {
-/// #        users (id) {
-/// #            id -> Uuid,
-/// #            email -> Text,
-/// #            username -> Text,
-/// #        }
-/// #     }
-/// # }
-/// #
-/// # use bb8::{ManageConnection, Pool};
-/// # use diesel::prelude::*;
-/// # use diesel_async::{AsyncPgConnection, RunQueryDsl};
-/// # use diesel_async::pooled_connection::AsyncDieselConnectionManager;
-/// # use http::StatusCode;
-/// # use tokio::io::{self, Sink};
-/// # use tokio::sync::Mutex;
-/// # use uuid::Uuid;
-/// # use via::request::Payload;
-/// # use via::{Next, Request, Response};
-/// #
-/// # use models::users;
-/// #
-/// # struct Telemetry(Mutex<Sink>);
-/// #
-/// # struct Unicorn {
-/// #     database: Pool<AsyncDieselConnectionManager<AsyncPgConnection>>,
-/// #     telemetry: Telemetry,
-/// # }
-/// #
-/// # impl Telemetry {
-/// #     async fn report(&self, message: String) -> io::Result<()> { todo!() }
-/// # }
-/// #
-/// async fn destroy_user(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
-///     let id = request.param("user-id").parse::<Uuid>()?;
-///
-///     // Acquire a database connection and delete the user.
-///     diesel::delete(users::table)
-///         .filter(users::id.eq(id))
-///         .execute(&mut request.app().database.get().await?)
-///         .await?;
-///
-///     // Spawn a task that takes ownership of all of its dependencies.
-///     tokio::spawn({
-///         let app = request.app_owned();
-///         let message = format!("delete: resource = users, id = {}", &id);
-///         async move { app.telemetry.report(message).await }
-///     });
-///
-///     Response::build()
-///         .status(StatusCode::NO_CONTENT)
-///         .finish()
-/// }
-/// ```
-///
 /// #### Timing and Side-Channel Awareness
 ///
 /// Each clone and drop of `Shared<App>` performs an atomic operation. When these
@@ -319,6 +246,88 @@ use std::sync::Arc;
 /// minimizing contention. These tradeoffs should be made deliberately and
 /// documented, as they exchange throughput and modularity for reduced
 /// observability.
+///
+/// ### Example
+///
+/// ```
+/// # use serde::{Deserialize, Serialize};
+/// # use tokio::io::{self, AsyncWriteExt, Sink};
+/// # use tokio::sync::{Mutex, RwLock};
+/// # use uuid::Uuid;
+/// # use via::{Next, Request, Response};
+/// #
+/// # /// An imaginary analytics service.
+/// # struct Telemetry(Mutex<Sink>);
+/// #
+/// # /// Our billion dollar application.
+/// # struct Unicorn {
+/// #     telemetry: Telemetry,
+/// #     users: RwLock<Vec<User>>,
+/// # }
+/// #
+/// # #[derive(Clone, Serialize)]
+/// # struct User {
+/// #     id: Uuid,
+/// #     email: String,
+/// #     username: String,
+/// # }
+/// #
+/// # impl Telemetry {
+/// #     async fn report(&self, message: String) -> io::Result<()> {
+/// #         let mut guard = self.0.lock().await;
+/// #
+/// #         guard.write_all(message.as_bytes()).await?;
+/// #         guard.flush().await
+/// #     }
+/// # }
+/// #
+/// async fn destroy_user(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
+///     // Parse a UUID from the :user-id parameter in the request URI.
+///     let id = request.param("user-id").parse::<Uuid>()?;
+///
+///     // This example favors anonymity over performance. Therefore, we clone
+///     // app as early as we can.
+///     //
+///     // Any earlier and Uuid parse errors could become a DoS vector that
+///     // rapidly clones app out-of-phase with other HTTP requests. Doing so
+///     // would amplify contention peaks rather than cancelling them.
+///     let app = request.app_owned();
+///
+///     let user = {
+///         // Acquire a write lock on the list of users.
+///         let mut guard = app.users.write().await;
+///
+///         // Find the user with id = :id and remove it from the list of users.
+///         guard.pop_if(|user| &id == &user.id)
+///     };
+///
+///     // The status code of the response is the only dependency of user other
+///     // than the telemetry task. Compute it early so user can be moved into
+///     // the spawned task.
+///     let status = user.is_some().then_some(204).unwrap_or(404);
+///
+///     // Spawn a task that owns of all of its dependencies.
+///     //
+///     // *Note:*
+///     //
+///     // The condition that determines whether or not we should report to the
+///     // destroy op must be computed inside of the spawned task. This avoids
+///     // a signal (task spawn) that can be used to determine the success of
+///     // the write op outside of the HTTP transaction.
+///     tokio::spawn(async move {
+///         if let Some(User { id, .. }) = user {
+///             let message = format!("delete: resource = users, id = {}", id);
+///             let _ = app.telemetry.report(message).await.inspect_err(|error| {
+///                 if cfg!(debug_assertions) {
+///                     eprintln!("error(telemetry): {}", error);
+///                 }
+///             });
+///         }
+///     });
+///
+///     Response::build().status(status).finish()
+/// }
+/// ```
 ///
 /// [`request.into_future()`]: crate::Request::into_future
 /// [`request.into_parts()`]: crate::Request::into_parts

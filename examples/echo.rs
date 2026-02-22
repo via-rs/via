@@ -6,15 +6,11 @@ async fn echo(request: Request, _: Next) -> via::Result {
     request.finalize(Response::build())
 }
 
-async fn echo_ws(mut channel: Channel, _: ws::Request) -> ws::Result {
-    loop {
-        let Some(message) = channel.recv().await else {
-            return Ok(());
-        };
-
+async fn relay(mut channel: Channel, _: ws::Request) -> ws::Result {
+    while let Some(message) = channel.recv().await {
         if message.is_close() {
             eprintln!("info: close requested by client");
-            return Ok(());
+            break;
         }
 
         if message.is_binary() || message.is_text() {
@@ -23,13 +19,15 @@ async fn echo_ws(mut channel: Channel, _: ws::Request) -> ws::Result {
             eprintln!("warn: ignoring message {:?}", message);
         }
     }
+
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(());
 
-    app.route("/echo").to(via::post(echo).get(via::ws(echo_ws)));
+    app.route("/echo").to(via::get(via::ws(relay)).post(echo));
 
     Server::new(app).listen(("127.0.0.1", 8080)).await
 }

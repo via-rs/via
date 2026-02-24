@@ -1,4 +1,5 @@
 use smallvec::{SmallVec, smallvec};
+use std::iter::{Peekable, Rev};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::slice;
@@ -18,28 +19,31 @@ pub struct RouteMut<'a, T> {
 pub struct Router<T>(Node<T>);
 
 pub struct Traverse<'a, 'b, T> {
-    bindings: SmallVec<[Binding<'a, T>; 1]>,
-    queue: SmallVec<[Branch<'a, 'b, T>; 1]>,
+    stack: SmallVec<[Frame<'a, 'b, T>; 1]>,
+}
+
+enum Vertex<'a, T> {
+    Depth(Binding<'a, T>),
+    Search(Rev<slice::Iter<'a, Node<T>>>),
 }
 
 #[derive(Debug)]
 enum MatchCond<T> {
     Partial(T),
-    Final(T),
+    Exact(T),
 }
 
 /// A group of nodes that match the path segment at `self.range`.
 ///
 struct Binding<'a, T> {
-    is_final: bool,
-    results: SmallVec<[&'a Node<T>; 2]>,
-    range: Option<Param>,
+    exhausted: bool,
+    results: SmallVec<[&'a Node<T>; 1]>,
+    range: Option<(usize, Option<usize>)>,
 }
 
-struct Branch<'a, 'b, T> {
-    children: &'a [Node<T>],
-    segment: Option<(&'b str, [usize; 2])>,
-    path: Split<'b>,
+struct Frame<'a, 'b, T> {
+    vertex: Vertex<'a, T>,
+    path: Peekable<Split<'b>>,
 }
 
 #[derive(Debug)]
@@ -49,45 +53,22 @@ struct Node<T> {
     route: Vec<MatchCond<T>>,
 }
 
-fn match_next<'a, 'b, T>(
-    queue: &mut SmallVec<[Branch<'a, 'b, T>; 1]>,
-    branch: &mut Branch<'a, 'b, T>,
-) -> Option<Binding<'a, T>> {
-    let next = branch.path.next();
-    let mut binding = Binding {
-        is_final: next.is_none(),
-        results: SmallVec::new(),
-        range: None,
-    };
-
-    if let Some((value, [start, end])) = branch.segment {
-        let value = value.as_bytes();
-
-        binding.range = Some((start, Some(end)));
-
-        for node in branch.children.iter().rev() {
-            match &node.pattern {
-                Pattern::Static(name) if value != name.as_bytes() => continue,
-                Pattern::Wildcard(_) => binding.push(node),
-                _ => {
-                    binding.push(node);
-                    queue.push(Branch {
-                        children: &node.children,
-                        segment: next,
-                        path: branch.path.clone(),
-                    });
-                }
-            }
-        }
-    } else {
-        for node in branch.children.iter().rev() {
-            if let Pattern::Wildcard(_) = &node.pattern {
-                binding.push(node);
-            }
+impl<'a, 'b, T> Frame<'a, 'b, T> {
+    fn search(node: &'a Node<T>, path: Peekable<Split<'b>>) -> Self {
+        Self {
+            vertex: Vertex::Search(node.children.iter().rev()),
+            path,
         }
     }
+}
 
-    (!binding.is_empty()).then_some(binding)
+impl<T> AsRef<T> for MatchCond<T> {
+    #[inline]
+    fn as_ref(&self) -> &T {
+        match self {
+            Self::Exact(value) | Self::Partial(value) => value,
+        }
+    }
 }
 
 impl<'a, T, U> Iterator for MatchCond<T>
@@ -100,31 +81,27 @@ where
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            break match self {
-                Self::Final(iter) => match iter.next() {
-                    Some(MatchCond::Final(next) | MatchCond::Partial(next)) => Some(next),
-                    None => None,
-                },
-                Self::Partial(iter) => match iter.next() {
-                    Some(MatchCond::Partial(next)) => Some(next),
-                    Some(MatchCond::Final(_)) => continue,
-                    None => None,
-                },
-            };
+            match self {
+                Self::Exact(iter) => return Some(iter.next()?.as_ref()),
+                Self::Partial(iter) => {
+                    if let MatchCond::Partial(next) = iter.next()? {
+                        return Some(next);
+                    }
+                }
+            }
         }
     }
 }
 
-impl<'a, T> Iterator for Route<'a, T> {
-    type Item = &'a T;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
-    }
-}
-
 impl<T> Node<T> {
+    fn matches(&self, predicate: &str) -> bool {
+        if let Pattern::Static(value) = &self.pattern {
+            value == predicate
+        } else {
+            true
+        }
+    }
+
     fn push(&mut self, pattern: Pattern) -> &mut Node<T> {
         let children = &mut self.children;
         let index = children.len();
@@ -152,7 +129,7 @@ impl<'a, T> RouteMut<'a, T> {
     }
 
     pub fn to(self, middleware: T) -> Self {
-        self.node.route.push(MatchCond::Final(middleware));
+        self.node.route.push(MatchCond::Exact(middleware));
         self
     }
 }
@@ -177,21 +154,15 @@ impl<T> Router<T> {
     /// This router is insert-only, therefore this is a very unlikely scenario.
     ///
     pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, T> {
-        let Self(root) = self;
-        let mut path = Split::new(path);
-        let segment = path.next();
+        let mut path = Split::new(path).peekable();
+        let vertex = Vertex::Depth(Binding {
+            exhausted: path.peek().is_none(),
+            results: smallvec![&self.0],
+            range: None,
+        });
 
         Traverse {
-            bindings: smallvec![Binding {
-                is_final: segment.is_none(),
-                results: smallvec![root],
-                range: None,
-            }],
-            queue: smallvec![Branch {
-                children: &root.children,
-                segment,
-                path,
-            }],
+            stack: smallvec![Frame { vertex, path }],
         }
     }
 }
@@ -206,49 +177,29 @@ impl<T> Default for Router<T> {
     }
 }
 
-impl<'a, T> Binding<'a, T> {
-    #[inline]
-    fn is_empty(&self) -> bool {
-        self.results.is_empty()
+impl<'a, T> Route<'a, T> {
+    fn new(exact: bool, node: &'a Node<T>) -> Self {
+        if exact {
+            Self(MatchCond::Exact(node.route.iter()))
+        } else {
+            Self(MatchCond::Partial(node.route.iter()))
+        }
     }
 
-    #[inline]
-    fn push(&mut self, node: &'a Node<T>) {
-        self.results.push(node);
+    fn into_exact(self) -> Self {
+        match self.0 {
+            exact @ MatchCond::Exact(_) => Self(exact),
+            MatchCond::Partial(iter) => Self(MatchCond::Exact(iter)),
+        }
     }
 }
 
-impl<'a, T> Iterator for Binding<'a, T> {
-    type Item = (Route<'a, T>, Option<(&'a Ident, Param)>);
+impl<'a, T> Iterator for Route<'a, T> {
+    type Item = &'a T;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let node = self.results.pop()?;
-
-        Some(match &node.pattern {
-            Pattern::Static(_) | Pattern::Root => {
-                let route = node.route.iter();
-
-                if self.is_final {
-                    (Route(MatchCond::Final(route)), None)
-                } else {
-                    (Route(MatchCond::Partial(route)), None)
-                }
-            }
-            Pattern::Dynamic(name) => {
-                let param = self.range.map(|range| (name, range));
-                let route = node.route.iter();
-
-                if self.is_final {
-                    (Route(MatchCond::Final(route)), param)
-                } else {
-                    (Route(MatchCond::Partial(route)), param)
-                }
-            }
-            Pattern::Wildcard(name) => {
-                let param = self.range.as_ref().map(|(start, _)| (name, (*start, None)));
-                (Route(MatchCond::Final(node.route.iter())), param)
-            }
-        })
+        self.0.next()
     }
 }
 
@@ -257,25 +208,67 @@ impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let bindings = &mut self.bindings;
-        let queue = &mut self.queue;
-
         loop {
-            let binding = bindings.last_mut()?;
-            let next = binding.next();
+            let frame = self.stack.last_mut()?;
 
-            if binding.is_empty() {
-                bindings.pop();
-            }
+            match &mut frame.vertex {
+                Vertex::Depth(binding) => {
+                    let Some(node) = binding.results.pop() else {
+                        self.stack.pop();
+                        continue;
+                    };
 
-            if let Some(mut branch) = queue.pop()
-                && let Some(binding) = match_next(queue, &mut branch)
-            {
-                bindings.push(binding);
-            }
+                    let route = Route::new(binding.exhausted, node);
 
-            if next.is_some() {
-                break next;
+                    return Some(match &node.pattern {
+                        Pattern::Root | Pattern::Static(_) => {
+                            let next = Frame::search(node, frame.path.clone());
+
+                            if binding.results.is_empty() {
+                                *frame = next;
+                            } else {
+                                self.stack.push(next);
+                            }
+
+                            (route, None)
+                        }
+                        Pattern::Dynamic(ident) => {
+                            let param = binding.range.map(|range| (ident, range));
+                            let next = Frame::search(node, frame.path.clone());
+
+                            if binding.results.is_empty() {
+                                *frame = next;
+                            } else {
+                                self.stack.push(next);
+                            }
+
+                            (route, param)
+                        }
+                        Pattern::Splat(ident) => {
+                            let param = binding.range.map(|(from, _)| (ident, (from, None)));
+                            (route.into_exact(), param)
+                        }
+                    });
+                }
+                Vertex::Search(iter) => {
+                    frame.vertex = if let Some((predicate, [from, to])) = frame.path.next() {
+                        let results = iter.by_ref().filter(|node| node.matches(predicate));
+
+                        Vertex::Depth(Binding {
+                            exhausted: frame.path.peek().is_none(),
+                            results: results.collect(),
+                            range: Some((from, Some(to))),
+                        })
+                    } else {
+                        let results = iter.by_ref().filter(|node| node.pattern.is_splat());
+
+                        Vertex::Depth(Binding {
+                            exhausted: true,
+                            results: results.collect(),
+                            range: None,
+                        })
+                    };
+                }
             }
         }
     }
@@ -292,7 +285,7 @@ where
         // In the future we may want to panic if the caller tries to insert a node
         // into a catch-all node rather than silently ignoring the rest of the
         // segments.
-        if let Pattern::Wildcard(_) = &parent.pattern {
+        if let Pattern::Splat(_) = &parent.pattern {
             return parent;
         }
 
@@ -309,7 +302,7 @@ where
                 .position(|node| match (&pattern, &node.pattern) {
                     (Pattern::Static(lhs), Pattern::Static(rhs))
                     | (Pattern::Dynamic(lhs), Pattern::Dynamic(rhs))
-                    | (Pattern::Wildcard(lhs), Pattern::Wildcard(rhs)) => {
+                    | (Pattern::Splat(lhs), Pattern::Splat(rhs)) => {
                         lhs.as_bytes() == rhs.as_bytes()
                     }
                     (Pattern::Root, Pattern::Root) => true,

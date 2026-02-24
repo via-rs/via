@@ -17,7 +17,7 @@ pub enum Pattern {
     Root,
     Static(Ident),
     Dynamic(Ident),
-    Wildcard(Ident),
+    Splat(Ident),
 }
 
 /// Returns an iterator that yields a `Pattern` for each segment in the uri path.
@@ -38,7 +38,7 @@ pub(crate) fn patterns(path: &str) -> impl Iterator<Item = Pattern> + '_ {
             // the name or identifier associated with the parameter.
             Some('*') => match segment.get(1..) {
                 None | Some("") => panic!("Wildcard parameters must be named. Found '*'."),
-                Some(name) => Pattern::Wildcard(name.to_owned().into()),
+                Some(name) => Pattern::Splat(name.to_owned().into()),
             },
 
             // The segment does not start with a reserved character. We will
@@ -50,7 +50,7 @@ pub(crate) fn patterns(path: &str) -> impl Iterator<Item = Pattern> + '_ {
 
 impl AsRef<str> for Ident {
     fn as_ref(&self) -> &str {
-        self.0.as_ref()
+        self
     }
 }
 
@@ -72,6 +72,29 @@ impl Deref for Ident {
 impl From<String> for Ident {
     fn from(value: String) -> Self {
         Self(value.into_boxed_str())
+    }
+}
+
+impl PartialEq<str> for Ident {
+    fn eq(&self, rhs: &str) -> bool {
+        *self.0 == *rhs
+    }
+}
+
+impl Pattern {
+    #[inline]
+    pub fn is_splat(&self) -> bool {
+        matches!(self, Self::Splat(_))
+    }
+}
+
+impl PartialEq<str> for Pattern {
+    fn eq(&self, rhs: &str) -> bool {
+        match self {
+            Pattern::Static(lhs) => lhs == rhs,
+            Pattern::Root => false,
+            _ => true,
+        }
     }
 }
 

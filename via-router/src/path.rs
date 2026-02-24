@@ -81,13 +81,6 @@ impl PartialEq<str> for Ident {
     }
 }
 
-impl Pattern {
-    #[inline]
-    pub fn is_splat(&self) -> bool {
-        matches!(self, Self::Splat(_))
-    }
-}
-
 impl PartialEq<str> for Pattern {
     fn eq(&self, rhs: &str) -> bool {
         match self {
@@ -117,28 +110,22 @@ impl<'a> Iterator for Split<'a> {
         let start = *offset;
         let path = self.path;
 
-        match path.get(start..).and_then(|rest| {
-            rest.bytes()
-                .enumerate()
-                .find_map(|(index, byte)| (byte == b'/').then_some(index))
-        }) {
-            Some(len) => {
-                let end = start + len;
-                *offset = end + 1;
-                Some((&path[start..end], [start, end]))
-            }
-            None => {
-                let end = path.len();
-                *offset = end;
+        if let Some(len) = path
+            .get(start..)?
+            .bytes()
+            .enumerate()
+            .find_map(|(index, byte)| (byte == b'/').then_some(index))
+        {
+            let end = start + len;
+            *offset = end + 1;
+            Some((&path[start..end], [start, end]))
+        } else {
+            let end = path.len();
+            *offset = end;
 
-                // Only yield if there's something left between offset and path.len().
-                // Prevents slicing past the end on trailing slashes like "/via/".
-                if end > start {
-                    Some((&path[start..end], [start, end]))
-                } else {
-                    None
-                }
-            }
+            // Only yield if there's something left between offset and path.len().
+            // Prevents slicing past the end on trailing slashes like "/via/".
+            (end > start).then_some((&path[start..end], [start, end]))
         }
     }
 }

@@ -1,5 +1,5 @@
 use smallvec::{SmallVec, smallvec};
-use std::iter::{Peekable, Rev};
+use std::iter::Rev;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::slice;
@@ -36,13 +36,14 @@ enum MatchCond<T> {
 /// A group of nodes that match the path segment at `self.range`.
 ///
 struct Binding<'a, T> {
+    is_final: bool,
     results: SmallVec<[&'a Node<T>; 1]>,
     range: Option<(usize, Option<usize>)>,
 }
 
 struct Frame<'a, 'b, T> {
     vertex: Vertex<'a, T>,
-    path: Peekable<Split<'b>>,
+    path: Split<'b>,
 }
 
 #[derive(Debug)]
@@ -53,7 +54,7 @@ struct Node<T> {
 }
 
 impl<'a, 'b, T> Frame<'a, 'b, T> {
-    fn search(node: &'a Node<T>, path: Peekable<Split<'b>>) -> Self {
+    fn search(node: &'a Node<T>, path: Split<'b>) -> Self {
         Self {
             vertex: Vertex::Search(node.children.iter().rev()),
             path,
@@ -158,15 +159,15 @@ impl<T> Router<T> {
     /// This router is insert-only, therefore this is a very unlikely scenario.
     ///
     pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, T> {
-        let vertex = Vertex::Depth(Binding {
-            results: smallvec![&self.0],
-            range: None,
-        });
-
-        let path = Split::new(path).peekable();
-
         Traverse {
-            stack: smallvec![Frame { vertex, path }],
+            stack: smallvec![Frame {
+                vertex: Vertex::Depth(Binding {
+                    is_final: path == "/",
+                    results: smallvec![&self.0],
+                    range: None,
+                }),
+                path: Split::new(path),
+            }],
         }
     }
 }
@@ -222,7 +223,7 @@ impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
                         continue;
                     };
 
-                    let route = Route::new(frame.path.peek().is_some(), node);
+                    let route = Route::new(binding.is_final, node);
                     let param = match &node.pattern {
                         Pattern::Root | Pattern::Static(_) => None,
                         Pattern::Dynamic(ident) => binding.range.map(|range| (ident, range)),
@@ -237,8 +238,8 @@ impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
                     if binding.results.is_empty() {
                         frame.vertex = Vertex::Search(node.children.iter().rev());
                     } else {
-                        let path = frame.path.clone();
-                        self.stack.push(Frame::search(node, path));
+                        let queued = Frame::search(node, frame.path.clone());
+                        self.stack.push(queued);
                     }
 
                     return Some((route, param));
@@ -246,11 +247,13 @@ impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
                 Vertex::Search(iter) => {
                     frame.vertex = if let Some((pred, [from, to])) = frame.path.next() {
                         Vertex::Depth(Binding {
+                            is_final: to == frame.path.len(),
                             results: iter.by_ref().filter(|node| node.matches(pred)).collect(),
                             range: Some((from, Some(to))),
                         })
                     } else {
                         Vertex::Depth(Binding {
+                            is_final: true,
                             results: iter.by_ref().filter(|node| node.is_splat()).collect(),
                             range: None,
                         })

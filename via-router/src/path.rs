@@ -99,6 +99,11 @@ impl<'a> Split<'a> {
             offset: if path.starts_with('/') { 1 } else { 0 },
         }
     }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.path.len()
+    }
 }
 
 impl<'a> Iterator for Split<'a> {

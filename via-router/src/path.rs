@@ -3,15 +3,6 @@ use std::ops::Deref;
 
 pub type Param = (usize, Option<usize>);
 
-#[derive(Clone)]
-pub struct Ident(Box<str>);
-
-#[derive(Clone)]
-pub struct Split<'a> {
-    path: &'a str,
-    offset: usize,
-}
-
 #[derive(Debug)]
 pub enum Pattern {
     Root,
@@ -20,15 +11,31 @@ pub enum Pattern {
     Splat(Ident),
 }
 
+#[derive(Clone)]
+pub struct Ident(Box<str>);
+
+#[derive(Debug)]
+pub struct Segment<'a> {
+    value: &'a str,
+    range: [usize; 2],
+}
+
+#[derive(Clone)]
+pub struct Split<'a> {
+    path: &'a str,
+    offset: usize,
+}
+
 /// Returns an iterator that yields a `Pattern` for each segment in the uri path.
 ///
 pub(crate) fn patterns(path: &str) -> impl Iterator<Item = Pattern> + '_ {
-    Split::new(path).map(|(segment, _)| {
-        match segment.chars().next() {
+    Split::new(path).map(|segment| {
+        let value = segment.value();
+        match value.chars().next() {
             // Path segments that start with a colon are considered a Dynamic
             // pattern. The remaining characters in the segment are considered
             // the name or identifier associated with the parameter.
-            Some(':') => match segment.get(1..) {
+            Some(':') => match value.get(1..) {
                 None | Some("") => panic!("Dynamic parameters must be named. Found ':'."),
                 Some(name) => Pattern::Dynamic(name.to_owned().into()),
             },
@@ -36,14 +43,14 @@ pub(crate) fn patterns(path: &str) -> impl Iterator<Item = Pattern> + '_ {
             // Path segments that start with an asterisk are considered CatchAll
             // pattern. The remaining characters in the segment are considered
             // the name or identifier associated with the parameter.
-            Some('*') => match segment.get(1..) {
+            Some('*') => match value.get(1..) {
                 None | Some("") => panic!("Wildcard parameters must be named. Found '*'."),
                 Some(name) => Pattern::Splat(name.to_owned().into()),
             },
 
             // The segment does not start with a reserved character. We will
             // consider it a static pattern that can be matched by value.
-            _ => Pattern::Static(segment.to_owned().into()),
+            _ => Pattern::Static(value.to_owned().into()),
         }
     })
 }
@@ -91,6 +98,20 @@ impl PartialEq<str> for Pattern {
     }
 }
 
+impl<'a> Segment<'a> {
+    pub fn range_from(&self) -> (usize, Option<usize>) {
+        (self.range[0], None)
+    }
+
+    pub fn range(&self) -> (usize, Option<usize>) {
+        (self.range[0], Some(self.range[1]))
+    }
+
+    pub fn value(&self) -> &'a str {
+        self.value
+    }
+}
+
 impl<'a> Split<'a> {
     #[inline]
     pub fn new(path: &'a str) -> Self {
@@ -99,15 +120,10 @@ impl<'a> Split<'a> {
             offset: if path.starts_with('/') { 1 } else { 0 },
         }
     }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.path.len()
-    }
 }
 
 impl<'a> Iterator for Split<'a> {
-    type Item = (&'a str, [usize; 2]);
+    type Item = Segment<'a>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -123,14 +139,20 @@ impl<'a> Iterator for Split<'a> {
         {
             let end = start + len;
             *offset = end + 1;
-            Some((&path[start..end], [start, end]))
+            Some(Segment {
+                value: &path[start..end],
+                range: [start, end],
+            })
         } else {
             let end = path.len();
             *offset = end;
 
             // Only yield if there's something left between offset and path.len().
             // Prevents slicing past the end on trailing slashes like "/via/".
-            (end > start).then_some((&path[start..end], [start, end]))
+            (end > start).then_some(Segment {
+                value: &path[start..end],
+                range: [start, end],
+            })
         }
     }
 }
@@ -158,23 +180,29 @@ mod tests {
         "/",
     ];
 
-    fn get_expected_results() -> [Vec<[usize; 2]>; 16] {
+    fn get_expected_results() -> [Vec<(usize, Option<usize>)>; 16] {
         [
-            vec![[1, 5], [6, 11]],
-            vec![[1, 9], [10, 14], [15, 18]],
-            vec![[1, 5], [6, 11], [12, 16], [17, 21]],
-            vec![[1, 5], [6, 13], [14, 22]],
-            vec![[1, 9], [10, 17]],
-            vec![[1, 7], [8, 23]],
-            vec![[1, 5], [6, 12]],
-            vec![[1, 10], [11, 18]],
-            vec![[1, 4]],
-            vec![[1, 8], [9, 16]],
-            vec![[1, 1], [2, 6], [7, 7], [8, 13]],
-            vec![[1, 9], [10, 10], [11, 15], [16, 19]],
-            vec![[1, 5], [6, 11], [12, 16], [17, 17], [18, 22]],
-            vec![[1, 5], [6, 6], [7, 14], [15, 23]],
-            vec![[1, 9], [10, 17], [18, 18], [19, 21]],
+            vec![(1, Some(5)), (6, Some(11))],
+            vec![(1, Some(9)), (10, Some(14)), (15, Some(18))],
+            vec![(1, Some(5)), (6, Some(11)), (12, Some(16)), (17, Some(21))],
+            vec![(1, Some(5)), (6, Some(13)), (14, Some(22))],
+            vec![(1, Some(9)), (10, Some(17))],
+            vec![(1, Some(7)), (8, Some(23))],
+            vec![(1, Some(5)), (6, Some(12))],
+            vec![(1, Some(10)), (11, Some(18))],
+            vec![(1, Some(4))],
+            vec![(1, Some(8)), (9, Some(16))],
+            vec![(1, Some(1)), (2, Some(6)), (7, Some(7)), (8, Some(13))],
+            vec![(1, Some(9)), (10, Some(10)), (11, Some(15)), (16, Some(19))],
+            vec![
+                (1, Some(5)),
+                (6, Some(11)),
+                (12, Some(16)),
+                (17, Some(17)),
+                (18, Some(22)),
+            ],
+            vec![(1, Some(5)), (6, Some(6)), (7, Some(14)), (15, Some(23))],
+            vec![(1, Some(9)), (10, Some(17)), (18, Some(18)), (19, Some(21))],
             vec![],
         ]
     }
@@ -192,10 +220,17 @@ mod tests {
             );
 
             for (j, segment) in Split::new(path).enumerate() {
-                let [start, end] = expected_results[i][j];
-                let expect = (&path[start..end], [start, end]);
+                let (start, end) = expected_results[i][j];
+                let expect = (&path[start..end.unwrap()], (start, end));
 
-                assert_eq!(segment, expect, "{} ({}, {:?})", path, j, segment);
+                assert_eq!(
+                    (segment.value(), segment.range()),
+                    expect,
+                    "{} ({}, {:?})",
+                    path,
+                    j,
+                    segment
+                );
             }
         }
     }

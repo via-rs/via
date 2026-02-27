@@ -56,6 +56,8 @@ where
     // Start accepting incoming connections.
     let exit_code = loop {
         let (io, _) = tokio::select! {
+            biased;
+
             // A new TCP stream was accepted from the listener.
             result = listener.accept() => match result {
                 Ok(stream) => stream,
@@ -149,6 +151,7 @@ where
 
     tokio::pin!(connection);
     tokio::select! {
+        biased;
         result = &mut connection => Ok(result?),
         _ = shutdown.requested() => {
             connection.as_mut().graceful_shutdown();
@@ -174,6 +177,7 @@ where
 
     tokio::pin!(connection);
     tokio::select! {
+        biased;
         result = &mut connection => Ok(result?),
         _ = shutdown.requested() => {
             connection.as_mut().graceful_shutdown();

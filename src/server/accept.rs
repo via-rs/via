@@ -56,6 +56,9 @@ where
     // Start accepting incoming connections.
     let exit_code = loop {
         let (io, _) = tokio::select! {
+            // Keep tail latency low when the server is at capacity.
+            biased;
+
             // A new TCP stream was accepted from the listener.
             result = listener.accept() => match result {
                 Ok(stream) => stream,
@@ -68,7 +71,8 @@ where
                     }
                 },
             },
-            // The process received a graceful shutdown signal.
+
+            // A graceful shutdown signal was sent to the process.
             _ = shutdown.requested() => {
                 break ExitCode::SUCCESS;
             }
@@ -148,8 +152,15 @@ where
         .serve_connection(io, service);
 
     tokio::pin!(connection);
+
     tokio::select! {
+        // Keep tail latency low when the server is at capacity.
+        biased;
+
+        // The connection future is ready.
         result = &mut connection => Ok(result?),
+
+        // A graceful shutdown signal was sent to the process.
         _ = shutdown.requested() => {
             connection.as_mut().graceful_shutdown();
             Ok((&mut connection).await?)
@@ -173,8 +184,15 @@ where
         .with_upgrades();
 
     tokio::pin!(connection);
+
     tokio::select! {
+        // Keep tail latency low when the server is at capacity.
+        biased;
+
+        // The connection future is ready.
         result = &mut connection => Ok(result?),
+
+        // A graceful shutdown signal was sent to the process.
         _ = shutdown.requested() => {
             connection.as_mut().graceful_shutdown();
             Ok((&mut connection).await?)

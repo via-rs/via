@@ -218,17 +218,30 @@ impl<'a, T> RouteMut<'a, T> {
     }
 }
 
+impl<'a, 'b, T> Traverse<'a, 'b, T> {
+    #[cold]
+    fn fork(
+        &mut self,
+        node: &'a Node<T>,
+        mut split: Split<'b>,
+    ) -> MatchCond<slice::Iter<'a, MatchCond<T>>> {
+        let segment = split.next();
+        let iter = MatchCond::new(segment.is_none(), node.route());
+
+        self.stack.push(Frame::new(node, Some(split), segment));
+        iter
+    }
+}
+
 impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
     type Item = (Route<'a, T>, Option<(&'a Ident, Param)>);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let Self { stack, split } = self;
-
         loop {
-            let frame = stack.last_mut()?;
+            let frame = self.stack.last_mut()?;
             let Some(node) = frame.results.pop() else {
-                stack.pop();
+                self.stack.pop();
                 continue;
             };
 
@@ -243,17 +256,13 @@ impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
                 }
             };
 
-            let split = frame.split.as_mut().unwrap_or(split);
+            let split = frame.split.as_mut().unwrap_or(&mut self.split);
             let route = Route::new(if frame.results.is_empty() {
                 *frame = Frame::new(node, None, split.next());
                 MatchCond::new(frame.to.is_none(), node.route())
             } else {
-                let mut split = split.clone();
-                let segment = split.next();
-                let iter = MatchCond::new(segment.is_none(), node.route());
-
-                stack.push(Frame::new(node, Some(split), segment));
-                iter
+                let split = split.clone();
+                self.fork(node, split)
             });
 
             return Some((route, param));

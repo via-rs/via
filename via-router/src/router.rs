@@ -6,21 +6,25 @@ use std::slice;
 
 use crate::path::{self, Ident, Param, Pattern, Segment, Split};
 
+#[derive(Debug)]
+pub struct Router<T> {
+    tree: Node<T>,
+}
+
 /// An iterator over the middleware for a matched route.
 ///
-pub struct Route<'a, T>(MatchCond<slice::Iter<'a, MatchCond<T>>>);
+pub struct Route<'a, T> {
+    iter: MatchCond<slice::Iter<'a, MatchCond<T>>>,
+}
 
 pub struct RouteMut<'a, T> {
     node: &'a mut Node<T>,
     _rc: PhantomData<Rc<()>>,
 }
 
-#[derive(Debug)]
-pub struct Router<T>(Node<T>);
-
 pub struct Traverse<'a, 'b, T> {
     stack: SmallVec<[Frame<'a, 'b, T>; 1]>,
-    path: Split<'b>,
+    split: Split<'b>,
 }
 
 #[derive(Debug)]
@@ -33,7 +37,7 @@ enum MatchCond<T> {
 ///
 struct Frame<'a, 'b, T> {
     results: SmallVec<[&'a Node<T>; 1]>,
-    path: Option<Split<'b>>,
+    split: Option<Split<'b>>,
     to: Option<Segment<'b>>,
 }
 
@@ -57,7 +61,7 @@ impl<'a, 'b, T> Frame<'a, 'b, T> {
 
         Self {
             results: results.collect(),
-            path,
+            split: path,
             to: segment,
         }
     }
@@ -69,6 +73,7 @@ impl<'a, 'b, T> Frame<'a, 'b, T> {
 }
 
 impl<T> MatchCond<T> {
+    #[inline]
     fn new(exact: bool, value: T) -> Self {
         if exact {
             Self::Exact(value)
@@ -110,6 +115,7 @@ where
 }
 
 impl<T> Node<T> {
+    #[inline]
     fn children(&self) -> Rev<slice::Iter<'_, Self>> {
         self.children.iter().rev()
     }
@@ -127,8 +133,70 @@ impl<T> Node<T> {
         &mut children[index]
     }
 
+    #[inline]
     fn route(&self) -> slice::Iter<'_, MatchCond<T>> {
         self.route.iter()
+    }
+}
+
+impl<T> Router<T> {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn route(&mut self, path: &'static str) -> RouteMut<'_, T> {
+        RouteMut {
+            node: insert(&mut self.tree, path::patterns(path)),
+            _rc: PhantomData,
+        }
+    }
+
+    /// Match the path argument against nodes in the route tree.
+    ///
+    /// # Panics
+    ///
+    /// If a node referenced by another node does not exist in the route tree.
+    /// This router is insert-only, therefore this is a very unlikely scenario.
+    ///
+    pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, T> {
+        let root = Frame {
+            results: smallvec![&self.tree],
+            split: None,
+            to: None,
+        };
+
+        Traverse {
+            stack: smallvec![root],
+            split: Split::new(path),
+        }
+    }
+}
+
+impl<T> Default for Router<T> {
+    fn default() -> Self {
+        Self {
+            tree: Node {
+                children: Vec::new(),
+                pattern: Pattern::Root,
+                route: Vec::new(),
+            },
+        }
+    }
+}
+
+impl<'a, T> Route<'a, T> {
+    #[inline]
+    fn new(iter: MatchCond<slice::Iter<'a, MatchCond<T>>>) -> Self {
+        Self { iter }
+    }
+}
+
+impl<'a, T> Iterator for Route<'a, T> {
+    type Item = &'a T;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
     }
 }
 
@@ -150,64 +218,12 @@ impl<'a, T> RouteMut<'a, T> {
     }
 }
 
-impl<T> Router<T> {
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    pub fn route(&mut self, path: &'static str) -> RouteMut<'_, T> {
-        RouteMut {
-            node: insert(&mut self.0, path::patterns(path)),
-            _rc: PhantomData,
-        }
-    }
-
-    /// Match the path argument against nodes in the route tree.
-    ///
-    /// # Panics
-    ///
-    /// If a node referenced by another node does not exist in the route tree.
-    /// This router is insert-only, therefore this is a very unlikely scenario.
-    ///
-    pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, T> {
-        let root = Frame {
-            results: smallvec![&self.0],
-            path: None,
-            to: None,
-        };
-
-        Traverse {
-            stack: smallvec![root],
-            path: Split::new(path),
-        }
-    }
-}
-
-impl<T> Default for Router<T> {
-    fn default() -> Self {
-        Self(Node {
-            children: Vec::new(),
-            pattern: Pattern::Root,
-            route: Vec::new(),
-        })
-    }
-}
-
-impl<'a, T> Iterator for Route<'a, T> {
-    type Item = &'a T;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
-    }
-}
-
 impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
     type Item = (Route<'a, T>, Option<(&'a Ident, Param)>);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let Self { stack, path } = self;
+        let Self { stack, split } = self;
 
         loop {
             let frame = stack.last_mut()?;
@@ -221,22 +237,22 @@ impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
                 Pattern::Dynamic(ident) => frame.segment().map(|segment| (ident, segment.range())),
                 Pattern::Splat(ident) => {
                     return Some((
-                        Route(MatchCond::Exact(node.route())),
+                        Route::new(MatchCond::Exact(node.route())),
                         frame.segment().map(|segment| (ident, segment.range_from())),
                     ));
                 }
             };
 
-            let path = frame.path.as_mut().unwrap_or(path);
-            let route = Route(if frame.results.is_empty() {
-                *frame = Frame::new(node, None, path.next());
+            let split = frame.split.as_mut().unwrap_or(split);
+            let route = Route::new(if frame.results.is_empty() {
+                *frame = Frame::new(node, None, split.next());
                 MatchCond::new(frame.to.is_none(), node.route())
             } else {
-                let mut path = path.clone();
-                let segment = path.next();
+                let mut split = split.clone();
+                let segment = split.next();
                 let iter = MatchCond::new(segment.is_none(), node.route());
 
-                stack.push(Frame::new(node, Some(path), segment));
+                stack.push(Frame::new(node, Some(split), segment));
                 iter
             });
 

@@ -88,16 +88,6 @@ impl PartialEq<str> for Ident {
     }
 }
 
-impl PartialEq<str> for Pattern {
-    fn eq(&self, rhs: &str) -> bool {
-        match self {
-            Pattern::Static(lhs) => lhs == rhs,
-            Pattern::Root => false,
-            _ => true,
-        }
-    }
-}
-
 impl<'a> Segment<'a> {
     pub fn range_from(&self) -> (usize, Option<usize>) {
         (self.range[0], None)

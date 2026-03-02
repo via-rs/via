@@ -83,10 +83,10 @@ optional = true
 default-features = false
 
 [dev-dependencies]
-dotenvy = "0.15"
 cookie = { version = "0.18", features = ["percent-encode", "private"] }
 rustls-pemfile = "2"
 time = { version = "0.3" }
+tokio = { version = "1", features = ["macros", "io-util", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [[example]]

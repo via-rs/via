@@ -117,33 +117,25 @@ impl<'a> Iterator for Split<'a> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let offset = &mut self.offset;
-        let start = *offset;
-        let path = self.path;
+        let start = self.offset;
 
-        if let Some(len) = path
-            .get(start..)?
+        if start == self.path.len() {
+            return None;
+        }
+
+        let rest = self.path.get(start..)?;
+        let len = rest
             .bytes()
             .enumerate()
             .find_map(|(index, byte)| (byte == b'/').then_some(index))
-        {
-            let end = start + len;
-            *offset = end + 1;
-            Some(Segment {
-                value: &path[start..end],
-                range: [start, end],
-            })
-        } else {
-            let end = path.len();
-            *offset = end;
+            .unwrap_or(rest.len());
 
-            // Only yield if there's something left between offset and path.len().
-            // Prevents slicing past the end on trailing slashes like "/via/".
-            (end > start).then_some(Segment {
-                value: &path[start..end],
-                range: [start, end],
-            })
-        }
+        self.offset += len + 1;
+
+        Some(Segment {
+            value: rest.split_at_checked(len)?.0,
+            range: [start, start + len],
+        })
     }
 }
 
@@ -202,11 +194,14 @@ mod tests {
         let expected_results = get_expected_results();
 
         for (i, path) in PATHS.iter().enumerate() {
+            let segments = Split::new(path).collect::<Vec<_>>();
+
             assert_eq!(
-                Split::new(path).count(),
+                segments.len(),
                 expected_results[i].len(),
-                "Split produced more or less segments than expected for {}",
-                path
+                "Split produced more or less segments than expected for {} {:#?}",
+                path,
+                segments,
             );
 
             for (j, segment) in Split::new(path).enumerate() {

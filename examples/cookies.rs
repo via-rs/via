@@ -1,5 +1,6 @@
 use cookie::{Cookie, Key, SameSite};
 use std::process::ExitCode;
+use time::Duration;
 use via::{Cookies, Error, Next, Request, Response, Server};
 
 struct Unicorn {
@@ -15,7 +16,7 @@ async fn hello(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
     let mut counter = request
         .envelope()
         .cookies()
-        .private(&app.secret)
+        .signed(&app.secret)
         .get("counter")
         .map_or(Ok(0i32), |cookie| cookie.value().parse())?;
 
@@ -31,10 +32,11 @@ async fn hello(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
     // Send a plain text response with our greeting message.
     let mut response = Response::build().text(format!("Hello, {}!", name))?;
 
-    response.cookies_mut().private_mut(&app.secret).add(
+    response.cookies_mut().signed_mut(&app.secret).add(
         Cookie::build(("counter", counter.to_string()))
             .http_only(true)
             .path("/")
+            .max_age(Duration::days(1))
             .same_site(SameSite::Strict)
             .secure(true),
     );

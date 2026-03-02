@@ -83,7 +83,7 @@ optional = true
 default-features = false
 
 [dev-dependencies]
-cookie = { version = "0.18", features = ["percent-encode", "private"] }
+cookie = { version = "0.18", features = ["percent-encode", "signed"] }
 rustls-pemfile = "2"
 time = { version = "0.3" }
 tokio = { version = "1", features = ["macros", "io-util", "rt-multi-thread"] }

@@ -50,7 +50,7 @@ tokio-util = { version = "0.7", default-features = false }
 tungstenite = { version = "0.28", optional = true }
 tokio-tungstenite = { version = "0.28", optional = true }
 tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
-via-router = { version = "3.0.0-beta.32" }
+via-router = { version = "3.0.0-beta.33" }
 
 [dependencies.futures-util]
 version = "0.3"

@@ -31,17 +31,15 @@ struct SetCookieError;
 /// async fn greet(request: Request, _: Next) -> via::Result {
 ///     use time::Duration;
 ///
-///     let head = request.envelope();
-///
 ///     // `should_set_name` indicates whether "name" was sourced from the
 ///     // request URI. When false, the "name" cookie should not be modified.
 ///     //
 ///     // `name` is a Cow that contains either the percent-decoded value of
 ///     // the "name" cookie or the percent-decoded value of the "name"
 ///     // parameter in the request URI.
-///     let (should_set_name, name) = match head.cookies().get("name") {
+///     let (should_set_name, name) = match request.cookies().get("name") {
 ///         Some(cookie) => (false, cookie.value().into()),
-///         None => (true, head.param("name").decode().into_result()?),
+///         None => (true, request.param("name").decode().into_result()?),
 ///     };
 ///
 ///     // Build the greeting response using a reference to name.
@@ -166,9 +164,9 @@ struct SetCookieError;
 ///     let mut response = Response::build().status(204).finish()?;
 ///
 ///     // Add our session cookie that contains the username of the active user
-///     // to our private cookie jar. The value of the cookie will be signed
+///     // to our signed cookie jar. The value of the cookie will be signed
 ///     // and encrypted before it is included as a set-cookie header.
-///     response.cookies_mut().private_mut(&app.secret).add(
+///     response.cookies_mut().signed_mut(&app.secret).add(
 ///         Cookie::build(("via-session", params.username))
 ///             .http_only(true)
 ///             .max_age(Duration::hours(1))

@@ -219,6 +219,12 @@ impl<'a, T> RouteMut<'a, T> {
 }
 
 impl<'a, 'b, T> Traverse<'a, 'b, T> {
+    /// Returns true if an allocation was required during traversal.
+    #[cfg(feature = "benches")]
+    pub fn spilled(&self) -> bool {
+        self.stack.spilled()
+    }
+
     #[cold]
     fn fork(
         &mut self,

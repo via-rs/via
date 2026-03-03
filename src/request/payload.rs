@@ -323,7 +323,7 @@ impl Payload for Aggregate {
     fn coalesce(mut self) -> Vec<u8> {
         let mut dest = self.len().map(Vec::with_capacity).unwrap_or_default();
 
-        for frame in self.payload.frames_mut() {
+        for frame in self.payload.frames_mut().iter_mut() {
             // The transport layer sufficiently chunks each frame.
             dest.extend_from_slice(frame.as_ref());
 
@@ -391,7 +391,7 @@ impl Payload for Aggregate {
             return Err(self);
         }
 
-        for frame in self.payload.frames_mut() {
+        for frame in self.payload.frames_mut().iter_mut() {
             // The transport layer sufficiently chunks each frame.
             dest.extend_from_slice(frame.as_ref());
 

@@ -23,8 +23,16 @@ The classic echo server example with a ws relay for GET requests.
 
 ### Running the Example
 
+**Tungstenite**
+
 ```sh
-cargo run --features="ring tokio-tungstenite" --example echo
+cargo run --example echo --features="tokio-tungstenite"
+```
+
+**tokio-websockets**
+
+```sh
+cargo run --example echo --features="tokio-websockets"
 ```
 
 ---
@@ -130,3 +138,16 @@ cargo run --example files --features="file"
 
 Visit http://localhost:8080/ in your browser to see a nostalgic web page with
 an image of space on the about page.
+
+
+
+
+
+
+
+
+
+
+
+
+

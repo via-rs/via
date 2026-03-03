@@ -1,5 +1,5 @@
 use native_tls::Identity;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::{fs, process::ExitCode};
 use via::{Error, Next, Request, Response, Server};
 
@@ -24,20 +24,9 @@ fn load_pkcs12() -> Result<Identity, Error> {
         })
     };
 
-    let password = {
-        let env_path = tls_examples_dir.join(".env");
-        dotenvy::from_path_iter(env_path.as_path())?
-            .find_map(|result| match result {
-                Ok((key, value)) if key == P12_PASSWORD => Some(value),
-                _ => None,
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "missing required env var \"{}\" in {:?}",
-                    P12_PASSWORD, env_path
-                );
-            })
-    };
+    let password = std::env::var(P12_PASSWORD).unwrap_or_else(|_| {
+        panic!("missing required env var \"{}\"", P12_PASSWORD);
+    });
 
     Ok(Identity::from_pkcs12(&identity, &password)?)
 }

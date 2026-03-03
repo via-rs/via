@@ -5,8 +5,18 @@
 # it to a .env file.
 #
 
+set -e
+
+# Resolve directory where this script lives
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+CERT="$SCRIPT_DIR/localhost.cert"
+KEY="$SCRIPT_DIR/localhost.key"
+P12="$SCRIPT_DIR/localhost.p12"
+ENV_FILE="$SCRIPT_DIR/.env"
+
 # Remove any existing files.
-rm -f localhost.cert localhost.key localhost.p12 .env
+rm -f "$CERT" "$KEY" "$P12" "$ENV_FILE"
 
 # Prompt the user for a password (no echo).
 echo "Enter password for PKCS#12 file:"
@@ -15,13 +25,11 @@ read -r PASSWORD
 stty echo
 echo
 
-set -e
-
 # Generate a new private key and certificate.
 openssl req \
     -x509 \
-    -out localhost.cert \
-    -keyout localhost.key \
+    -out "$CERT" \
+    -keyout "$KEY" \
     -newkey rsa:4096 \
     -nodes \
     -sha256 \
@@ -30,15 +38,16 @@ openssl req \
 
 # Export to PKCS#12 format with the provided password.
 openssl pkcs12 -export \
-    -inkey localhost.key \
-    -in localhost.cert \
-    -out localhost.p12 \
+    -inkey "$KEY" \
+    -in "$CERT" \
+    -out "$P12" \
     -password pass:"$PASSWORD"
 
 # Clean up intermediate files.
-rm -f localhost.cert localhost.key
+rm -f "$CERT" "$KEY"
 
 # Write .env file.
-echo "TLS_PKCS_PASSWORD=$PASSWORD" > .env
+echo "TLS_PKCS_PASSWORD=$PASSWORD" > "$ENV_FILE"
 
-echo "PKCS#12 file generated as localhost.p12 and password saved in .env"
+echo "PKCS#12 file generated at: $P12"
+echo "Password saved to: $ENV_FILE"

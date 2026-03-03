@@ -110,7 +110,8 @@ pub trait Payload: sealed::Sealed + Sized {
     where
         T: DeserializeOwned,
     {
-        self.z_coalesce().map(|data| deserialize_json(&data))
+        self.z_coalesce()
+            .map(|data| deserialize_json(data.as_slice()))
     }
 
     /// Deserialize the payload as JSON into the specified type `T`, zeroizing
@@ -346,7 +347,7 @@ impl Payload for Aggregate {
             return result;
         }
 
-        deserialize_json(&self.coalesce())
+        deserialize_json(self.coalesce().as_slice())
     }
 
     fn z_json<T>(mut self) -> Result<Result<T, Error>, Self>
@@ -377,7 +378,8 @@ impl Payload for Aggregate {
             return Ok(result);
         }
 
-        self.z_coalesce().map(|data| deserialize_json(&data))
+        self.z_coalesce()
+            .map(|data| deserialize_json(data.as_slice()))
     }
 
     fn z_coalesce(mut self) -> Result<Vec<u8>, Self> {

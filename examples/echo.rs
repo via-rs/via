@@ -1,12 +1,17 @@
 use std::process::ExitCode;
-use via::ws::{self, Channel};
 use via::{Error, Finalize, Next, Request, Response, Server};
 
 async fn echo(request: Request, _: Next) -> via::Result {
     request.finalize(Response::build())
 }
 
-async fn relay(mut channel: Channel, _: ws::Request) -> ws::Result {
+#[cfg(not(any(feature = "tokio-tungstenite", feature = "tokio-websockets")))]
+async fn relay(request: Request, next: Next) -> via::Result {
+    next.call(request).await
+}
+
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+async fn relay(mut channel: via::ws::Channel, _: via::ws::Request) -> via::ws::Result {
     while let Some(message) = channel.recv().await {
         if message.is_close() {
             eprintln!("info: close requested by client");
@@ -27,7 +32,10 @@ async fn relay(mut channel: Channel, _: ws::Request) -> ws::Result {
 async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(());
 
-    app.route("/echo").to(via::get(via::ws(relay)).post(echo));
+    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+    let relay = via::ws(relay);
+
+    app.route("/echo").to(via::post(echo).get(relay));
 
     Server::new(app).listen(("127.0.0.1", 8080)).await
 }

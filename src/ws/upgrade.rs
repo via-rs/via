@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use http::{Method, StatusCode, header};
 use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper_util::rt::TokioIo;
-use sha1::{Digest, Sha1};
+use ring::digest::{Context as Hasher, SHA1_FOR_LEGACY_USE_ONLY};
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
 
@@ -33,12 +33,12 @@ struct WsConfig {
 }
 
 fn gen_accept_key(key: &[u8]) -> String {
-    let mut hasher = Sha1::new();
+    let mut hasher = Hasher::new(&SHA1_FOR_LEGACY_USE_ONLY);
 
     hasher.update(key);
     hasher.update(WS_ACCEPT_GUID);
 
-    base64.encode(hasher.finalize())
+    base64.encode(hasher.finish())
 }
 
 #[cfg(feature = "tokio-tungstenite")]

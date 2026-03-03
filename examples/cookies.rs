@@ -48,10 +48,11 @@ async fn hello(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
 async fn main() -> Result<ExitCode, Error> {
     // Create a new application.
     let mut app = via::app(Unicorn {
-        secret: std::env::var("VIA_SECRET_KEY")
-            .map(|secret| secret.as_bytes().try_into())
-            .expect("missing required env var: VIA_SECRET_KEY")
-            .expect("unexpected end of input while parsing VIA_SECRET_KEY"),
+        // secret: std::env::var("VIA_SECRET_KEY")
+        //     .map(|secret| secret.as_bytes().try_into())
+        //     .expect("missing required env var: VIA_SECRET_KEY")
+        //     .expect("unexpected end of input while parsing VIA_SECRET_KEY"),
+        secret: Key::generate(),
     });
 
     // The CookieParser middleware can be added at any depth of the route tree.

@@ -47,8 +47,6 @@ sha1 = { version = "0.10", optional = true }
 smallvec = { version = "1", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tokio-util = { version = "0.7", default-features = false }
-tungstenite = { version = "0.28", optional = true }
-tokio-tungstenite = { version = "0.28", optional = true }
 tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
 via-router = { version = "3.0.0-beta.33" }
 
@@ -66,6 +64,17 @@ optional = true
 [dependencies.tokio-native-tls]
 version = "0.3"
 optional = true
+
+[dependencies.tungstenite]
+version = "0.28"
+optional = true
+default-features = false
+
+[dependencies.tokio-tungstenite]
+version = "0.28"
+optional = true
+features = ["stream"]
+default-features = false
 
 [dependencies.ring]
 version = "0.17"
@@ -92,7 +101,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [[example]]
 name = "echo"
 path = "./examples/echo.rs"
-required-features = ["tokio-tungstenite"]
+required-features = ["ring", "tokio-tungstenite"]
 
 [[example]]
 name = "files"
@@ -109,9 +118,9 @@ path = "./examples/tls/native.rs"
 required-features = ["native-tls"]
 
 [[example]]
-name = "rustls-example"
+name = "rustls"
 path = "./examples/tls/rustls.rs"
-required-features = ["aws-lc-rs", "rustls"]
+required-features = ["ring", "rustls"]
 
 [package.metadata.docs.rs]
 features = ["file", "native-tls", "rustls", "tokio-tungstenite"]

@@ -6,14 +6,18 @@
 
 set -ex
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+CERT="$SCRIPT_DIR/localhost.cert"
+KEY="$SCRIPT_DIR/localhost.key"
+
 # Remove any existing certificate and private key.
-rm localhost.cert localhost.key || true
+rm $CERT $KEY || true
 
 # Request a new certificate and private key.
 openssl req \
     -x509 \
-    -out localhost.cert \
-    -keyout localhost.key \
+    -out $CERT \
+    -keyout $KEY \
     -newkey rsa:4096 \
     -nodes \
     -sha256 \

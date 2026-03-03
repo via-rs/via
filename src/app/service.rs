@@ -48,7 +48,7 @@ impl<App> Service<http::Request<Incoming>> for AppService<App> {
 
     fn call(&self, request: http::Request<Incoming>) -> Self::Future {
         // The middleware stack.
-        let mut deque = VecDeque::new();
+        let mut deque = VecDeque::with_capacity(18);
 
         // Wrap the raw HTTP request in our custom Request struct.
         let mut request = {
@@ -77,7 +77,7 @@ impl<App> Service<http::Request<Incoming>> for AppService<App> {
 
             if let Some((name, range)) = param {
                 // Include the route's dynamic parameter in params.
-                params.push((name.clone(), range));
+                params.push((name.clone(), [Some(range.0), range.1]));
             }
         }
 

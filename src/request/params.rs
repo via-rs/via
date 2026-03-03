@@ -7,7 +7,7 @@ use super::query::QueryParser;
 use crate::util::UriEncoding;
 use crate::{Error, raise};
 
-pub(super) type ParamRange = (usize, Option<usize>);
+pub(super) type ParamRange = [Option<usize>; 2];
 pub(super) type PathParamEntry = (Ident, ParamRange);
 pub(super) type QueryParamEntry<'a> = (Cow<'a, str>, Option<ParamRange>);
 
@@ -15,7 +15,7 @@ pub struct Param<'a, 'b> {
     encoding: UriEncoding,
     source: Option<&'a str>,
     name: &'b str,
-    at: Option<(usize, Option<usize>)>,
+    at: Option<ParamRange>,
 }
 
 pub struct PathParams<'a> {
@@ -99,7 +99,7 @@ impl<'a, 'b> Param<'a, 'b> {
             encoding: UriEncoding::Unencoded,
             source,
             name,
-            at: at.or(Some((0, Some(0)))),
+            at: at.or(Some([Some(0); 2])),
         }
     }
 
@@ -116,9 +116,10 @@ impl<'a, 'b> Param<'a, 'b> {
 
     pub fn optional(self) -> Result<Option<Cow<'a, str>>, Error> {
         let Some(value) = self.source.and_then(|source| match self.at? {
-            (from, Some(to)) if from == to => None,
-            (from, Some(to)) => source.get(from..to),
-            (from, None) => source.get(from..),
+            [Some(from), Some(to)] if from == to => None,
+            [Some(from), Some(to)] => source.get(from..to),
+            [Some(from), None] => source.get(from..),
+            [None, _] => None,
         }) else {
             return Ok(None);
         };

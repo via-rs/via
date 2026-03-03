@@ -10,6 +10,12 @@ repository = "https://github.com/zacharygolba/via"
 
 [features]
 default = []
+benches = []
 
 [dependencies]
 smallvec = "1"
+
+[[bench]]
+name = "traverse"
+path = "./benches/traverse.rs"
+required-features = ["benches"]

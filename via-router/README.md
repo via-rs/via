@@ -10,6 +10,12 @@ To run the benchmarks, execute the following command:
 cargo +nightly bench --features benches -- --no-capture
 ```
 
+### Environment
+
+**Hardware / OS:**
+Apple MacBook Pro (14-inch, M2 Pro, 2023)
+Fedora Linux Asahi Remix 42
+
 ### Results
 
 ---
@@ -117,4 +123,8 @@ cargo +nightly bench --features benches -- --no-capture
 | /report/comment/:comment_id | 116.29 | 2.30 |
 | /invite | 77.77 | 1.65 |
 
-> :package: = dynamic allocation required during traversal
+### Key
+
+| Emoji     | Definition                                   |
+|:---------:|----------------------------------------------|
+| :package: | dynamic allocation required during traversal |

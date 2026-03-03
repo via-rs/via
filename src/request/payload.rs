@@ -8,10 +8,10 @@ use serde::de::DeserializeOwned;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
-use std::{ptr, slice};
 
 use crate::error::{BoxError, Error};
 use crate::raise;
@@ -265,6 +265,7 @@ impl Aggregate {
     #[inline]
     pub fn len(&self) -> Option<usize> {
         self.payload
+            .frames()
             .iter()
             .map(Buf::remaining)
             .try_fold(0usize, |len, remaining| len.checked_add(remaining))
@@ -384,14 +385,15 @@ impl Payload for Aggregate {
 
     fn z_coalesce(mut self) -> Result<Vec<u8>, Self> {
         let mut dest = self.len().map(Vec::with_capacity).unwrap_or_default();
+        let payload = &mut self.payload;
 
         // If we do not have unique access to each frame in self, return back
         // to the caller.
-        if !self.payload.iter().all(Bytes::is_unique) {
+        if !payload.frames().iter().all(Bytes::is_unique) {
             return Err(self);
         }
 
-        for frame in self.payload.frames_mut().iter_mut() {
+        for frame in payload.frames_mut().iter_mut() {
             // The transport layer sufficiently chunks each frame.
             dest.extend_from_slice(frame.as_ref());
 
@@ -567,10 +569,6 @@ impl RequestPayload {
             frames: Vec::with_capacity(9),
             trailers: None,
         }
-    }
-
-    fn iter(&self) -> slice::Iter<'_, Bytes> {
-        self.frames().iter()
     }
 
     #[inline]

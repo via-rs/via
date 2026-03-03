@@ -89,13 +89,15 @@ async fn handshake(
 }
 
 async fn run<T, App, Await>(
-    mut stream: WebSocketStream<TokioIo<Upgraded>>,
+    stream: WebSocketStream<TokioIo<Upgraded>>,
     listener: Arc<T>,
     request: Request<App>,
 ) where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send,
 {
+    tokio::pin!(stream); // Stream is pin from now on.
+
     loop {
         let (facade, mut rendezvous) = Channel::new();
         let mut listen = Box::pin(listener(facade, request.clone()));

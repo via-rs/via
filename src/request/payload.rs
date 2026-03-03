@@ -5,7 +5,6 @@ use http_body_util::{LengthLimitError, Limited};
 use hyper::body::Incoming;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use smallvec::SmallVec;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -92,10 +91,7 @@ pub trait Payload: sealed::Sealed + Sized {
     ///
     fn json<T>(self) -> Result<T, Error>
     where
-        T: DeserializeOwned,
-    {
-        deserialize_json(&self.coalesce())
-    }
+        T: DeserializeOwned;
 
     /// Deserialize the payload as JSON into the specified type `T`, zeroizing
     /// the original data from which the `T` is deserialized.
@@ -186,7 +182,7 @@ pub struct Coalesce {
 }
 
 struct RequestPayload {
-    frames: SmallVec<[Bytes; 1]>,
+    frames: Vec<Bytes>,
     trailers: Option<HeaderMap>,
 }
 
@@ -326,7 +322,7 @@ impl Payload for Aggregate {
     fn coalesce(mut self) -> Vec<u8> {
         let mut dest = self.len().map(Vec::with_capacity).unwrap_or_default();
 
-        for frame in self.payload.iter_mut() {
+        for frame in self.payload.frames_mut() {
             // The transport layer sufficiently chunks each frame.
             dest.extend_from_slice(frame.as_ref());
 
@@ -335,6 +331,53 @@ impl Payload for Aggregate {
         }
 
         dest
+    }
+
+    fn json<T>(mut self) -> Result<T, Error>
+    where
+        T: DeserializeOwned,
+    {
+        if let [frame] = self.payload.frames_mut() {
+            let result = deserialize_json(frame.as_ref());
+
+            // Make the visible length of the frame buffer 0.
+            frame.advance(frame.remaining());
+
+            return result;
+        }
+
+        deserialize_json(&self.coalesce())
+    }
+
+    fn z_json<T>(mut self) -> Result<Result<T, Error>, Self>
+    where
+        T: DeserializeOwned,
+    {
+        if let [frame] = self.payload.frames_mut() {
+            // If we do not have unique access to self, return back to the caller.
+            if !frame.is_unique() {
+                return Err(self);
+            }
+
+            // Attempt to deserialize `T` from the bytes in self.
+            let result = deserialize_json(frame.as_ref());
+
+            // Safety:
+            //
+            // The precondition at the top of this function ensures that we
+            // have unique access to self and therefore, can mutate the buffer.
+            unsafe {
+                unfenced_zeroize(frame);
+            }
+
+            // Ensures sequential access to the buffers contained in self.
+            // A necessary step after zeroization.
+            release_compiler_fence();
+
+            return Ok(result);
+        }
+
+        self.z_coalesce().map(|data| deserialize_json(&data))
     }
 
     fn z_coalesce(mut self) -> Result<Vec<u8>, Self> {
@@ -346,7 +389,7 @@ impl Payload for Aggregate {
             return Err(self);
         }
 
-        for frame in self.payload.iter_mut() {
+        for frame in self.payload.frames_mut() {
             // The transport layer sufficiently chunks each frame.
             dest.extend_from_slice(frame.as_ref());
 
@@ -519,18 +562,22 @@ impl Future for Coalesce {
 impl RequestPayload {
     fn new() -> Self {
         Self {
-            frames: SmallVec::new(),
+            frames: Vec::with_capacity(9),
             trailers: None,
         }
     }
 
-    #[inline]
     fn iter(&self) -> slice::Iter<'_, Bytes> {
-        self.frames.iter()
+        self.frames().iter()
     }
 
     #[inline]
-    fn iter_mut(&mut self) -> slice::IterMut<'_, Bytes> {
-        self.frames.iter_mut()
+    fn frames(&self) -> &[Bytes] {
+        self.frames.as_slice()
+    }
+
+    #[inline]
+    fn frames_mut(&mut self) -> &mut [Bytes] {
+        self.frames.as_mut_slice()
     }
 }

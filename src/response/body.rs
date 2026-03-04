@@ -8,8 +8,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::builder::{Finalize, ResponseBuilder};
-use super::response::Response;
+use super::{Finalize, Response, ResponseBuilder};
 use crate::error::{BoxError, Error};
 
 /// Serialize the contained type as an untagged JSON response.

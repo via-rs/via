@@ -10,9 +10,7 @@ use tokio::task::{JoinSet, coop};
 use tokio::{signal, time};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 
-use super::io::IoWithPermit;
-use super::server::ServerConfig;
-use super::tls::Acceptor;
+use super::{Acceptor, IoWithPermit, ServerConfig};
 use crate::app::AppService;
 use crate::error::ServerError;
 
@@ -27,7 +25,7 @@ macro_rules! log {
     };
 }
 
-pub async fn accept<App, TlsAcceptor>(
+pub(super) async fn accept<App, TlsAcceptor>(
     acceptor: TlsAcceptor,
     listener: TcpListener,
     service: AppService<App>,

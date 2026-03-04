@@ -10,7 +10,7 @@ use tokio::task::{JoinSet, coop};
 use tokio::{signal, time};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 
-use super::{Acceptor, IoWithPermit, ServerConfig};
+use super::{IoWithPermit, ServerConfig, tls};
 use crate::app::AppService;
 use crate::error::ServerError;
 
@@ -34,7 +34,7 @@ pub(super) async fn accept<App, TlsAcceptor>(
 where
     App: Send + Sync + 'static,
     ServerError: From<TlsAcceptor::Error>,
-    TlsAcceptor: Acceptor,
+    TlsAcceptor: tls::Acceptor,
     TlsAcceptor::Io: Send + Unpin + 'static,
 {
     #[cfg(not(any(feature = "native-tls", feature = "rustls")))]
@@ -84,21 +84,33 @@ where
             continue;
         };
 
-        #[cfg(any(feature = "native-tls", feature = "rustls"))]
-        let handshake = acceptor.accept(io);
-
         let service = service.clone();
         let shutdown = shutdown.clone();
 
         // Spawn a task to serve the connection.
-        connections.spawn(async move {
-            #[cfg(any(feature = "native-tls", feature = "rustls"))]
-            let io = match config.tls_handshake_timeout {
-                Some(duration) => time::timeout(duration, handshake).await??,
-                None => handshake.await?,
-            };
+        #[cfg(any(feature = "native-tls", feature = "rustls"))]
+        connections.spawn({
+            let handshake = time::timeout(
+                config.tls_handshake_timeout.unwrap_or_default(),
+                acceptor.accept(io),
+            );
 
-            serve_connection(IoWithPermit::new(io, permit), service, shutdown).await
+            async move {
+                let (io, alpn) = handshake.await??;
+                let io = IoWithPermit::new(io, permit);
+
+                if alpn == tls::Alpn::H2 {
+                    serve_h2_connection(io, service, shutdown).await
+                } else {
+                    serve_connection(io, service, shutdown).await
+                }
+            }
+        });
+
+        #[cfg(not(any(feature = "native-tls", feature = "rustls")))]
+        connections.spawn(async move {
+            let io = IoWithPermit::new(io, permit);
+            serve_connection(io, service, shutdown).await
         });
 
         if connections.len() >= 1024 {
@@ -135,38 +147,6 @@ async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), 
     }
 }
 
-#[cfg(feature = "http2")]
-async fn serve_connection<App, Io>(
-    io: IoWithPermit<Io>,
-    service: AppService<App>,
-    shutdown: InitializationToken,
-) -> Result<(), ServerError>
-where
-    App: Send + Sync + 'static,
-    Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-{
-    let connection = conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
-        .timer(TokioTimer::new())
-        .serve_connection(io, service);
-
-    tokio::pin!(connection);
-
-    tokio::select! {
-        // Keep tail latency low when the server is at capacity.
-        biased;
-
-        // The connection future is ready.
-        result = &mut connection => Ok(result?),
-
-        // A graceful shutdown signal was sent to the process.
-        _ = shutdown.requested() => {
-            connection.as_mut().graceful_shutdown();
-            Ok((&mut connection).await?)
-        }
-    }
-}
-
-#[cfg(all(feature = "http1", not(feature = "http2")))]
 async fn serve_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: AppService<App>,
@@ -182,7 +162,36 @@ where
         .with_upgrades();
 
     tokio::pin!(connection);
+    tokio::select! {
+        // Keep tail latency low when the server is at capacity.
+        biased;
 
+        // The connection future is ready.
+        result = &mut connection => Ok(result?),
+
+        // A graceful shutdown signal was sent to the process.
+        _ = shutdown.requested() => {
+            connection.as_mut().graceful_shutdown();
+            Ok((&mut connection).await?)
+        }
+    }
+}
+
+#[cfg(any(feature = "native-tls", feature = "rustls"))]
+async fn serve_h2_connection<App, Io>(
+    io: IoWithPermit<Io>,
+    service: AppService<App>,
+    shutdown: InitializationToken,
+) -> Result<(), ServerError>
+where
+    App: Send + Sync + 'static,
+    Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    let connection = conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+        .timer(TokioTimer::new())
+        .serve_connection(io, service);
+
+    tokio::pin!(connection);
     tokio::select! {
         // Keep tail latency low when the server is at capacity.
         biased;

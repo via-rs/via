@@ -14,7 +14,7 @@ use crate::app::{AppService, Via};
 use crate::error::Error;
 use accept::accept;
 use io::IoWithPermit;
-use tls::{Acceptor, TcpAcceptor};
+use tls::TcpAcceptor;
 
 #[cfg(feature = "native-tls")]
 use tls::NativeTlsAcceptor;

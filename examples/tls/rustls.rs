@@ -50,7 +50,7 @@ mod tls {
             .with_single_cert(certs, key)
             .expect("tls config is invalid or missing");
 
-        config.alpn_protocols = vec![b"h2".to_vec()];
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         config
     }

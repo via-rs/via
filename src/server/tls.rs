@@ -1,3 +1,4 @@
+use http::Version;
 use std::error::Error;
 use std::io;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -9,6 +10,9 @@ pub use native::NativeTlsAcceptor;
 #[cfg(feature = "rustls")]
 pub use rustls::RustlsAcceptor;
 
+#[derive(Eq, PartialEq)]
+pub struct Alpn(Version);
+
 pub struct TcpAcceptor;
 
 pub trait Acceptor {
@@ -19,7 +23,7 @@ pub trait Acceptor {
     fn accept(
         &self,
         io: TcpStream,
-    ) -> impl Future<Output = Result<Self::Io, Self::Error>> + Send + 'static;
+    ) -> impl Future<Output = Result<(Self::Io, Alpn), Self::Error>> + Send + 'static;
 }
 
 impl Acceptor for TcpAcceptor {
@@ -30,9 +34,15 @@ impl Acceptor for TcpAcceptor {
     fn accept(
         &self,
         _: TcpStream,
-    ) -> impl Future<Output = Result<Self::Io, Self::Error>> + Send + 'static {
+    ) -> impl Future<Output = Result<(Self::Io, Alpn), Self::Error>> + Send + 'static {
         async { unreachable!() }
     }
+}
+
+#[allow(dead_code)]
+impl Alpn {
+    pub const H2: Self = Self(Version::HTTP_2);
+    pub const HTTP_11: Self = Self(Version::HTTP_11);
 }
 
 #[cfg(feature = "native-tls")]
@@ -42,7 +52,7 @@ mod native {
     use tokio::net::TcpStream;
     use tokio_native_tls::{TlsAcceptor, TlsStream};
 
-    use super::Acceptor;
+    use super::{Acceptor, Alpn};
 
     pub struct NativeTlsAcceptor(Arc<TlsAcceptor>);
 
@@ -64,9 +74,19 @@ mod native {
         fn accept(
             &self,
             io: TcpStream,
-        ) -> impl Future<Output = Result<Self::Io, Self::Error>> + Send + 'static {
+        ) -> impl Future<Output = Result<(Self::Io, Alpn), Self::Error>> + Send + 'static {
             let acceptor = Arc::clone(&self.0);
-            async move { acceptor.accept(io).await }
+
+            async move {
+                let io = acceptor.accept(io).await?;
+                let stream = io.get_ref();
+                let alpn = stream
+                    .negotiated_alpn()?
+                    .and_then(|negotiated| (negotiated == b"h2").then_some(Alpn::H2))
+                    .unwrap_or(Alpn::HTTP_11);
+
+                Ok((io, alpn))
+            }
         }
     }
 }
@@ -78,7 +98,7 @@ mod rustls {
     use tokio::net::TcpStream;
     use tokio_rustls::server::{TlsAcceptor, TlsStream};
 
-    use super::Acceptor;
+    use super::{Acceptor, Alpn};
 
     pub struct RustlsAcceptor(TlsAcceptor);
 
@@ -95,8 +115,19 @@ mod rustls {
         fn accept(
             &self,
             io: TcpStream,
-        ) -> impl Future<Output = Result<Self::Io, Self::Error>> + Send + 'static {
-            self.0.accept(io)
+        ) -> impl Future<Output = Result<(Self::Io, Alpn), Self::Error>> + Send + 'static {
+            let future = self.0.accept(io);
+
+            async move {
+                let io = future.await?;
+                let (_, conn) = io.get_ref();
+                let alpn = conn
+                    .alpn_protocol()
+                    .and_then(|negotiated| (negotiated == b"h2").then_some(Alpn::H2))
+                    .unwrap_or(Alpn::HTTP_11);
+
+                Ok((io, alpn))
+            }
         }
     }
 }

@@ -1,13 +1,12 @@
-use cookie::{Cookie, ParseError};
-use http::header;
-use http::request::Parts;
+use bytes::Bytes;
+use cookie::{Cookie, SplitCookies};
+use http::header::{COOKIE, SET_COOKIE};
+use http::{HeaderValue, header};
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 
-use crate::Next;
-use crate::middleware::{BoxFuture, Middleware};
-use crate::request::{Envelope, Request};
 use crate::util::UriEncoding;
+use crate::{BoxFuture, Error, Middleware, Next, Request};
 
 /// An error occurred while writing a Set-Cookie header to a response.
 ///
@@ -203,16 +202,13 @@ pub struct Cookies {
     allow: HashSet<String>,
 }
 
-fn encode_set_cookie_header(
-    encoding: &UriEncoding,
-    cookie: &Cookie,
-) -> Result<http::HeaderValue, SetCookieError> {
-    let encoded = match encoding {
-        UriEncoding::Percent => cookie.encoded().to_string(),
-        _ => cookie.to_string(),
-    };
-
-    Ok(encoded.try_into()?)
+#[inline(always)]
+fn split_parse<'a>(encoding: &UriEncoding, input: &'a str) -> SplitCookies<'a> {
+    if let UriEncoding::Percent = *encoding {
+        Cookie::split_parse_encoded(input)
+    } else {
+        Cookie::split_parse(input)
+    }
 }
 
 impl Cookies {
@@ -266,16 +262,22 @@ impl Cookies {
         self
     }
 
-    fn parse<'a>(&self, input: &'a str) -> impl Iterator<Item = Result<Cookie<'a>, ParseError>> {
-        let Self { encoding, allow } = self;
-        let results = match encoding {
-            UriEncoding::Percent => Cookie::split_parse_encoded(input),
-            _ => Cookie::split_parse(input),
-        };
+    fn parse(&self, input: &str) -> impl Iterator<Item = Cookie<'static>> {
+        split_parse(&self.encoding, input).filter_map(|result| {
+            let shared = match result {
+                Ok(cookie) => cookie,
+                Err(error) => {
+                    if cfg!(debug_assertions) {
+                        eprintln!("warn(cookies): {}", error);
+                    }
 
-        results.filter(|result| match result {
-            Ok(cookie) => allow.contains(cookie.name()),
-            Err(_) => false,
+                    return None;
+                }
+            };
+
+            self.allow
+                .contains(shared.name())
+                .then(|| shared.into_owned())
         })
     }
 }
@@ -291,48 +293,37 @@ impl Default for Cookies {
 
 impl<App> Middleware<App> for Cookies {
     fn call(&self, mut request: Request<App>, next: Next<App>) -> BoxFuture {
-        let mut existing = Vec::new();
-        let Envelope {
-            ref mut cookies,
-            parts: Parts { ref headers, .. },
-            ..
-        } = *request.envelope_mut();
+        let existing = request.headers().get(COOKIE).and_then(|header| {
+            let input = header.to_str().ok()?;
+            Some(self.parse(input).collect::<Vec<_>>())
+        });
 
-        if let Some(header) = headers.get(header::COOKIE)
-            && let Ok(input) = header.to_str()
-        {
-            for result in self.parse(input) {
-                let original = match result {
-                    Ok(cookie) => cookie.into_owned(),
-                    Err(error) => {
-                        // Placeholder for tracing...
-                        if cfg!(debug_assertions) {
-                            eprintln!("warn: {}", error);
-                        }
-
-                        continue;
-                    }
-                };
-
-                existing.push(original.clone());
-                cookies.add_original(original);
-            }
+        if let Some(cookies) = existing.as_deref() {
+            cookies.iter().cloned().for_each(|cookie| {
+                request.cookies_mut().add_original(cookie);
+            });
         }
 
+        let encoding = self.encoding;
         let future = next.call(request);
-        let Self { encoding, .. } = *self;
 
         Box::pin(async move {
             let mut response = future.await?;
-            let (cookies, headers) = response.cookies_and_headers_mut();
+            let mut cookies = std::mem::take(response.cookies_mut());
 
-            for cookie in existing {
-                cookies.add_original(cookie);
+            if let Some(original) = existing {
+                for cookie in original {
+                    cookies.add_original(cookie);
+                }
             }
 
             cookies.delta().try_for_each(|cookie| {
-                let set_cookie = encode_set_cookie_header(&encoding, cookie)?;
-                headers.try_append(header::SET_COOKIE, set_cookie)?;
+                let value = HeaderValue::from_maybe_shared::<Bytes>(match encoding {
+                    UriEncoding::Percent => cookie.encoded().to_string().into(),
+                    UriEncoding::Unencoded => cookie.to_string().into(),
+                })?;
+
+                response.headers_mut().try_append(SET_COOKIE, value)?;
                 Ok::<_, SetCookieError>(())
             })?;
 

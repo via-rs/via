@@ -4,6 +4,7 @@ use http::header::{COOKIE, SET_COOKIE};
 use http::{HeaderValue, header};
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
+use std::mem;
 
 use crate::util::UriEncoding;
 use crate::{BoxFuture, Middleware, Next, Request};
@@ -309,7 +310,7 @@ impl<App> Middleware<App> for Cookies {
 
         Box::pin(async move {
             let mut response = future.await?;
-            let mut cookies = std::mem::take(response.cookies_mut());
+            let mut cookies = mem::take(response.cookies_mut());
 
             if let Some(original) = existing {
                 for cookie in original {

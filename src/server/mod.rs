@@ -31,12 +31,12 @@ pub struct Server<App> {
 
 #[derive(Debug)]
 struct ServerConfig {
-    pub(super) max_connections: usize,
-    pub(super) max_request_size: usize,
-    pub(super) shutdown_timeout: Duration,
+    max_connections: usize,
+    max_request_size: usize,
+    shutdown_timeout: Duration,
 
     #[cfg(any(feature = "native-tls", feature = "rustls"))]
-    pub(super) tls_handshake_timeout: Option<Duration>,
+    tls_handshake_timeout: Option<Duration>,
 }
 
 impl<App> Server<App>

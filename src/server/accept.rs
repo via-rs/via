@@ -214,15 +214,15 @@ fn wait_for_ctrl_c() -> InitializationToken {
 }
 
 impl InitializationToken {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self(CancellationToken::new())
     }
 
-    pub fn requested(&self) -> WaitForCancellationFuture<'_> {
+    fn requested(&self) -> WaitForCancellationFuture<'_> {
         self.0.cancelled()
     }
 
-    pub fn start(&self) {
+    fn start(&self) {
         self.0.cancel();
     }
 }

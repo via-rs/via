@@ -75,6 +75,13 @@ impl Envelope {
         &self.cookies
     }
 
+    /// Returns a mutable reference to the cookies associated with the
+    /// request.
+    #[inline]
+    pub fn cookies_mut(&mut self) -> &mut CookieJar {
+        &mut self.cookies
+    }
+
     pub fn params<'a, T>(&'a self) -> crate::Result<T>
     where
         T: TryFrom<PathParams<'a>>,
@@ -196,6 +203,10 @@ impl<App> Request<App> {
         }
 
         to self.envelope_mut() {
+            /// Returns a mutable reference to the cookies associated with the
+            /// request.
+            pub fn cookies_mut(&mut self) -> &mut CookieJar;
+
             pub fn extensions_mut(&mut self) -> &mut Extensions;
         }
     }

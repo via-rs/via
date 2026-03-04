@@ -10,18 +10,15 @@ homepage = "https://github.com/zacharygolba/via"
 repository = "https://github.com/zacharygolba/via"
 
 [features]
-default = ["http1"]
+default = []
 
 aws-lc-rs = ["dep:aws-lc-rs", "tokio-rustls/aws-lc-rs"]
 ring = ["dep:ring", "tokio-rustls/ring"]
 
 file = ["dep:httpdate", "tokio/fs"]
 
-http1 = ["hyper/http1"]
-http2 = ["hyper/http2"]
-
-native-tls = ["dep:native-tls", "dep:tokio-native-tls"]
-rustls = ["dep:rustls", "dep:tokio-rustls"]
+native-tls = ["dep:native-tls", "dep:tokio-native-tls", "hyper/http2"]
+rustls = ["dep:rustls", "dep:tokio-rustls", "hyper/http2"]
 
 tokio-tungstenite = ["dep:base64", "dep:futures-util", "dep:ring", "dep:tungstenite", "dep:tokio-tungstenite"]
 tokio-websockets = ["dep:base64", "dep:futures-util", "dep:ring", "dep:tokio-websockets"]
@@ -38,7 +35,7 @@ http = "1"
 http-body = "1"
 http-body-util = "0.1"
 httpdate = { version = "1", optional = true }
-hyper = { version = "1", features = ["server"] }
+hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"]  }

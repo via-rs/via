@@ -38,8 +38,6 @@
 //! ```
 //!
 
-#![allow(clippy::module_inception)]
-
 pub mod error;
 pub mod request;
 pub mod response;

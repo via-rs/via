@@ -10,9 +10,7 @@ use tokio::task::{JoinSet, coop};
 use tokio::{signal, time};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 
-use super::io::IoWithPermit;
-use super::server::ServerConfig;
-use super::tls::Acceptor;
+use super::{Acceptor, IoWithPermit, ServerConfig};
 use crate::app::AppService;
 use crate::error::ServerError;
 
@@ -27,7 +25,7 @@ macro_rules! log {
     };
 }
 
-pub async fn accept<App, TlsAcceptor>(
+pub(super) async fn accept<App, TlsAcceptor>(
     acceptor: TlsAcceptor,
     listener: TcpListener,
     service: AppService<App>,
@@ -216,15 +214,15 @@ fn wait_for_ctrl_c() -> InitializationToken {
 }
 
 impl InitializationToken {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self(CancellationToken::new())
     }
 
-    pub fn requested(&self) -> WaitForCancellationFuture<'_> {
+    fn requested(&self) -> WaitForCancellationFuture<'_> {
         self.0.cancelled()
     }
 
-    pub fn start(&self) {
+    fn start(&self) {
         self.0.cancel();
     }
 }

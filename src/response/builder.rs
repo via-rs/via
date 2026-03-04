@@ -8,8 +8,7 @@ use http_body_util::StreamBody;
 use http_body_util::combinators::BoxBody;
 use serde::Serialize;
 
-use super::body::{Json, ResponseBody};
-use super::response::Response;
+use super::{Json, Response, ResponseBody};
 use crate::error::{BoxError, Error};
 
 /// Define how a type finalizes a [`ResponseBuilder`].

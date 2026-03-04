@@ -14,8 +14,7 @@ use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::{task, time};
 
-use super::builder::{Finalize, ResponseBuilder};
-use super::response::Response;
+use super::{Finalize, Response, ResponseBuilder};
 use crate::error::{BoxError, Error};
 
 /// The base amount of time that the server will wait before

@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 
 use crate::util::UriEncoding;
-use crate::{BoxFuture, Error, Middleware, Next, Request};
+use crate::{BoxFuture, Middleware, Next, Request};
 
 /// An error occurred while writing a Set-Cookie header to a response.
 ///

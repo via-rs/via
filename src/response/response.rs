@@ -100,13 +100,6 @@ impl Response {
     }
 }
 
-impl Response {
-    pub(crate) fn cookies_and_headers_mut(&mut self) -> (&mut CookieJar, &mut HeaderMap) {
-        let Self { cookies, http } = self;
-        (cookies, http.headers_mut())
-    }
-}
-
 impl Debug for Response {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("Response")

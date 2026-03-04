@@ -45,6 +45,13 @@ impl<App> Service<http::Request<Incoming>> for AppService<App> {
     type Response = http::Response<ResponseBody>;
 
     fn call(&self, request: http::Request<Incoming>) -> Self::Future {
+        // Immediately respond with 414 if the path length exceeds the maximum.
+        if request.uri().path().len() > MAX_URI_PATH_LEN {
+            return FutureResponse(Box::pin(async {
+                raise!(414, message = MAX_PATH_LEN_EXCEEDED);
+            }));
+        }
+
         // The middleware stack.
         let mut deque = VecDeque::with_capacity(18);
 
@@ -61,12 +68,6 @@ impl<App> Service<http::Request<Incoming>> for AppService<App> {
 
         // Get a mutable ref to params and a shared ref to the uri path.
         let (params, path) = request.envelope_mut().params_mut_with_path();
-
-        if path.len() > MAX_URI_PATH_LEN {
-            return FutureResponse(Box::pin(async {
-                raise!(414, message = MAX_PATH_LEN_EXCEEDED);
-            }));
-        }
 
         // Populate the middleware stack with the resolved routes.
         for (route, param) in self.app.router.traverse(path) {

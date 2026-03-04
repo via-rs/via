@@ -6,10 +6,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::middleware::BoxFuture;
-use crate::request::{Envelope, Request};
 use crate::response::{Response, ResponseBody};
-use crate::{Next, Via, raise};
+use crate::{BoxFuture, Next, Request, Via, raise};
 
 const MAX_URI_PATH_LEN: usize = 8092;
 const MAX_PATH_LEN_EXCEEDED: &str = "path exceeds the maximum allowed length of 8 KB";
@@ -55,14 +53,14 @@ impl<App> Service<http::Request<Incoming>> for AppService<App> {
             // Preallocate enough space to store at least 6 path params.
             let params = Vec::with_capacity(6);
 
-            // Ownership of app is shared with Request.
+            // Request owns a copy of Shared<App>.
             let app = self.app.app.clone();
 
             Request::new(app, self.max_request_size, params, request)
         };
 
-        let Envelope { params, parts, .. } = request.envelope_mut();
-        let path = parts.uri.path();
+        // Get a mutable ref to params and a shared ref to the uri path.
+        let (params, path) = request.envelope_mut().params_mut_with_path();
 
         if path.len() > MAX_URI_PATH_LEN {
             return FutureResponse(Box::pin(async {

@@ -105,6 +105,10 @@ where
     ///
     #[cfg(any(feature = "native-tls", feature = "rustls"))]
     pub fn tls_handshake_timeout(self, tls_handshake_timeout: Duration) -> Self {
+        if tls_handshake_timeout.is_zero() {
+            panic!("tls_handshake_timeout must be > 0");
+        }
+
         Self {
             config: ServerConfig {
                 tls_handshake_timeout,

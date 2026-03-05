@@ -36,7 +36,7 @@ struct ServerConfig {
     shutdown_timeout: Duration,
 
     #[cfg(any(feature = "native-tls", feature = "rustls"))]
-    tls_handshake_timeout: Option<Duration>,
+    tls_handshake_timeout: Duration,
 }
 
 impl<App> Server<App>
@@ -101,10 +101,14 @@ where
     ///
     /// This configuration is only used when a TLS backend is enabled.
     ///
-    /// **Default:** `10s`
+    /// **Default:** `5s`
     ///
     #[cfg(any(feature = "native-tls", feature = "rustls"))]
-    pub fn tls_handshake_timeout(self, tls_handshake_timeout: Option<Duration>) -> Self {
+    pub fn tls_handshake_timeout(self, tls_handshake_timeout: Duration) -> Self {
+        if tls_handshake_timeout.is_zero() {
+            panic!("tls_handshake_timeout must be > 0");
+        }
+
         Self {
             config: ServerConfig {
                 tls_handshake_timeout,
@@ -199,7 +203,7 @@ impl Default for ServerConfig {
             shutdown_timeout: Duration::from_secs(30),
 
             #[cfg(any(feature = "native-tls", feature = "rustls"))]
-            tls_handshake_timeout: Some(Duration::from_secs(10)),
+            tls_handshake_timeout: Duration::from_secs(5),
         }
     }
 }

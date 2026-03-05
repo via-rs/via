@@ -203,7 +203,7 @@ impl Default for ServerConfig {
             shutdown_timeout: Duration::from_secs(30),
 
             #[cfg(any(feature = "native-tls", feature = "rustls"))]
-            tls_handshake_timeout: Duration::from_secs(10),
+            tls_handshake_timeout: Duration::from_secs(5),
         }
     }
 }

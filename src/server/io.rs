@@ -45,10 +45,6 @@ impl<T: AsyncRead + Unpin> Read for IoWithPermit<T> {
         // during the call to <T as AsyncRead>::poll_read. We trust that the
         // implementation of TcpStream for the runtime is sound and does not
         // grow the filled portion of the buffer beyond it's total size.
-        //
-        // In other words, we're looking at the answer to the math problem we
-        // are stuck on that the person we are sitting next to wrote down. They
-        // always get it right.
         unsafe { buf.advance(len) };
 
         Poll::Ready(Ok(()))

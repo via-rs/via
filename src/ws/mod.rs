@@ -3,6 +3,7 @@ compile_error!("Features \"tokio-tungstenite\" and \"tokio-websockets\" are mutu
 
 mod channel;
 mod error;
+mod io;
 mod request;
 mod upgrade;
 

@@ -1,8 +1,7 @@
 use base64::engine::{Engine, general_purpose::STANDARD as base64};
 use futures_util::{SinkExt, StreamExt};
 use http::{Method, StatusCode, header};
-use hyper::upgrade::{OnUpgrade, Upgraded};
-use hyper_util::rt::TokioIo;
+use hyper::upgrade::OnUpgrade;
 use ring::digest::{Context as Hasher, SHA1_FOR_LEGACY_USE_ONLY};
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
@@ -14,6 +13,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_websockets::WebSocketStream;
 
 use super::error::try_rescue;
+use super::io::UpgradedIo;
 use super::{Channel, Request};
 use crate::{BoxFuture, Error, Middleware, Next, Response, raise};
 
@@ -45,7 +45,7 @@ fn gen_accept_key(key: &[u8]) -> String {
 async fn handshake(
     on_upgrade: OnUpgrade,
     config: WsConfig,
-) -> Result<WebSocketStream<TokioIo<Upgraded>>, Error> {
+) -> Result<WebSocketStream<UpgradedIo>, Error> {
     use tungstenite::protocol::{Role, WebSocketConfig};
 
     let max_message_size = config.max_message_size;
@@ -60,7 +60,7 @@ async fn handshake(
     }
 
     let stream = WebSocketStream::from_raw_socket(
-        TokioIo::new(on_upgrade.await?),
+        UpgradedIo::new(on_upgrade.await?),
         Role::Server,
         Some(config),
     )
@@ -73,7 +73,7 @@ async fn handshake(
 async fn handshake(
     on_upgrade: OnUpgrade,
     config: WsConfig,
-) -> Result<WebSocketStream<TokioIo<Upgraded>>, Error> {
+) -> Result<WebSocketStream<UpgradedIo>, Error> {
     use tokio_websockets::server::Builder;
     use tokio_websockets::{Config, Limits};
 
@@ -85,11 +85,11 @@ async fn handshake(
     Ok(Builder::new()
         .config(config)
         .limits(limits)
-        .serve(TokioIo::new(on_upgrade.await?)))
+        .serve(UpgradedIo::new(on_upgrade.await?)))
 }
 
 async fn run<T, App, Await>(
-    stream: WebSocketStream<TokioIo<Upgraded>>,
+    stream: WebSocketStream<UpgradedIo>,
     listener: Arc<T>,
     request: Request<App>,
 ) where

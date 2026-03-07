@@ -32,7 +32,7 @@ async fn hello(request: Request, _: Next) -> via::Result {
     let name = request.param("name").decode().into_result()?;
 
     // Send a plain text response with our greeting message.
-    Response::build().text(format!("Hello, {}!", name))
+    Response::build().text(format!("Hello, {}!", name.as_ref()))
 }
 
 #[tokio::main]

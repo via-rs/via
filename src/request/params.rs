@@ -1,4 +1,3 @@
-use http::StatusCode;
 use std::borrow::Cow;
 use std::str::FromStr;
 use via_router::Ident;
@@ -94,6 +93,7 @@ impl<'a> QueryParams<'a> {
 }
 
 impl<'a, 'b> Param<'a, 'b> {
+    #[inline]
     fn new(source: Option<&'a str>, name: &'b str, at: Option<ParamRange>) -> Self {
         Self {
             encoding: UriEncoding::Unencoded,
@@ -101,6 +101,18 @@ impl<'a, 'b> Param<'a, 'b> {
             name,
             at: at.or(Some([Some(0); 2])),
         }
+    }
+
+    #[inline]
+    fn slice(&self) -> Option<&'a str> {
+        self.source
+            .zip(self.at)
+            .and_then(|(path, span)| match span {
+                [Some(from), Some(to)] if from == to => None,
+                [Some(from), Some(to)] => path.get(from..to),
+                [Some(from), None] => path.get(from..),
+                [None, _] => None,
+            })
     }
 
     /// Returns a new `Param` that will percent-decode the parameter value with
@@ -115,28 +127,21 @@ impl<'a, 'b> Param<'a, 'b> {
     }
 
     pub fn optional(self) -> Result<Option<Cow<'a, str>>, Error> {
-        let Some(value) = self.source.and_then(|source| match self.at? {
-            [Some(from), Some(to)] if from == to => None,
-            [Some(from), Some(to)] => source.get(from..to),
-            [Some(from), None] => source.get(from..),
-            [None, _] => None,
-        }) else {
-            return Ok(None);
-        };
-
-        self.encoding.decode(value).map(Some)
+        self.slice()
+            .map(|value| self.encoding.decode_as(self.name, value))
+            .transpose()
     }
 
     /// Calls [`str::parse`] on the parameter value if it exists and returns the
     /// result. If the param is encoded, it will be decoded before it is parsed.
     ///
-    #[inline]
     pub fn parse<U>(self) -> Result<U, Error>
     where
         U: FromStr,
         U::Err: std::error::Error + Send + Sync + 'static,
     {
         self.into_result()?
+            .as_ref()
             .parse()
             .or_else(|error| raise!(400, error))
     }
@@ -150,17 +155,14 @@ impl<'a, 'b> Param<'a, 'b> {
     /// implementation of `T::decode`, an error is returned with a 400 Bad
     /// Request status code.
     ///
-    #[inline]
     pub fn into_result(self) -> Result<Cow<'a, str>, Error> {
-        let Self { name, .. } = self;
-
-        self.optional().and_then(|option| {
-            option.ok_or_else(|| {
-                Error::with_status(
-                    StatusCode::BAD_REQUEST,
-                    format!("missing required parameter \"{}\".", name),
+        self.slice()
+            .map(|value| self.encoding.decode_as(self.name, value))
+            .unwrap_or_else(|| {
+                raise!(
+                    400,
+                    message = format!("missing required parameter: \"{}\"", self.name)
                 )
             })
-        })
     }
 }

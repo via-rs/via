@@ -60,14 +60,21 @@ where
             // A new TCP stream was accepted from the listener.
             result = listener.accept() => match result {
                 Ok(stream) => stream,
-                Err(error) => return match error.raw_os_error() {
-                    Some(10024 | 10055) if cfg!(windows) => ExitCode::FAILURE,
-                    Some(12 | 23 | 24) if cfg!(unix) => ExitCode::FAILURE,
-                    _ => {
-                        log!("error(accept): {}", error);
+                Err(error) => {
+                    log!("error(accept): {}", error);
+
+                    #[cfg(unix)]
+                    let Some(12 | 23 | 24) = error.raw_os_error() else {
                         continue;
-                    }
-                },
+                    };
+
+                    #[cfg(windows)]
+                    let Some(10024 | 10055) = error.raw_os_error() else {
+                        continue;
+                    };
+
+                    return ExitCode::FAILURE;
+                }
             },
 
             // A graceful shutdown signal was sent to the process.

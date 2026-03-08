@@ -84,8 +84,7 @@ where
     /// Set the amount of time in seconds that the server will wait for inflight
     /// connections to complete before shutting down.
     ///
-    /// **Default:** `30s`
-    ///
+    /// **Default:** `10s`
     pub fn shutdown_timeout(self, shutdown_timeout: Duration) -> Self {
         Self {
             config: ServerConfig {
@@ -200,7 +199,7 @@ impl Default for ServerConfig {
         Self {
             max_connections: 1000,
             max_request_size: 104_857_600, // 100 MB
-            shutdown_timeout: Duration::from_secs(30),
+            shutdown_timeout: Duration::from_secs(10),
 
             #[cfg(any(feature = "native-tls", feature = "rustls"))]
             tls_handshake_timeout: Duration::from_secs(5),

@@ -73,7 +73,7 @@ where
                         continue;
                     };
 
-                    return ExitCode::FAILURE;
+                    break ExitCode::FAILURE;
                 }
             },
 

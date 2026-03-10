@@ -29,7 +29,7 @@ pub(crate) struct MethodNotAllowed {
 }
 
 trait Predicate {
-    fn matches(&self, other: Mask) -> bool;
+    fn matches(&self, other: &Mask) -> bool;
 }
 
 bitflags! {
@@ -171,15 +171,15 @@ impl MethodNotAllowed {
 
 impl<T> Predicate for Allow<T> {
     #[inline]
-    fn matches(&self, other: Mask) -> bool {
-        self.mask.contains(other)
+    fn matches(&self, other: &Mask) -> bool {
+        self.mask.contains(*other)
     }
 }
 
 impl<T, U> Predicate for Branch<T, U> {
     #[inline]
-    fn matches(&self, other: Mask) -> bool {
-        self.mask.contains(other)
+    fn matches(&self, other: &Mask) -> bool {
+        self.mask.contains(*other)
     }
 }
 
@@ -199,10 +199,9 @@ where
 {
     #[inline(always)]
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        let method = request.envelope().method();
-        let mask = Mask::from(method);
+        let mask = request.method().into();
 
-        if self.middleware.matches(mask) {
+        if self.middleware.matches(&mask) {
             self.middleware.call(request, next)
         } else {
             self.or_else.call(request, next)

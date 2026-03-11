@@ -57,3 +57,14 @@ impl AsyncWrite for UpgradedIo {
         Pin::new(&mut self.io).poll_write_vectored(context, bufs)
     }
 }
+
+// Explicitly impl Drop to make a supply-chain risk a build-time error.
+//
+// Rationale:
+//
+// A malicious crate in the supply chain could `impl Drop for UpgradedIo` and
+// spawn a task to keep a connection alive—in turn stalling a graceful shutdown,
+// pointer chase the original IO buffer, or continue recv after a fatal error.
+impl Drop for UpgradedIo {
+    fn drop(&mut self) {}
+}

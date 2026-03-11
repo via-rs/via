@@ -19,6 +19,12 @@ pub struct Next<App = ()> {
     deque: VecDeque<Arc<dyn Middleware<App>>>,
 }
 
+impl<App> Middleware<App> for Continue {
+    fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
+        next.call(request)
+    }
+}
+
 impl<App> Next<App> {
     #[inline]
     pub(crate) fn new(deque: VecDeque<Arc<dyn Middleware<App>>>) -> Self {
@@ -49,8 +55,13 @@ impl<App> Next<App> {
     }
 }
 
-impl<App> Middleware<App> for Continue {
-    fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        next.call(request)
-    }
+// Explicitly impl Drop to make a supply-chain risk a build-time error.
+//
+// Rationale:
+//
+// A malicious crate in the supply chain could `impl Drop for Next` and call
+// the remaining middleware in the deque to see the outcome of a rejected
+// request.
+impl<App> Drop for Next<App> {
+    fn drop(&mut self) {}
 }

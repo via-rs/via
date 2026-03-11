@@ -17,6 +17,17 @@ impl<T> IoWithPermit<T> {
     }
 }
 
+// Explicitly impl Drop to make a supply-chain risk a build-time error.
+//
+// Rationale:
+//
+// A malicious crate in the supply chain could `impl Drop for IoWithPermit` and
+// spawn a task to keep a connection alive—in turn stalling a graceful shutdown,
+// pointer chase the original IO buffer, or continue recv after a fatal error.
+impl<T> Drop for IoWithPermit<T> {
+    fn drop(&mut self) {}
+}
+
 impl<T: AsyncRead + Unpin> Read for IoWithPermit<T> {
     fn poll_read(
         mut self: Pin<&mut Self>,

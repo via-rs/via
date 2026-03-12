@@ -51,7 +51,6 @@ where
     App: Send + Sync + 'static,
 {
     /// Creates a new server for the provided app.
-    ///
     pub fn new(app: Via<App>) -> Self {
         Self {
             app,
@@ -59,13 +58,29 @@ where
         }
     }
 
+    /// Enables or disables HTTP/1.1 persistent connections.
+    ///
+    /// When enabled, the server will allow clients to reuse a TCP connection
+    /// for multiple requests. Disabling keep-alive forces the connection to be
+    /// closed after each response is sent.
+    ///
+    /// Disabling keep-alive may reduce resource retention from idle clients but
+    /// can increase connection overhead due to additional TCP and TLS handshakes.
+    ///
+    /// **Default:** `true`
     pub fn keep_alive(mut self, keep_alive: bool) -> Self {
         self.config.keep_alive = keep_alive;
         self
     }
 
-    /// **Default:** `16 KB`
+    /// Sets the maximum size of the HTTP/1.1 connection read buffer.
     ///
+    /// This buffer is used when reading and parsing the HTTP request line and
+    /// headers from the client. It does **not** limit the size of the request
+    /// body. Use [`Server::max_request_size`] to limit the maximum allowed
+    /// request body size.
+    ///
+    /// **Default:** `16 KB`
     pub fn max_buf_size(mut self, max_buf_size: usize) -> Self {
         self.config.max_buf_size = max_buf_size;
         self
@@ -75,7 +90,6 @@ where
     /// accept.
     ///
     /// **Default:** `1000`
-    ///
     pub fn max_connections(mut self, max_connections: usize) -> Self {
         self.config.max_connections = max_connections;
         self
@@ -84,7 +98,6 @@ where
     /// Set the maximum request body size in bytes.
     ///
     /// **Default:** `100 MB`
-    ///
     pub fn max_request_size(mut self, max_request_size: usize) -> Self {
         self.config.max_request_size = max_request_size;
         self

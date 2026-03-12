@@ -181,11 +181,34 @@ where
 
 #[cfg(any(feature = "native-tls", feature = "rustls"))]
 impl<App> Server<App> {
+    /// Sets the maximum number of concurrent HTTP/2 streams allowed per
+    /// connection.
+    ///
+    /// Each stream represents an independent request/response exchange.
+    /// Limiting the number of concurrent streams helps bound per-connection
+    /// resource usage and reduces the impact of abusive clients.
+    ///
+    /// A `None` value removes the limit entirely.
+    ///
+    /// **Default:** `Some(64)`
+    ///
     pub fn http2_max_concurrent_streams(mut self, max_concurrent_streams: Option<u32>) -> Self {
         self.config.http2_max_concurrent_streams = max_concurrent_streams;
         self
     }
 
+    /// Sets the maximum size of the internal HTTP/2 send buffer used for
+    /// buffering outbound frames before they are written to the underlying
+    /// transport.
+    ///
+    /// Larger buffers may improve throughput for high-latency networks but
+    /// increase per-connection memory usage.
+    ///
+    /// Smaller buffers reduce memory usage and improve backpressure behavior
+    /// but may increase the number of write operations.
+    ///
+    /// **Default:** `64 KB`
+    ///
     pub fn http2_max_send_buf_size(mut self, max_send_buf_size: usize) -> Self {
         self.config.http2_max_send_buf_size = max_send_buf_size;
         self

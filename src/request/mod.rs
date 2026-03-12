@@ -118,17 +118,13 @@ impl Envelope {
 }
 
 impl Envelope {
-    fn new(parts: Parts, params: Vec<PathParamEntry>) -> Self {
+    #[inline]
+    pub(crate) fn new(parts: Parts, params: Vec<PathParamEntry>) -> Self {
         Self {
             parts,
             params,
             cookies: CookieJar::new(),
         }
-    }
-
-    #[inline]
-    pub(crate) fn params_mut_with_path(&mut self) -> (&mut Vec<PathParamEntry>, &str) {
-        (&mut self.params, self.parts.uri.path())
     }
 }
 
@@ -150,18 +146,11 @@ impl Debug for Envelope {
 }
 
 impl<App> Request<App> {
-    #[inline(always)]
-    pub(crate) fn new(
-        app: Shared<App>,
-        limit: usize,
-        params: Vec<PathParamEntry>,
-        request: http::Request<Incoming>,
-    ) -> Self {
-        let (parts, body) = request.into_parts();
-
+    #[inline]
+    pub(crate) fn new(envelope: Envelope, body: Limited<Incoming>, app: Shared<App>) -> Self {
         Self {
-            envelope: Envelope::new(parts, params),
-            body: Limited::new(body, limit),
+            envelope,
+            body,
             app,
         }
     }

@@ -1,3 +1,4 @@
+use http_body_util::Limited;
 use hyper::body::Incoming;
 use hyper::service::Service;
 use std::collections::VecDeque;
@@ -6,82 +7,32 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::request::Envelope;
 use crate::response::{Response, ResponseBody};
+use crate::server::ServerConfig;
 use crate::{BoxFuture, Next, Request, Via, raise};
 
-const MAX_URI_PATH_LEN: usize = 8092;
-const MAX_PATH_LEN_EXCEEDED: &str = "path exceeds the maximum allowed length of 8 KB";
+const MAX_URI_PATH_LEN: usize = 8092; // 8 KB
 
 pub struct FutureResponse(BoxFuture);
 
-pub struct AppService<App> {
-    app: Arc<Via<App>>,
-    max_request_size: usize,
+pub struct ServiceAdapter<App> {
+    service: Arc<ViaService<App>>,
 }
 
-impl<App> AppService<App> {
-    #[inline]
-    pub(crate) fn new(app: Arc<Via<App>>, max_request_size: usize) -> Self {
-        Self {
-            app,
-            max_request_size,
-        }
-    }
+struct ViaService<App> {
+    config: Box<ServerConfig>,
+    via: Via<App>,
 }
 
-impl<App> Clone for AppService<App> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            app: Arc::clone(&self.app),
-            max_request_size: self.max_request_size,
-        }
-    }
-}
-
-impl<App> Service<http::Request<Incoming>> for AppService<App> {
-    type Error = Infallible;
-    type Future = FutureResponse;
-    type Response = http::Response<ResponseBody>;
-
-    fn call(&self, request: http::Request<Incoming>) -> Self::Future {
-        // Immediately respond with 414 if the path length exceeds the maximum.
-        if request.uri().path().len() > MAX_URI_PATH_LEN {
-            return FutureResponse(Box::pin(async {
-                raise!(414, message = MAX_PATH_LEN_EXCEEDED);
-            }));
-        }
-
-        // The middleware stack.
-        let mut deque = VecDeque::with_capacity(18);
-
-        // Wrap the raw HTTP request in our custom Request struct.
-        let mut request = {
-            // Preallocate enough space to store at least 6 path params.
-            let params = Vec::with_capacity(6);
-
-            // Request owns a copy of Shared<App>.
-            let app = self.app.app.clone();
-
-            Request::new(app, self.max_request_size, params, request)
-        };
-
-        // Get a mutable ref to params and a shared ref to the uri path.
-        let (params, path) = request.envelope_mut().params_mut_with_path();
-
-        // Populate the middleware stack with the resolved routes.
-        for (route, param) in self.app.router.traverse(path) {
-            // Extend the deque with the route's middleware stack.
-            deque.extend(route.cloned());
-
-            if let Some((name, range)) = param {
-                // Include the route's dynamic parameter in params.
-                params.push((name.clone(), [Some(range.0), range.1]));
-            }
-        }
-
-        // Call the middleware stack to get a response.
-        FutureResponse(Next::new(deque).call(request))
+impl FutureResponse {
+    fn max_path_len_exceeded() -> Self {
+        Self(Box::pin(async {
+            raise!(
+                414,
+                message = "path exceeds the maximum allowed length of 8 KB",
+            );
+        }))
     }
 }
 
@@ -93,5 +44,91 @@ impl Future for FutureResponse {
             .as_mut()
             .poll(context)
             .map(|result| Ok(result.unwrap_or_else(Response::from).into()))
+    }
+}
+
+impl<App> ServiceAdapter<App> {
+    pub(crate) fn new(config: ServerConfig, via: Via<App>) -> Self {
+        let config = Box::new(config);
+
+        Self {
+            service: Arc::new(ViaService { config, via }),
+        }
+    }
+
+    pub(crate) fn config(&self) -> &ServerConfig {
+        &self.service.config
+    }
+}
+
+impl<App> Clone for ServiceAdapter<App> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            service: Arc::clone(&self.service),
+        }
+    }
+}
+
+impl<App> Service<http::Request<Incoming>> for ServiceAdapter<App> {
+    type Error = Infallible;
+    type Future = FutureResponse;
+    type Response = http::Response<ResponseBody>;
+
+    fn call(&self, request: http::Request<Incoming>) -> Self::Future {
+        self.service.call(request)
+    }
+}
+
+impl<App> Service<http::Request<Incoming>> for ViaService<App> {
+    type Error = Infallible;
+    type Future = FutureResponse;
+    type Response = http::Response<ResponseBody>;
+
+    fn call(&self, request: http::Request<Incoming>) -> Self::Future {
+        let path = request.uri().path();
+
+        // Immediately respond with 414 if the path length exceeds the maximum.
+        if path.len() > MAX_URI_PATH_LEN {
+            return FutureResponse::max_path_len_exceeded();
+        }
+
+        // The middleware stack.
+        let mut deque = VecDeque::with_capacity(18);
+
+        // Preallocate enough space to store at least 6 path params.
+        let mut params = Vec::with_capacity(6);
+
+        // Populate the middleware stack with the resolved routes.
+        for (route, param) in self.via.router().traverse(path) {
+            // Extend the deque with the route's middleware stack.
+            deque.extend(route.cloned());
+
+            if let Some((name, range)) = param {
+                // Include the route's dynamic parameter in params.
+                params.push((name.clone(), [Some(range.0), range.1]));
+            }
+        }
+
+        // Request owns a copy of Shared<App>.
+        let app = self.via.app().clone();
+
+        // Wrap the incoming request with our custom Request struct.
+        let request = {
+            let (parts, body) = request.into_parts();
+
+            // Params are stored adjacent to the request head. This allows us
+            // to discard the body and drop the associated channel if the
+            // request is upgraded and moved into a WebSocket task.
+            let envelope = Envelope::new(parts, params);
+
+            // Limit request body sizes to the configured maximum.
+            let body = Limited::new(body, self.config.max_request_size());
+
+            Request::new(envelope, body, app)
+        };
+
+        // Call the middleware stack to get a response.
+        FutureResponse(Next::new(deque).call(request))
     }
 }

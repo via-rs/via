@@ -37,7 +37,7 @@ pub(crate) struct ServerConfig {
     shutdown_timeout: Duration,
 
     #[cfg(any(feature = "native-tls", feature = "rustls"))]
-    handshake_timeout: Duration,
+    tls_handshake_timeout: Duration,
 
     #[cfg(any(feature = "native-tls", feature = "rustls"))]
     http2_max_concurrent_streams: Option<u32>,
@@ -181,22 +181,6 @@ where
 
 #[cfg(any(feature = "native-tls", feature = "rustls"))]
 impl<App> Server<App> {
-    /// The amount of time in seconds that an individual connection task will
-    /// wait for the TLS handshake to complete before closing the connection.
-    ///
-    /// This configuration is only used when a TLS backend is enabled.
-    ///
-    /// **Default:** `5s`
-    ///
-    pub fn handshake_timeout(mut self, handshake_timeout: Duration) -> Self {
-        if handshake_timeout.is_zero() {
-            panic!("handshake_timeout must be > 0");
-        }
-
-        self.config.handshake_timeout = handshake_timeout;
-        self
-    }
-
     pub fn http2_max_concurrent_streams(mut self, max_concurrent_streams: Option<u32>) -> Self {
         self.config.http2_max_concurrent_streams = max_concurrent_streams;
         self
@@ -204,6 +188,22 @@ impl<App> Server<App> {
 
     pub fn http2_max_send_buf_size(mut self, max_send_buf_size: usize) -> Self {
         self.config.http2_max_send_buf_size = max_send_buf_size;
+        self
+    }
+
+    /// The amount of time in seconds that an individual connection task will
+    /// wait for the TLS handshake to complete before closing the connection.
+    ///
+    /// This configuration is only used when a TLS backend is enabled.
+    ///
+    /// **Default:** `5s`
+    ///
+    pub fn tls_handshake_timeout(mut self, tls_handshake_timeout: Duration) -> Self {
+        if tls_handshake_timeout.is_zero() {
+            panic!("tls_handshake_timeout must be > 0");
+        }
+
+        self.config.tls_handshake_timeout = tls_handshake_timeout;
         self
     }
 }
@@ -241,7 +241,7 @@ impl ServerConfig {
     }
 
     pub fn tls_handshake_timeout(&self) -> Duration {
-        self.handshake_timeout
+        self.tls_handshake_timeout
     }
 }
 
@@ -255,13 +255,13 @@ impl Default for ServerConfig {
             shutdown_timeout: Duration::from_secs(10),
 
             #[cfg(any(feature = "native-tls", feature = "rustls"))]
-            handshake_timeout: Duration::from_secs(5),
-
-            #[cfg(any(feature = "native-tls", feature = "rustls"))]
             http2_max_concurrent_streams: Some(64),
 
             #[cfg(any(feature = "native-tls", feature = "rustls"))]
             http2_max_send_buf_size: 65536, // 64 KB
+
+            #[cfg(any(feature = "native-tls", feature = "rustls"))]
+            tls_handshake_timeout: Duration::from_secs(5),
         }
     }
 }

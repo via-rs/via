@@ -1,4 +1,4 @@
-use hyper::server::conn;
+use hyper::server::conn::*;
 use hyper_util::rt::TokioTimer;
 use std::mem;
 use std::process::ExitCode;
@@ -7,11 +7,14 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::task::{JoinSet, coop};
-use tokio::{signal, time};
+use tokio::time::timeout;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 
-use super::{IoWithPermit, ServerConfig, tls};
-use crate::app::AppService;
+#[cfg(any(feature = "native-tls", feature = "rustls"))]
+use hyper_util::rt::TokioExecutor;
+
+use super::{IoWithPermit, tls};
+use crate::app::ServiceAdapter;
 use crate::error::ServerError;
 
 #[derive(Clone)]
@@ -28,8 +31,7 @@ macro_rules! log {
 pub(super) async fn accept<App, TlsAcceptor>(
     acceptor: TlsAcceptor,
     listener: TcpListener,
-    service: AppService<App>,
-    config: ServerConfig,
+    service: ServiceAdapter<App>,
 ) -> ExitCode
 where
     App: Send + Sync + 'static,
@@ -42,7 +44,7 @@ where
 
     // Create a semaphore with a number of permits equal to the maximum number
     // of connections that the server can handle concurrently.
-    let semaphore = Arc::new(Semaphore::new(config.max_connections));
+    let semaphore = Arc::new(Semaphore::new(service.config().max_connections()));
 
     // A JoinSet to track and join active connections.
     let mut connections = JoinSet::new();
@@ -97,11 +99,11 @@ where
         // Spawn a task to serve the connection.
         #[cfg(any(feature = "native-tls", feature = "rustls"))]
         connections.spawn({
-            let timeout = config.tls_handshake_timeout;
             let handshake = acceptor.accept(io);
 
             async move {
-                let (io, alpn) = time::timeout(timeout, handshake).await??;
+                let (io, alpn) =
+                    timeout(service.config().tls_handshake_timeout(), handshake).await??;
                 let io = IoWithPermit::new(io, permit);
 
                 if alpn == tls::Alpn::H2 {
@@ -114,8 +116,7 @@ where
 
         #[cfg(not(any(feature = "native-tls", feature = "rustls")))]
         connections.spawn(async move {
-            let io = IoWithPermit::new(io, permit);
-            serve_connection(io, service, shutdown).await
+            serve_connection(IoWithPermit::new(io, permit), service, shutdown).await
         });
 
         if connections.len() >= 1024 {
@@ -125,8 +126,8 @@ where
     };
 
     // Try to drain each inflight connection before `config.shutdown_timeout`.
-    match time::timeout(
-        config.shutdown_timeout,
+    match timeout(
+        service.config().shutdown_timeout(),
         drain_connections(true, connections),
     )
     .await
@@ -154,15 +155,24 @@ async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), 
 
 async fn serve_connection<App, Io>(
     io: IoWithPermit<Io>,
-    service: AppService<App>,
+    service: ServiceAdapter<App>,
     shutdown: InitializationToken,
 ) -> Result<(), ServerError>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let connection = conn::http1::Builder::new()
+    let connection = http1::Builder::new()
+        .allow_multiple_spaces_in_request_line_delimiters(false)
+        .auto_date_header(true)
+        .half_close(false)
+        .ignore_invalid_headers(false)
+        .keep_alive(service.config().keep_alive())
+        .max_buf_size(service.config().max_buf_size())
+        .pipeline_flush(false)
+        .preserve_header_case(false)
         .timer(TokioTimer::new())
+        .title_case_headers(false)
         .serve_connection(io, service)
         .with_upgrades();
 
@@ -185,14 +195,22 @@ where
 #[cfg(any(feature = "native-tls", feature = "rustls"))]
 async fn serve_h2_connection<App, Io>(
     io: IoWithPermit<Io>,
-    service: AppService<App>,
+    service: ServiceAdapter<App>,
     shutdown: InitializationToken,
 ) -> Result<(), ServerError>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let connection = conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+    let connection = http2::Builder::new(TokioExecutor::new())
+        .adaptive_window(false)
+        .auto_date_header(true)
+        .max_header_list_size(16384) // 16 KB
+        .initial_connection_window_size(Some(1048576)) // 1 MB
+        .initial_stream_window_size(Some(65536)) // 64 MB
+        .max_frame_size(Some(16384)) // 16 KB
+        .max_concurrent_streams(service.config().http2_max_concurrent_streams())
+        .max_send_buf_size(service.config().http2_max_send_buf_size())
         .timer(TokioTimer::new())
         .serve_connection(io, service);
 
@@ -217,7 +235,7 @@ fn wait_for_ctrl_c() -> InitializationToken {
     let shutdown = token.clone();
 
     tokio::spawn(async move {
-        if signal::ctrl_c().await.is_err() {
+        if tokio::signal::ctrl_c().await.is_err() {
             eprintln!("unable to register the 'ctrl-c' signal.");
         }
 

@@ -1,7 +1,7 @@
 mod service;
 mod shared;
 
-pub(crate) use service::AppService;
+pub(crate) use service::ServiceAdapter;
 pub use shared::Shared;
 
 use crate::middleware::Middleware;
@@ -103,5 +103,15 @@ impl<App> Via<App> {
         T: Middleware<App> + 'static,
     {
         self.route("/").uses(middleware);
+    }
+}
+
+impl<App> Via<App> {
+    pub(crate) fn app(&self) -> &Shared<App> {
+        &self.app
+    }
+
+    pub(crate) fn router(&self) -> &Router<App> {
+        &self.router
     }
 }

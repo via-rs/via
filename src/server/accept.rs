@@ -177,19 +177,20 @@ where
         .with_upgrades();
 
     tokio::pin!(connection);
+
     tokio::select! {
         // Keep tail latency low when the server is at capacity.
         biased;
-
         // The connection future is ready.
-        result = &mut connection => Ok(result?),
-
+        result = connection.as_mut() => result?,
         // A graceful shutdown signal was sent to the process.
         _ = shutdown.requested() => {
             connection.as_mut().graceful_shutdown();
-            Ok((&mut connection).await?)
+            connection.await?;
         }
     }
+
+    Ok(())
 }
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
@@ -215,19 +216,20 @@ where
         .serve_connection(io, service);
 
     tokio::pin!(connection);
+
     tokio::select! {
         // Keep tail latency low when the server is at capacity.
         biased;
-
         // The connection future is ready.
-        result = &mut connection => Ok(result?),
-
+        result = &mut connection => result?,
         // A graceful shutdown signal was sent to the process.
         _ = shutdown.requested() => {
             connection.as_mut().graceful_shutdown();
-            Ok((&mut connection).await?)
+            connection.await?;
         }
     }
+
+    Ok(())
 }
 
 fn wait_for_ctrl_c() -> InitializationToken {

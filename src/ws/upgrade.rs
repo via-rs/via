@@ -119,7 +119,7 @@ async fn run<T, App, Await>(
         };
 
         let err = tokio::select! {
-            result = &mut listen => result.err(),
+            result = listen.as_mut() => result.err(),
             result = trx => match result {
                 Ok(_) => listen.await.err(),
                 Err(error) => Some(error),

@@ -177,7 +177,7 @@ where
     }
 
     #[cfg(feature = "rustls-23")]
-    pub async fn listen_rustls(
+    pub async fn listen_rustls_23(
         self,
         address: impl ToSocketAddrs,
         rustls_config: rustls::ServerConfig,

@@ -24,7 +24,7 @@ async fn main() -> Result<ExitCode, Error> {
     app.route("/hello/:name").to(via::get(hello));
 
     Server::new(app)
-        .listen_rustls(("127.0.0.1", 8080), tls_config)
+        .listen_rustls_23(("127.0.0.1", 8080), tls_config)
         .await
 }
 

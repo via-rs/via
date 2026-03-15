@@ -7,7 +7,7 @@ use tokio::net::TcpStream;
 #[cfg(feature = "native-tls")]
 pub use native::NativeTlsAcceptor;
 
-#[cfg(feature = "rustls")]
+#[cfg(feature = "rustls-23")]
 pub use rustls::RustlsAcceptor;
 
 #[derive(Eq, PartialEq)]
@@ -19,7 +19,10 @@ pub trait Acceptor {
     type Io: AsyncRead + AsyncWrite;
     type Error: Error;
 
-    #[cfg_attr(not(any(feature = "native-tls", feature = "rustls")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(feature = "native-tls", feature = "rustls-23")),
+        allow(dead_code)
+    )]
     fn accept(
         &self,
         io: TcpStream,
@@ -91,7 +94,7 @@ mod native {
     }
 }
 
-#[cfg(feature = "rustls")]
+#[cfg(feature = "rustls-23")]
 mod rustls {
     use rustls::ServerConfig;
     use std::{io, sync::Arc};

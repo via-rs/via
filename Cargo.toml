@@ -18,7 +18,7 @@ ring = ["dep:ring", "tokio-rustls/ring"]
 file = ["dep:httpdate", "tokio/fs"]
 
 native-tls = ["dep:native-tls", "dep:tokio-native-tls", "hyper/http2"]
-rustls = ["dep:rustls", "dep:tokio-rustls", "hyper/http2"]
+rustls-23 = ["dep:rustls", "dep:tokio-rustls", "hyper/http2"]
 
 tokio-tungstenite = ["dep:base64", "dep:futures-util", "dep:ring", "dep:tungstenite", "dep:tokio-tungstenite"]
 tokio-websockets = ["dep:base64", "dep:futures-util", "dep:ring", "dep:tokio-websockets"]
@@ -115,7 +115,7 @@ required-features = ["native-tls"]
 [[example]]
 name = "rustls"
 path = "./examples/tls/rustls.rs"
-required-features = ["ring", "rustls"]
+required-features = ["ring", "rustls-23"]
 
 [package.metadata.docs.rs]
 features = ["file", "native-tls", "rustls", "tokio-tungstenite"]

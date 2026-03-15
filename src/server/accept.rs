@@ -10,7 +10,7 @@ use tokio::task::{JoinSet, coop};
 use tokio::time::timeout;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 
-#[cfg(any(feature = "native-tls", feature = "rustls"))]
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use hyper_util::rt::TokioExecutor;
 
 use super::{IoWithPermit, tls};
@@ -39,7 +39,7 @@ where
     TlsAcceptor: tls::Acceptor,
     TlsAcceptor::Io: Send + Unpin + 'static,
 {
-    #[cfg(not(any(feature = "native-tls", feature = "rustls")))]
+    #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
     drop(acceptor);
 
     // Create a semaphore with a number of permits equal to the maximum number
@@ -97,7 +97,7 @@ where
         let shutdown = shutdown.clone();
 
         // Spawn a task to serve the connection.
-        #[cfg(any(feature = "native-tls", feature = "rustls"))]
+        #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
         connections.spawn({
             let handshake = acceptor.accept(io);
 
@@ -114,7 +114,7 @@ where
             }
         });
 
-        #[cfg(not(any(feature = "native-tls", feature = "rustls")))]
+        #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
         connections.spawn(async move {
             serve_connection(IoWithPermit::new(io, permit), service, shutdown).await
         });
@@ -192,7 +192,7 @@ where
     }
 }
 
-#[cfg(any(feature = "native-tls", feature = "rustls"))]
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 async fn serve_h2_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,

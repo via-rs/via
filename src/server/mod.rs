@@ -18,7 +18,7 @@ use tls::TcpAcceptor;
 #[cfg(feature = "native-tls")]
 use tls::NativeTlsAcceptor;
 
-#[cfg(feature = "rustls")]
+#[cfg(feature = "rustls-23")]
 use tls::RustlsAcceptor;
 
 /// Serve an app over HTTP.
@@ -36,13 +36,13 @@ pub(crate) struct ServerConfig {
     max_request_size: usize,
     shutdown_timeout: Duration,
 
-    #[cfg(any(feature = "native-tls", feature = "rustls"))]
+    #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
     tls_handshake_timeout: Duration,
 
-    #[cfg(any(feature = "native-tls", feature = "rustls"))]
+    #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
     http2_max_concurrent_streams: Option<u32>,
 
-    #[cfg(any(feature = "native-tls", feature = "rustls"))]
+    #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
     http2_max_send_buf_size: usize,
 }
 
@@ -176,7 +176,7 @@ where
         Ok(future.await)
     }
 
-    #[cfg(feature = "rustls")]
+    #[cfg(feature = "rustls-23")]
     pub async fn listen_rustls(
         self,
         address: impl ToSocketAddrs,
@@ -192,7 +192,7 @@ where
     }
 }
 
-#[cfg(any(feature = "native-tls", feature = "rustls"))]
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 impl<App> Server<App> {
     /// Sets the maximum number of concurrent HTTP/2 streams allowed per
     /// connection.
@@ -266,7 +266,7 @@ impl ServerConfig {
     }
 }
 
-#[cfg(any(feature = "native-tls", feature = "rustls"))]
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 impl ServerConfig {
     pub fn http2_max_concurrent_streams(&self) -> Option<u32> {
         self.http2_max_concurrent_streams
@@ -290,13 +290,13 @@ impl Default for ServerConfig {
             max_request_size: 104_857_600, // 100 MB
             shutdown_timeout: Duration::from_secs(10),
 
-            #[cfg(any(feature = "native-tls", feature = "rustls"))]
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             http2_max_concurrent_streams: Some(64),
 
-            #[cfg(any(feature = "native-tls", feature = "rustls"))]
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             http2_max_send_buf_size: 65536, // 64 KB
 
-            #[cfg(any(feature = "native-tls", feature = "rustls"))]
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             tls_handshake_timeout: Duration::from_secs(5),
         }
     }

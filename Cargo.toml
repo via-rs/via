@@ -118,7 +118,7 @@ path = "./examples/tls/rustls.rs"
 required-features = ["ring", "rustls-23"]
 
 [package.metadata.docs.rs]
-features = ["file", "native-tls", "rustls", "tokio-tungstenite"]
+features = ["file", "native-tls", "rustls-23", "tokio-tungstenite"]
 
 [workspace]
 members = ["via-router"]

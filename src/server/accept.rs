@@ -221,7 +221,7 @@ where
         // Keep tail latency low when the server is at capacity.
         biased;
         // The connection future is ready.
-        result = &mut connection => result?,
+        result = connection.as_mut() => result?,
         // A graceful shutdown signal was sent to the process.
         _ = shutdown.requested() => {
             connection.as_mut().graceful_shutdown();

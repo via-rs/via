@@ -44,7 +44,7 @@ impl Acceptor for TcpAcceptor {
 
 #[allow(dead_code)]
 impl Alpn {
-    pub const H2: Self = Self(Version::HTTP_2);
+    pub const HTTP_2: Self = Self(Version::HTTP_2);
     pub const HTTP_11: Self = Self(Version::HTTP_11);
 }
 
@@ -85,7 +85,7 @@ mod native {
                 let stream = io.get_ref();
                 let alpn = stream
                     .negotiated_alpn()?
-                    .and_then(|negotiated| (negotiated == b"h2").then_some(Alpn::H2))
+                    .and_then(|negotiated| (negotiated == b"h2").then_some(Alpn::HTTP_2))
                     .unwrap_or(Alpn::HTTP_11);
 
                 Ok((io, alpn))
@@ -126,7 +126,7 @@ mod rustls {
                 let (_, conn) = io.get_ref();
                 let alpn = conn
                     .alpn_protocol()
-                    .and_then(|negotiated| (negotiated == b"h2").then_some(Alpn::H2))
+                    .and_then(|negotiated| (negotiated == b"h2").then_some(Alpn::HTTP_2))
                     .unwrap_or(Alpn::HTTP_11);
 
                 Ok((io, alpn))

@@ -106,17 +106,17 @@ where
                     timeout(service.config().tls_handshake_timeout(), handshake).await??;
                 let io = IoWithPermit::new(io, permit);
 
-                if alpn == tls::Alpn::H2 {
-                    serve_h2_connection(io, service, shutdown).await
+                if alpn == tls::Alpn::HTTP_2 {
+                    serve_http2_connection(io, service, shutdown).await
                 } else {
-                    serve_connection(io, service, shutdown).await
+                    serve_http1_connection(io, service, shutdown).await
                 }
             }
         });
 
         #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
         connections.spawn(async move {
-            serve_connection(IoWithPermit::new(io, permit), service, shutdown).await
+            serve_http1_connection(IoWithPermit::new(io, permit), service, shutdown).await
         });
 
         if connections.len() >= 1024 {
@@ -153,7 +153,7 @@ async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), 
     }
 }
 
-async fn serve_connection<App, Io>(
+async fn serve_http1_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
     shutdown: InitializationToken,
@@ -194,7 +194,7 @@ where
 }
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-async fn serve_h2_connection<App, Io>(
+async fn serve_http2_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
     shutdown: InitializationToken,

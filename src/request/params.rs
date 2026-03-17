@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::str::FromStr;
 
-use super::query::QueryParser;
+use super::query::{QueryParamRange, QueryParser};
 use crate::util::UriEncoding;
 use crate::{Error, raise};
 
@@ -20,13 +20,13 @@ pub struct PathParams<'a> {
 pub struct QueryParam<'a, 'b> {
     encoding: UriEncoding,
     source: Option<&'a str>,
-    range: Option<[Option<usize>; 2]>,
+    range: Option<QueryParamRange>,
     name: &'b str,
 }
 
 pub struct QueryParams<'a> {
     query: Option<&'a str>,
-    params: Vec<(Cow<'a, str>, Option<[Option<usize>; 2]>)>,
+    params: Vec<(Cow<'a, str>, Option<QueryParamRange>)>,
 }
 
 pub(crate) fn get<'a>(

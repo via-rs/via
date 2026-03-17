@@ -50,7 +50,7 @@ fn query_pos_for_key(
 
 impl<'a> PathParams<'a> {
     pub fn get<'b>(&self, name: &'b str) -> PathParam<'a, 'b> {
-        PathParam::new(self.path, get(&self.params, name), name)
+        PathParam::new(self.path, get(self.params, name), name)
     }
 }
 

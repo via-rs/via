@@ -1,8 +1,6 @@
 use percent_encoding::percent_decode_str;
 use std::borrow::Cow;
 
-use super::params::ParamRange;
-
 pub struct QueryParser<'a> {
     input: &'a str,
     from: usize,
@@ -28,7 +26,7 @@ fn take_name(input: &str, from: usize) -> (usize, Option<Cow<'_, str>>) {
     }
 }
 
-fn take_value(input: &str, from: usize) -> (usize, Option<ParamRange>) {
+fn take_value(input: &str, from: usize) -> (usize, Option<[Option<usize>; 2]>) {
     let len = input.len();
 
     let at = take_while(input, from, |byte| byte == b'=').map(|start| {
@@ -59,7 +57,7 @@ impl<'a> QueryParser<'a> {
 }
 
 impl<'a> Iterator for QueryParser<'a> {
-    type Item = (Cow<'a, str>, Option<ParamRange>);
+    type Item = (Cow<'a, str>, Option<[Option<usize>; 2]>);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (start, name) = take_name(self.input, self.from);

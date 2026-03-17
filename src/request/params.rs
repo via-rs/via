@@ -1,67 +1,80 @@
 use std::borrow::Cow;
 use std::str::FromStr;
-use via_router::Ident;
 
 use super::query::QueryParser;
 use crate::util::UriEncoding;
 use crate::{Error, raise};
 
-pub(super) type ParamRange = [Option<usize>; 2];
-pub(super) type PathParamEntry = (Ident, ParamRange);
-pub(super) type QueryParamEntry<'a> = (Cow<'a, str>, Option<ParamRange>);
-
-pub struct Param<'a, 'b> {
+pub struct PathParam<'a, 'b> {
     encoding: UriEncoding,
-    source: Option<&'a str>,
+    source: &'a str,
+    param: Option<&'a via_router::PathParam>,
     name: &'b str,
-    at: Option<ParamRange>,
 }
 
 pub struct PathParams<'a> {
     path: &'a str,
-    at: &'a [PathParamEntry],
+    params: &'a [via_router::PathParam],
+}
+
+pub struct QueryParam<'a, 'b> {
+    encoding: UriEncoding,
+    source: Option<&'a str>,
+    range: Option<[Option<usize>; 2]>,
+    name: &'b str,
 }
 
 pub struct QueryParams<'a> {
     query: Option<&'a str>,
-    at: Vec<QueryParamEntry<'a>>,
+    params: Vec<(Cow<'a, str>, Option<[Option<usize>; 2]>)>,
 }
 
-fn query_pos_for_key(predicate: &str, key: &str, value: &Option<ParamRange>) -> Option<ParamRange> {
-    if key == predicate { *value } else { None }
+pub(crate) fn find_by_name<'a>(
+    params: &'a [via_router::PathParam],
+    name: &str,
+) -> Option<&'a via_router::PathParam> {
+    params.iter().find(|param| name == param.ident())
+}
+
+fn query_pos_for_key(
+    predicate: &str,
+    key: &str,
+    value: &Option<[Option<usize>; 2]>,
+) -> Option<[Option<usize>; 2]> {
+    if key == predicate {
+        value.as_ref().copied()
+    } else {
+        None
+    }
 }
 
 impl<'a> PathParams<'a> {
-    pub(crate) fn new(path: &'a str, at: &'a [PathParamEntry]) -> Self {
-        Self { path, at }
+    pub fn get<'b>(&self, name: &'b str) -> PathParam<'a, 'b> {
+        PathParam::new(self.path, find_by_name(&self.params, name), name)
     }
+}
 
-    pub fn get<'b>(&self, name: &'b str) -> Param<'a, 'b> {
-        let at = self.at.iter().find_map(|(key, value)| {
-            if key.as_ref() == name {
-                Some(*value)
-            } else {
-                None
-            }
-        });
-
-        Param::new(Some(self.path), name, at)
+impl<'a> PathParams<'a> {
+    pub(crate) fn new(path: &'a str, params: &'a [via_router::PathParam]) -> Self {
+        Self { path, params }
     }
 }
 
 impl<'a> QueryParams<'a> {
     pub(crate) fn new(query: Option<&'a str>) -> Self {
-        let at = query
+        let params = query
             .map(|input| QueryParser::new(input).collect())
             .unwrap_or_default();
 
-        Self { query, at }
+        Self { query, params }
     }
 
-    pub fn all<'b>(&self, name: &'b str) -> impl Iterator<Item = Param<'a, 'b>> {
-        self.at.iter().filter_map(move |(key, value)| {
+    pub fn all<'b>(&self, name: &'b str) -> impl Iterator<Item = QueryParam<'a, 'b>> {
+        self.params.iter().filter_map(move |(key, value)| {
+            let value = value.as_ref();
+
             if key.as_ref() == name {
-                Some(Param::new(self.query, name, *value))
+                Some(QueryParam::new(self.query, value.copied(), name))
             } else {
                 None
             }
@@ -69,67 +82,53 @@ impl<'a> QueryParams<'a> {
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.at.iter().any(|(key, _)| key.as_ref() == name)
+        self.params.iter().any(|(key, _)| key.as_ref() == name)
     }
 
-    pub fn first<'b>(&self, name: &'b str) -> Param<'a, 'b> {
-        let at = self
-            .at
+    pub fn first<'b>(&self, name: &'b str) -> QueryParam<'a, 'b> {
+        let range = self
+            .params
             .iter()
             .find_map(|(key, value)| query_pos_for_key(name, key, value));
 
-        Param::new(self.query, name, at)
+        QueryParam::new(self.query, range, name)
     }
 
-    pub fn last<'b>(&self, name: &'b str) -> Param<'a, 'b> {
-        let at = self
-            .at
+    pub fn last<'b>(&self, name: &'b str) -> QueryParam<'a, 'b> {
+        let range = self
+            .params
             .iter()
             .rev()
             .find_map(|(key, value)| query_pos_for_key(name, key, value));
 
-        Param::new(self.query, name, at)
+        QueryParam::new(self.query, range, name)
     }
 }
 
-impl<'a, 'b> Param<'a, 'b> {
+impl<'a, 'b> PathParam<'a, 'b> {
     #[inline]
-    fn new(source: Option<&'a str>, name: &'b str, at: Option<ParamRange>) -> Self {
+    pub(crate) fn new(
+        source: &'a str,
+        param: Option<&'a via_router::PathParam>,
+        name: &'b str,
+    ) -> Self {
         Self {
             encoding: UriEncoding::Unencoded,
             source,
+            param,
             name,
-            at: at.or(Some([Some(0); 2])),
         }
-    }
-
-    #[inline]
-    fn slice(&self) -> Option<&'a str> {
-        self.source
-            .zip(self.at)
-            .and_then(|(path, span)| match span {
-                [Some(from), Some(to)] if from == to => None,
-                [Some(from), Some(to)] => path.get(from..to),
-                [Some(from), None] => path.get(from..),
-                [None, _] => None,
-            })
     }
 
     /// Returns a new `Param` that will percent-decode the parameter value with
     /// when the parameter is converted to a result.
     ///
     #[inline]
-    pub fn decode(self) -> Self {
+    pub fn percent_decode(self) -> Self {
         Self {
             encoding: UriEncoding::Percent,
             ..self
         }
-    }
-
-    pub fn optional(self) -> Result<Option<Cow<'a, str>>, Error> {
-        self.slice()
-            .map(|value| self.encoding.decode_as(self.name, value))
-            .transpose()
     }
 
     /// Calls [`str::parse`] on the parameter value if it exists and returns the
@@ -140,10 +139,17 @@ impl<'a, 'b> Param<'a, 'b> {
         U: FromStr,
         U::Err: std::error::Error + Send + Sync + 'static,
     {
-        self.into_result()?
+        self.ok_or_bad_request()?
             .as_ref()
             .parse()
             .or_else(|error| raise!(400, error))
+    }
+
+    pub fn ok(self) -> Result<Option<Cow<'a, str>>, Error> {
+        self.param
+            .and_then(|param| param.slice(self.source))
+            .map(|value| self.encoding.decode_as(self.name, value))
+            .transpose()
     }
 
     /// Returns a result with the parameter value if it exists. If the param is
@@ -155,14 +161,89 @@ impl<'a, 'b> Param<'a, 'b> {
     /// implementation of `T::decode`, an error is returned with a 400 Bad
     /// Request status code.
     ///
-    pub fn into_result(self) -> Result<Cow<'a, str>, Error> {
+    pub fn ok_or_bad_request(self) -> Result<Cow<'a, str>, Error> {
+        self.param
+            .and_then(|param| param.slice(self.source))
+            .ok_or_else(|| Error::require_path_param(self.name))
+            .and_then(|value| self.encoding.decode_as(self.name, value))
+    }
+}
+
+impl<'a, 'b> QueryParam<'a, 'b> {
+    #[inline]
+    pub(crate) fn new(
+        source: Option<&'a str>,
+        range: Option<[Option<usize>; 2]>,
+        name: &'b str,
+    ) -> Self {
+        Self {
+            encoding: UriEncoding::Unencoded,
+            source,
+            range,
+            name,
+        }
+    }
+
+    /// Returns a new `Param` that will percent-decode the parameter value with
+    /// when the parameter is converted to a result.
+    ///
+    #[inline]
+    pub fn percent_decode(self) -> Self {
+        Self {
+            encoding: UriEncoding::Percent,
+            ..self
+        }
+    }
+
+    /// Calls [`str::parse`] on the parameter value if it exists and returns the
+    /// result. If the param is encoded, it will be decoded before it is parsed.
+    ///
+    pub fn parse<U>(self) -> Result<U, Error>
+    where
+        U: FromStr,
+        U::Err: std::error::Error + Send + Sync + 'static,
+    {
+        self.ok_or_bad_request()?
+            .as_ref()
+            .parse()
+            .or_else(|error| raise!(400, error))
+    }
+
+    pub fn ok(self) -> Result<Option<Cow<'a, str>>, Error> {
         self.slice()
             .map(|value| self.encoding.decode_as(self.name, value))
-            .unwrap_or_else(|| {
-                raise!(
-                    400,
-                    message = format!("missing required parameter: \"{}\"", self.name)
-                )
+            .transpose()
+    }
+
+    /// Returns a result with the parameter value if it exists. If the param is
+    /// encoded, it will be decoded before it is returned.
+    ///
+    /// # Errors
+    ///
+    /// If the parameter does not exist or could not be decoded with the
+    /// implementation of `T::decode`, an error is returned with a 400 Bad
+    /// Request status code.
+    ///
+    pub fn ok_or_bad_request(self) -> Result<Cow<'a, str>, Error> {
+        self.slice()
+            .ok_or_else(|| Error::require_query_param(self.name))
+            .and_then(|value| self.encoding.decode_as(self.name, value))
+    }
+}
+
+impl<'a, 'b> QueryParam<'a, 'b> {
+    /// Returns a new `Param` that will percent-decode the parameter value with
+    /// when the parameter is converted to a result.
+    ///
+    #[inline]
+    fn slice(&self) -> Option<&'a str> {
+        self.source
+            .zip(self.range)
+            .and_then(|(source, span)| match span {
+                [Some(from), Some(to)] if from == to => None,
+                [Some(from), Some(to)] => source.get(from..to),
+                [Some(from), None] => source.get(from..),
+                [None, _] => None,
             })
     }
 }

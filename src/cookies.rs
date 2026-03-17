@@ -39,7 +39,7 @@ struct SetCookieError;
 ///     // parameter in the request URI.
 ///     let (should_set_name, name) = match request.cookies().get("name") {
 ///         Some(cookie) => (false, cookie.value().into()),
-///         None => (true, request.param("name").decode().into_result()?),
+///         None => (true, request.param("name").percent_decode().ok_or_bad_request()?),
 ///     };
 ///
 ///     // Build the greeting response using a reference to name.

@@ -101,13 +101,11 @@ impl<App> Service<http::Request<Incoming>> for ViaService<App> {
 
         // Populate the middleware stack with the resolved routes.
         for (route, param) in self.via.router().traverse(path) {
-            // Extend the deque with the route's middleware stack.
-            deque.extend(route.cloned());
+            // Extend deque with the route's middleware stack.
+            deque.extend(route);
 
-            if let Some((name, range)) = param {
-                // Include the route's dynamic parameter in params.
-                params.push((name.clone(), [Some(range.0), range.1]));
-            }
+            // Extend params with the route's optional dynamic parameter.
+            params.extend(param);
         }
 
         // Request owns a copy of Shared<App>.

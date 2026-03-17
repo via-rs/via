@@ -168,6 +168,29 @@ impl Error {
     }
 }
 
+impl Error {
+    pub(crate) fn invalid_utf8_sequence(name: &str) -> Self {
+        Self::with_status(
+            StatusCode::BAD_REQUEST,
+            format!("invalid utf-8 sequence of bytes in \"{}\".", name),
+        )
+    }
+
+    pub(crate) fn require_path_param(name: &str) -> Self {
+        Self::with_status(
+            StatusCode::BAD_REQUEST,
+            format!("missing required path parameter: \"{}\".", name),
+        )
+    }
+
+    pub(crate) fn require_query_param(name: &str) -> Self {
+        Self::with_status(
+            StatusCode::BAD_REQUEST,
+            format!("missing required query parameter: \"{}\".", name),
+        )
+    }
+}
+
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match &self.kind {

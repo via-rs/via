@@ -1,10 +1,9 @@
 use smallvec::{SmallVec, smallvec};
-use std::iter::Rev;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::slice;
 
-use crate::path::{self, Ident, Param, Pattern, Segment, Split};
+use crate::path::{self, PathParam, Pattern, Segment, Split};
 
 #[derive(Debug)]
 pub struct Router<T> {
@@ -50,17 +49,8 @@ struct Node<T> {
 
 impl<'a, 'b, T> Frame<'a, 'b, T> {
     fn new(node: &'a Node<T>, path: Option<Split<'b>>, segment: Option<Segment<'b>>) -> Self {
-        let predicate = segment.as_ref().map(Segment::value);
-        let results = node
-            .children()
-            .filter(|edge| match (&edge.pattern, predicate) {
-                (Pattern::Static(lhs), Some(rhs)) => lhs == rhs,
-                (pattern, None) => matches!(pattern, Pattern::Splat(_)),
-                (_, option) => option.is_some(),
-            });
-
         Self {
-            results: results.collect(),
+            results: node.matches(segment.as_ref().map(Segment::value)),
             split: path,
             to: segment,
         }
@@ -69,6 +59,11 @@ impl<'a, 'b, T> Frame<'a, 'b, T> {
     #[inline]
     fn segment(&self) -> Option<&Segment<'b>> {
         self.to.as_ref()
+    }
+
+    #[inline]
+    fn range(&self) -> Option<&[usize; 2]> {
+        self.segment().map(Segment::range)
     }
 }
 
@@ -115,9 +110,30 @@ where
 }
 
 impl<T> Node<T> {
+    fn new(pattern: Pattern) -> Self {
+        Self {
+            children: Vec::new(),
+            pattern,
+            route: Vec::new(),
+        }
+    }
+
+    #[inline(always)]
+    fn matches<'a>(&'a self, predicate: Option<&str>) -> SmallVec<[&'a Node<T>; 1]> {
+        self.children
+            .iter()
+            .rev()
+            .filter(|edge| edge.pattern.matches(predicate))
+            .collect()
+    }
+
     #[inline]
-    fn children(&self) -> Rev<slice::Iter<'_, Self>> {
-        self.children.iter().rev()
+    fn param(&self, range: Option<&[usize; 2]>) -> Option<PathParam> {
+        if let Pattern::Dynamic(pattern) = &self.pattern {
+            Some(PathParam::new(pattern.clone(), range.copied()))
+        } else {
+            None
+        }
     }
 
     fn push(&mut self, pattern: Pattern) -> &mut Node<T> {
@@ -139,9 +155,11 @@ impl<T> Node<T> {
     }
 }
 
-impl<T> Router<T> {
+impl<T: Clone> Router<T> {
     pub fn new() -> Self {
-        Default::default()
+        Self {
+            tree: Node::new(Pattern::Root),
+        }
     }
 
     pub fn route(&mut self, path: &'static str) -> RouteMut<'_, T> {
@@ -172,31 +190,19 @@ impl<T> Router<T> {
     }
 }
 
-impl<T> Default for Router<T> {
-    fn default() -> Self {
-        Self {
-            tree: Node {
-                children: Vec::new(),
-                pattern: Pattern::Root,
-                route: Vec::new(),
-            },
-        }
-    }
-}
-
-impl<'a, T> Route<'a, T> {
+impl<'a, T: Clone> Route<'a, T> {
     #[inline]
     fn new(iter: MatchCond<slice::Iter<'a, MatchCond<T>>>) -> Self {
         Self { iter }
     }
 }
 
-impl<'a, T> Iterator for Route<'a, T> {
-    type Item = &'a T;
+impl<'a, T: Clone> Iterator for Route<'a, T> {
+    type Item = T;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        Some(self.iter.next()?.clone())
     }
 }
 
@@ -239,8 +245,8 @@ impl<'a, 'b, T> Traverse<'a, 'b, T> {
     }
 }
 
-impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
-    type Item = (Route<'a, T>, Option<(&'a Ident, Param)>);
+impl<'a, 'b, T: Clone> Iterator for Traverse<'a, 'b, T> {
+    type Item = (Route<'a, T>, Option<PathParam>);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -251,25 +257,20 @@ impl<'a, 'b, T> Iterator for Traverse<'a, 'b, T> {
                 continue;
             };
 
-            let param = match &node.pattern {
-                Pattern::Root | Pattern::Static(_) => None,
-                Pattern::Dynamic(ident) => frame.segment().map(|segment| (ident, segment.range())),
-                Pattern::Splat(ident) => {
-                    return Some((
-                        Route::new(MatchCond::Exact(node.route())),
-                        frame.segment().map(|segment| (ident, segment.range_from())),
-                    ));
+            let param = node.param(frame.range());
+            let route = if param.as_ref().is_some_and(PathParam::is_splat) {
+                Route::new(MatchCond::Exact(node.route()))
+            } else {
+                let split = frame.split.as_mut().unwrap_or(&mut self.split);
+
+                if frame.results.is_empty() {
+                    *frame = Frame::new(node, None, split.next());
+                    Route::new(MatchCond::new(frame.to.is_none(), node.route()))
+                } else {
+                    let split = split.clone();
+                    Route::new(self.fork(node, split))
                 }
             };
-
-            let split = frame.split.as_mut().unwrap_or(&mut self.split);
-            let route = Route::new(if frame.results.is_empty() {
-                *frame = Frame::new(node, None, split.next());
-                MatchCond::new(frame.to.is_none(), node.route())
-            } else {
-                let split = split.clone();
-                self.fork(node, split)
-            });
 
             return Some((route, param));
         }
@@ -287,7 +288,9 @@ where
         // In the future we may want to panic if the caller tries to insert a node
         // into a catch-all node rather than silently ignoring the rest of the
         // segments.
-        if let Pattern::Splat(_) = &parent.pattern {
+        if let Pattern::Dynamic(pat) = &parent.pattern
+            && pat.is_splat()
+        {
             return parent;
         }
 
@@ -302,12 +305,9 @@ where
                 .children
                 .iter()
                 .position(|node| match (&pattern, &node.pattern) {
-                    (Pattern::Static(lhs), Pattern::Static(rhs))
-                    | (Pattern::Dynamic(lhs), Pattern::Dynamic(rhs))
-                    | (Pattern::Splat(lhs), Pattern::Splat(rhs)) => {
-                        lhs.as_bytes() == rhs.as_bytes()
-                    }
                     (Pattern::Root, Pattern::Root) => true,
+                    (Pattern::Static(lhs), Pattern::Static(rhs)) => lhs == rhs,
+                    (Pattern::Dynamic(lhs), Pattern::Dynamic(rhs)) => lhs == rhs,
                     _ => false,
                 }) {
             &mut parent.children[index]
@@ -319,10 +319,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::iter::Map;
-
     use super::{Route, Router};
-    use crate::path::{Ident, Param};
+    use crate::path::PathParam;
 
     const PATHS: [&str; 5] = [
         "/",
@@ -332,38 +330,32 @@ mod tests {
         "/*path",
     ];
 
-    type Match<'a, N = Ident> = (
-        Map<Route<'a, String>, fn(&'a String) -> &'a str>,
-        Option<(&'a N, Param)>,
-    );
+    type Match<'a> = (Route<'a, String>, Option<PathParam>);
 
     macro_rules! assert_param_matches {
-        ($param:expr, $pat:pat) => {
+        ($param:expr, $pat:pat) => {{
+            let param = $param.as_ref().map(|param| (param.ident(), param.range()));
+
             assert!(
-                matches!($param, $pat),
+                matches!(param, $pat),
                 "\n{} => {:?}\n",
                 stringify!($pat),
                 $param
             )
-        };
+        }};
     }
 
     #[allow(clippy::type_complexity)]
-    fn expect_match<'a>(
-        resolved: Option<(Route<'a, String>, Option<(&'a Ident, Param)>)>,
-    ) -> Match<'a, str> {
+    fn expect_match<'a>(resolved: Option<(Route<'a, String>, Option<PathParam>)>) -> Match<'a> {
         if let Some((stack, param)) = resolved {
-            (
-                stack.map(String::as_str),
-                param.map(|(name, range)| (name.as_ref(), range)),
-            )
+            (stack, param)
         } else {
             panic!("unexpected end of matched routes");
         }
     }
 
-    fn assert_matches_root((mut stack, param): Match<'_, str>) {
-        assert!(matches!(stack.next(), Some("/")));
+    fn assert_matches_root((mut stack, param): Match<'_>) {
+        assert!(matches!(stack.next().as_deref(), Some("/")));
         assert!(stack.next().is_none());
 
         assert!(param.is_none());
@@ -379,12 +371,12 @@ mod tests {
 
         fn assert_matches_wildcard_at_root<'a, I, F>(results: &mut I, assert_param: F)
         where
-            I: Iterator<Item = (Route<'a, String>, Option<(&'a Ident, Param)>)>,
-            F: FnOnce(&Option<(&'a str, (usize, Option<usize>))>),
+            I: Iterator<Item = (Route<'a, String>, Option<PathParam>)>,
+            F: FnOnce(&Option<PathParam>),
         {
             let (mut stack, param) = expect_match(results.next());
 
-            assert!(matches!(stack.next(), Some("/*path")));
+            assert!(matches!(stack.next().as_deref(), Some("/*path")));
             assert!(stack.next().is_none());
 
             assert_param(&param);
@@ -401,7 +393,7 @@ mod tests {
 
             assert_matches_root(expect_match(results.next()));
             assert_matches_wildcard_at_root(&mut results, |param| {
-                assert!(param.is_none());
+                assert!(param.as_ref().and_then(PathParam::range).is_none());
             });
 
             assert!(results.next().is_none());
@@ -418,7 +410,7 @@ mod tests {
 
             assert_matches_root(expect_match(results.next()));
             assert_matches_wildcard_at_root(&mut results, |param| {
-                assert_param_matches!(param, Some(("path", (1, None))))
+                assert_param_matches!(param, Some(("path", Some([1, _]))))
             });
 
             assert!(results.next().is_none());
@@ -442,20 +434,20 @@ mod tests {
                 let (mut stack, param) = expect_match(results.next());
 
                 assert!(stack.next().is_none());
-                assert!(param.is_none());
+                assert!(param.as_ref().and_then(PathParam::range).is_none());
             }
 
             {
                 let (mut stack, param) = expect_match(results.next());
 
-                assert!(matches!(stack.next(), Some("/echo/*path")));
+                assert!(matches!(stack.next().as_deref(), Some("/echo/*path")));
                 assert!(stack.next().is_none());
 
-                assert_param_matches!(param, Some(("path", (6, None))));
+                assert_param_matches!(param, Some(("path", Some([6, _]))));
             }
 
             assert_matches_wildcard_at_root(&mut results, |param| {
-                assert_param_matches!(param, Some(("path", (1, None))))
+                assert_param_matches!(param, Some(("path", Some([1, _]))))
             });
 
             assert!(results.next().is_none());
@@ -479,20 +471,20 @@ mod tests {
                 let (mut stack, param) = expect_match(results.next());
 
                 assert!(stack.next().is_none());
-                assert!(param.is_none());
+                assert!(param.as_ref().and_then(PathParam::range).is_none());
             }
 
             {
                 let (mut stack, param) = expect_match(results.next());
 
-                assert!(matches!(stack.next(), Some("/articles/:id")));
+                assert!(matches!(stack.next().as_deref(), Some("/articles/:id")));
                 assert!(stack.next().is_none());
 
-                assert_param_matches!(param, Some(("id", (10, Some(15)))));
+                assert_param_matches!(param, Some(("id", Some([10, 15]))));
             }
 
             assert_matches_wildcard_at_root(&mut results, |param| {
-                assert_param_matches!(param, Some(("path", (1, None))))
+                assert_param_matches!(param, Some(("path", Some([1, _]))))
             });
 
             assert!(results.next().is_none());
@@ -517,29 +509,32 @@ mod tests {
                 let (mut stack, param) = expect_match(results.next());
 
                 assert!(stack.next().is_none());
-                assert!(param.is_none());
+                assert!(param.as_ref().and_then(PathParam::range).is_none());
             }
 
             {
                 let (mut stack, param) = expect_match(results.next());
 
-                assert!(matches!(stack.next(), Some("/articles/:id")));
+                assert!(matches!(stack.next().as_deref(), Some("/articles/:id")));
                 assert!(stack.next().is_none());
 
-                assert_param_matches!(param, Some(("id", (10, Some(15)))));
+                assert_param_matches!(param, Some(("id", Some([10, 15]))));
             }
 
             {
                 let (mut stack, param) = expect_match(results.next());
 
-                assert!(matches!(stack.next(), Some("/articles/:id/comments")));
+                assert!(matches!(
+                    stack.next().as_deref(),
+                    Some("/articles/:id/comments")
+                ));
                 assert!(stack.next().is_none());
 
-                assert!(param.is_none());
+                assert!(param.as_ref().and_then(PathParam::range).is_none());
             }
 
             assert_matches_wildcard_at_root(&mut results, |param| {
-                assert_param_matches!(param, Some(("path", (1, None))))
+                assert_param_matches!(param, Some(("path", Some([1, _]))))
             });
 
             assert!(results.next().is_none());

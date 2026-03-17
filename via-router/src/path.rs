@@ -1,18 +1,28 @@
 use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
+use std::sync::Arc;
 
-pub type Param = (usize, Option<usize>);
+#[derive(Clone)]
+pub struct Ident(Arc<str>);
 
 #[derive(Debug)]
 pub enum Pattern {
     Root,
     Static(Ident),
-    Dynamic(Ident),
-    Splat(Ident),
+    Dynamic(Dynamic),
 }
 
-#[derive(Clone)]
-pub struct Ident(Box<str>);
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dynamic {
+    splat: bool,
+    ident: Ident,
+}
+
+#[derive(Debug)]
+pub struct PathParam {
+    pattern: Dynamic,
+    range: Option<[usize; 2]>,
+}
 
 #[derive(Debug)]
 pub struct Segment<'a> {
@@ -31,28 +41,61 @@ pub struct Split<'a> {
 pub(crate) fn patterns(path: &str) -> impl Iterator<Item = Pattern> + '_ {
     Split::new(path).map(|segment| {
         let value = segment.value();
+
         match value.chars().next() {
             // Path segments that start with a colon are considered a Dynamic
             // pattern. The remaining characters in the segment are considered
             // the name or identifier associated with the parameter.
             Some(':') => match value.get(1..) {
-                None | Some("") => panic!("Dynamic parameters must be named. Found ':'."),
-                Some(name) => Pattern::Dynamic(name.to_owned().into()),
+                None | Some("") => panic!("dynamic parameters must be named."),
+                Some(name) => Pattern::Dynamic(Dynamic::new(name)),
             },
 
             // Path segments that start with an asterisk are considered CatchAll
             // pattern. The remaining characters in the segment are considered
             // the name or identifier associated with the parameter.
             Some('*') => match value.get(1..) {
-                None | Some("") => panic!("Wildcard parameters must be named. Found '*'."),
-                Some(name) => Pattern::Splat(name.to_owned().into()),
+                None | Some("") => panic!("splat parameters must be named."),
+                Some(name) => Pattern::Dynamic(Dynamic::splat(name)),
             },
 
             // The segment does not start with a reserved character. We will
             // consider it a static pattern that can be matched by value.
-            _ => Pattern::Static(value.to_owned().into()),
+            _ => Pattern::Static(Ident::new(value)),
         }
     })
+}
+
+impl Dynamic {
+    fn new(name: &str) -> Self {
+        Self {
+            ident: Ident::new(name),
+            splat: false,
+        }
+    }
+
+    fn splat(name: &str) -> Self {
+        Self {
+            ident: Ident::new(name),
+            splat: true,
+        }
+    }
+}
+
+impl Dynamic {
+    pub fn ident(&self) -> &Ident {
+        &self.ident
+    }
+
+    pub fn is_splat(&self) -> bool {
+        self.splat
+    }
+}
+
+impl Ident {
+    fn new(name: &str) -> Self {
+        Self(name.to_owned().into())
+    }
 }
 
 impl AsRef<str> for Ident {
@@ -76,9 +119,9 @@ impl Deref for Ident {
     }
 }
 
-impl From<String> for Ident {
-    fn from(value: String) -> Self {
-        Self(value.into_boxed_str())
+impl PartialEq<Ident> for Ident {
+    fn eq(&self, other: &Ident) -> bool {
+        *self.0 == *other.0
     }
 }
 
@@ -88,13 +131,55 @@ impl PartialEq<str> for Ident {
     }
 }
 
-impl<'a> Segment<'a> {
-    pub fn range_from(&self) -> (usize, Option<usize>) {
-        (self.range[0], None)
+impl PathParam {
+    pub(super) fn new(pattern: Dynamic, range: Option<[usize; 2]>) -> Self {
+        Self { pattern, range }
     }
 
-    pub fn range(&self) -> (usize, Option<usize>) {
-        (self.range[0], Some(self.range[1]))
+    pub(super) fn pattern(&self) -> &Dynamic {
+        &self.pattern
+    }
+
+    #[cfg(test)]
+    pub(super) fn range(&self) -> Option<[usize; 2]> {
+        self.range
+    }
+}
+
+impl PathParam {
+    pub fn ident(&self) -> &str {
+        self.pattern().ident()
+    }
+
+    pub fn is_splat(&self) -> bool {
+        self.pattern().is_splat()
+    }
+
+    pub fn slice<'a>(&self, path: &'a str) -> Option<&'a str> {
+        let range = self.range?;
+
+        if self.is_splat() {
+            path.get(range[0]..)
+        } else {
+            path.get(range[0]..range[1])
+        }
+    }
+}
+
+impl Pattern {
+    #[inline(always)]
+    pub fn matches(&self, predicate: Option<&str>) -> bool {
+        match self {
+            Self::Root => true,
+            Self::Static(lhs) => predicate.is_some_and(|rhs| lhs == rhs),
+            Self::Dynamic(pattern) => predicate.is_some() || pattern.is_splat(),
+        }
+    }
+}
+
+impl<'a> Segment<'a> {
+    pub fn range(&self) -> &[usize; 2] {
+        &self.range
     }
 
     pub fn value(&self) -> &'a str {
@@ -162,29 +247,23 @@ mod tests {
         "/",
     ];
 
-    fn get_expected_results() -> [Vec<(usize, Option<usize>)>; 16] {
+    fn get_expected_results() -> [Vec<[usize; 2]>; 16] {
         [
-            vec![(1, Some(5)), (6, Some(11))],
-            vec![(1, Some(9)), (10, Some(14)), (15, Some(18))],
-            vec![(1, Some(5)), (6, Some(11)), (12, Some(16)), (17, Some(21))],
-            vec![(1, Some(5)), (6, Some(13)), (14, Some(22))],
-            vec![(1, Some(9)), (10, Some(17))],
-            vec![(1, Some(7)), (8, Some(23))],
-            vec![(1, Some(5)), (6, Some(12))],
-            vec![(1, Some(10)), (11, Some(18))],
-            vec![(1, Some(4))],
-            vec![(1, Some(8)), (9, Some(16))],
-            vec![(1, Some(1)), (2, Some(6)), (7, Some(7)), (8, Some(13))],
-            vec![(1, Some(9)), (10, Some(10)), (11, Some(15)), (16, Some(19))],
-            vec![
-                (1, Some(5)),
-                (6, Some(11)),
-                (12, Some(16)),
-                (17, Some(17)),
-                (18, Some(22)),
-            ],
-            vec![(1, Some(5)), (6, Some(6)), (7, Some(14)), (15, Some(23))],
-            vec![(1, Some(9)), (10, Some(17)), (18, Some(18)), (19, Some(21))],
+            vec![[1, 5], [6, 11]],
+            vec![[1, 9], [10, 14], [15, 18]],
+            vec![[1, 5], [6, 11], [12, 16], [17, 21]],
+            vec![[1, 5], [6, 13], [14, 22]],
+            vec![[1, 9], [10, 17]],
+            vec![[1, 7], [8, 23]],
+            vec![[1, 5], [6, 12]],
+            vec![[1, 10], [11, 18]],
+            vec![[1, 4]],
+            vec![[1, 8], [9, 16]],
+            vec![[1, 1], [2, 6], [7, 7], [8, 13]],
+            vec![[1, 9], [10, 10], [11, 15], [16, 19]],
+            vec![[1, 5], [6, 11], [12, 16], [17, 17], [18, 22]],
+            vec![[1, 5], [6, 6], [7, 14], [15, 23]],
+            vec![[1, 9], [10, 17], [18, 18], [19, 21]],
             vec![],
         ]
     }
@@ -205,11 +284,11 @@ mod tests {
             );
 
             for (j, segment) in Split::new(path).enumerate() {
-                let (start, end) = expected_results[i][j];
-                let expect = (&path[start..end.unwrap()], (start, end));
+                let [start, end] = expected_results[i][j];
+                let expect = (&path[start..end], [start, end]);
 
                 assert_eq!(
-                    (segment.value(), segment.range()),
+                    (segment.value(), *segment.range()),
                     expect,
                     "{} ({}, {:?})",
                     path,

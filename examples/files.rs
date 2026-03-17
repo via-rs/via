@@ -12,8 +12,8 @@ async fn serve(request: Request, _: Next) -> via::Result {
     let mut file_path = {
         let path = request
             .param("path")
-            .decode()
-            .optional()?
+            .percent_decode()
+            .ok()?
             .unwrap_or_else(|| "index.html".into());
 
         PathBuf::from(PUBLIC_DIR).join(path.as_ref())

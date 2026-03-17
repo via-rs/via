@@ -17,11 +17,11 @@ use std::fmt::{self, Debug, Formatter};
 use crate::app::Shared;
 use crate::error::Error;
 use crate::response::{Finalize, Response, ResponseBuilder};
-use params::{Param, PathParamEntry};
+use params::PathParam;
 
 pub struct Envelope {
     parts: Parts,
-    params: Vec<PathParamEntry>,
+    params: Vec<via_router::PathParam>,
     cookies: CookieJar,
 }
 
@@ -105,8 +105,9 @@ impl Envelope {
     /// Returns a convenient wrapper around an optional reference to the path
     /// parameter in the request's uri with the provided `name`.
     ///
-    pub fn param<'b>(&self, name: &'b str) -> Param<'_, 'b> {
-        PathParams::new(self.uri().path(), &self.params).get(name)
+    pub fn param<'b>(&self, name: &'b str) -> PathParam<'_, 'b> {
+        let param = params::get(&self.params, name);
+        PathParam::new(self.uri().path(), param, name)
     }
 
     pub fn query<'a, T>(&'a self) -> crate::Result<T>
@@ -119,7 +120,7 @@ impl Envelope {
 
 impl Envelope {
     #[inline]
-    pub(crate) fn new(parts: Parts, params: Vec<PathParamEntry>) -> Self {
+    pub(crate) fn new(parts: Parts, params: Vec<via_router::PathParam>) -> Self {
         Self {
             parts,
             params,
@@ -195,7 +196,7 @@ impl<App> Request<App> {
                 Error: From<T::Error>;
 
             /// Returns reference to the cookies associated with the request.
-            pub fn param<'b>(&self, name: &'b str) -> Param<'_, 'b>;
+            pub fn param<'b>(&self, name: &'b str) -> PathParam<'_, 'b>;
 
             pub fn query<'a, T>(&'a self) -> crate::Result<T>
             where

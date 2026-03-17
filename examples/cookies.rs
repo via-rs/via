@@ -23,7 +23,7 @@ async fn hello(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
     // Increment the value of the visit counter.
     counter += 1;
 
-    let name = request.param("name").decode().into_result()?;
+    let name = request.param("name").percent_decode().ok_or_bad_request()?;
     let name = name.as_ref();
 
     // Print the number of times the user has visited the site to stdout.

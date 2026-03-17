@@ -7,7 +7,7 @@ const P12_PASSWORD: &str = "TLS_PKCS_PASSWORD";
 
 async fn hello(request: Request, _: Next) -> via::Result {
     // Get a reference to the path parameter `name` from the request uri.
-    let name = request.param("name").decode().into_result()?;
+    let name = request.param("name").percent_decode().ok_or_bad_request()?;
 
     // Send a plain text response with our greeting message.
     Response::build().text(format!("Hello, {}! (via TLS)", name))

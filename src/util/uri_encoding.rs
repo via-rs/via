@@ -1,7 +1,7 @@
 use percent_encoding::percent_decode_str;
 use std::borrow::Cow;
 
-use crate::{Error, raise};
+use crate::Error;
 
 #[derive(Clone, Copy, Debug)]
 pub enum UriEncoding {
@@ -14,12 +14,9 @@ impl UriEncoding {
         if let Self::Unencoded = *self {
             Ok(Cow::Borrowed(input))
         } else {
-            percent_decode_str(input).decode_utf8().or_else(|_| {
-                raise!(
-                    400,
-                    message = format!("invalid utf-8 sequence of bytes in \"{}\"", name),
-                )
-            })
+            percent_decode_str(input)
+                .decode_utf8()
+                .map_err(|_| Error::invalid_utf8_sequence(name))
         }
     }
 }

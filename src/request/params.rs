@@ -29,7 +29,7 @@ pub struct QueryParams<'a> {
     params: Vec<(Cow<'a, str>, Option<[Option<usize>; 2]>)>,
 }
 
-pub(crate) fn find_by_name<'a>(
+pub(crate) fn get<'a>(
     params: &'a [via_router::PathParam],
     name: &str,
 ) -> Option<&'a via_router::PathParam> {
@@ -50,7 +50,7 @@ fn query_pos_for_key(
 
 impl<'a> PathParams<'a> {
     pub fn get<'b>(&self, name: &'b str) -> PathParam<'a, 'b> {
-        PathParam::new(self.path, find_by_name(&self.params, name), name)
+        PathParam::new(self.path, get(&self.params, name), name)
     }
 }
 

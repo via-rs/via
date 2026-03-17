@@ -106,7 +106,7 @@ impl Envelope {
     /// parameter in the request's uri with the provided `name`.
     ///
     pub fn param<'b>(&self, name: &'b str) -> PathParam<'_, 'b> {
-        let param = params::find_by_name(&self.params, name);
+        let param = params::get(&self.params, name);
         PathParam::new(self.uri().path(), param, name)
     }
 

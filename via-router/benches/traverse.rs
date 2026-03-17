@@ -219,10 +219,8 @@ macro_rules! benches {
                     let mut traverse = router.traverse($path);
 
                     for (route, param) in &mut traverse {
-                        deque.extend(route.cloned());
-                        if let Some((name, span)) = param {
-                            params.push((name.clone(), span));
-                        }
+                        deque.extend(route);
+                        params.extend(param);
                     }
 
                     if spill_check && traverse.spilled() {

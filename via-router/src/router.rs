@@ -118,7 +118,7 @@ impl<T> Node<T> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn matches<'a>(&'a self, predicate: Option<&str>) -> SmallVec<[&'a Node<T>; 1]> {
         self.children
             .iter()

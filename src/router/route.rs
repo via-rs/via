@@ -3,6 +3,9 @@ use via_router::RouteMut;
 
 use crate::middleware::Middleware;
 
+/// A reborrow of a `&mut Route<App>` that can define a "responder" middleware.
+pub struct Index<'a, App>(Route<'a, App>);
+
 /// An entry in the route tree associated with a path segment pattern.
 ///
 /// Route definitions are composable and inherit middleware from their
@@ -52,7 +55,69 @@ pub struct Route<'a, App> {
     pub(super) entry: RouteMut<'a, Arc<dyn Middleware<App>>>,
 }
 
+impl<'a, App> Index<'a, App> {
+    /// Defines how the route should respond when it is visited.
+    ///
+    /// Unlike [`Route::to`], the mutable borrow of the route tree entry is
+    /// consumed and not returned. This prevents logical aliasing errors that
+    /// can occur when defining a tree-like structure with a builder style API.
+    pub fn to<T: Middleware<App> + 'static>(self, middleware: T) {
+        self.0.to(middleware);
+    }
+}
+
 impl<'a, App> Route<'a, App> {
+    /// Reborrow `self` in order to define a "responder" middleware.
+    ///
+    /// Route resolution is dependent on the sequence in which they are
+    /// defined. In order to encourage clean code and a linear progression of
+    /// route definitons, [`Self::to`] takes ownership of `self`. This prevents
+    /// descendants from implicitly defining routes on ancestors. [`Self::to`]
+    /// returns `self` to support builder-style method chains that allow you to
+    /// continue nesting descendant routes from an ancestor.
+    ///
+    /// Sometimes it can be beneficial to temporarily opt-out of the typical
+    /// flow of the router DSL. A common pattern used when defining routes at
+    /// scale is moving a route definition at the root of your application's
+    /// main fn directly into a scope. This allows common identifiers to be
+    /// reused without shadowing identifier names of sibling route definitions.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use via::{Next, Request};
+    ///
+    /// let mut app = via::app(());
+    /// let mut api = app.route("/api");
+    ///
+    /// api.route("/users").scope(|users| {
+    ///     users.uses(async |request: Request, next: Next| {
+    ///         // Confirm that the request is authenticated.
+    ///         // Then, call the next middleware.
+    ///         next.call(request).await
+    ///     });
+    ///
+    ///     let list = via::get(async |request: Request, _: Next| {
+    ///         todo!("Respond with a list of users");
+    ///     });
+    ///
+    ///     let show = via::get(async |request: Request, _: Next| {
+    ///         todo!("Respond with the user with id = :user-id.");
+    ///     });
+    ///
+    ///     // Reborrow `users` so it can be consumed by `.to(..)`.
+    ///     users.index().to(list);
+    ///
+    ///     // The mutable borrow of `users` is still live.
+    ///     users.route("/:user-id").to(show).scope(|user| {
+    ///         // Define descendents from /api/users/:user-id.
+    ///     });
+    /// });
+    /// ```
+    pub fn index(&mut self) -> Index<'_, App> {
+        Index(self.route("/"))
+    }
+
     /// Returns a new child route by appending the provided path to the current
     /// route.
     ///
@@ -139,10 +204,7 @@ impl<'a, App> Route<'a, App> {
     /// });
     /// ```
     ///
-    pub fn uses<T>(&mut self, middleware: T)
-    where
-        T: Middleware<App> + 'static,
-    {
+    pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T) {
         self.entry.middleware(Arc::new(middleware));
     }
 
@@ -173,10 +235,7 @@ impl<'a, App> Route<'a, App> {
     /// users.route("/:id").to(via::get(users::show));
     /// ```
     ///
-    pub fn to<T>(self, middleware: T) -> Self
-    where
-        T: Middleware<App> + 'static,
-    {
+    pub fn to<T: Middleware<App> + 'static>(self, middleware: T) -> Self {
         Self {
             entry: self.entry.to(Arc::new(middleware)),
         }

@@ -28,7 +28,7 @@ aws-lc-rs = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
 bitflags = "2"
 bytes = "1"
-cookie = { version = "0.18", features = ["percent-encode"] }
+cookie = { version = "0.18", features = ["percent-encode", "signed"] }
 delegate = "0.13"
 futures-core = "0.3"
 http = "1"
@@ -88,11 +88,8 @@ optional = true
 default-features = false
 
 [dev-dependencies]
-cookie = { version = "0.18", features = ["percent-encode", "signed"] }
 rustls-pemfile = "2"
-time = { version = "0.3" }
 tokio = { version = "1", features = ["macros", "io-util", "rt-multi-thread"] }
-uuid = { version = "1", features = ["v4", "serde"] }
 
 [[example]]
 name = "echo"

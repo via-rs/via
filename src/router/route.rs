@@ -208,7 +208,8 @@ impl<'a, App> Route<'a, App> {
         Index(self.route("/"))
     }
 
-    /// Defines a RESTful resource
+    /// Mount the provided RESTful resource at `self` and return a mutable
+    /// borrow to the "member" route.
     pub fn resource<T, U>(&mut self, resource: Resource<T, U>) -> Route<'_, App>
     where
         T: Middleware<App> + 'static,

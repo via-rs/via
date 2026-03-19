@@ -2,7 +2,7 @@ mod allow;
 mod route;
 
 pub use allow::*;
-pub use route::Route;
+pub use route::{Resource, ResourceBuilder, Route};
 
 pub(crate) use allow::MethodNotAllowed;
 
@@ -12,23 +12,21 @@ use via_router::Traverse;
 use crate::middleware::Middleware;
 
 pub(crate) struct Router<T> {
-    inner: via_router::Router<Arc<dyn Middleware<T>>>,
+    tree: via_router::Router<Arc<dyn Middleware<T>>>,
 }
 
 impl<T> Router<T> {
     pub fn new() -> Self {
         Self {
-            inner: via_router::Router::new(),
+            tree: via_router::Router::new(),
         }
     }
 
     pub fn route(&mut self, path: &'static str) -> Route<'_, T> {
-        Route {
-            entry: self.inner.route(path),
-        }
+        Route(self.tree.route(path))
     }
 
     pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, Arc<dyn Middleware<T>>> {
-        self.inner.traverse(path)
+        self.tree.traverse(path)
     }
 }

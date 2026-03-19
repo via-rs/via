@@ -4,8 +4,10 @@ mod shared;
 pub(crate) use service::ServiceAdapter;
 pub use shared::Shared;
 
+use delegate::delegate;
+
 use crate::middleware::Middleware;
-use crate::router::{Route, Router};
+use crate::router::{Resource, Route, Router};
 
 /// Configure routes and define shared global state.
 ///
@@ -84,22 +86,28 @@ pub fn app<App>(app: App) -> Via<App> {
 }
 
 impl<App> Via<App> {
-    /// Returns a new route as a child of the root path `/`.
-    ///
-    /// See also the usage example in [`Route::route`].
-    ///
-    pub fn route(&mut self, path: &'static str) -> Route<'_, App> {
-        self.router.route(path)
-    }
+    delegate! {
+        to self.router.route("/") {
+            /// Mount the provided RESTful resource at the root path `/`.
+            pub fn resource<T, U>(&mut self, resource: Resource<T, U>)
+            where
+                T: Middleware<App> + 'static,
+                U: Middleware<App> + 'static;
 
-    /// Append the provided middleware to applications call stack.
-    ///
-    /// Middleware attached with this method runs for every request.
-    ///
-    /// See also the usage example in [`Route::uses`].
-    ///
-    pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T) {
-        self.route("/").uses(middleware);
+            /// Append the provided middleware to applications call stack.
+            ///
+            /// Middleware attached with this method runs for every request.
+            ///
+            /// See also the usage example in [`Route::uses`].
+            pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T);
+        }
+
+        to self.router {
+            /// Returns a new route as a child of the root path `/`.
+            ///
+            /// See also the usage example in [`Route::route`].
+            pub fn route(&mut self, path: &'static str) -> Route<'_, App>;
+        }
     }
 }
 

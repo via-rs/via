@@ -1,13 +1,13 @@
 [package]
 name = "via"
 version = "2.0.0-gm.22"
-authors = ["Zachary Golba <zachary.golba@postlight.com>"]
+authors = ["Zachary Golba <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "An async multi-threaded web framework for people who appreciate simplicity."
 categories = ["web-programming::http-server"]
-homepage = "https://github.com/zacharygolba/via"
-repository = "https://github.com/zacharygolba/via"
+homepage = "https://github.com/via-rs/via"
+repository = "https://github.com/via-rs/via"
 
 [features]
 default = []

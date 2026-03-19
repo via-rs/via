@@ -7,7 +7,7 @@ pub use shared::Shared;
 use delegate::delegate;
 
 use crate::middleware::Middleware;
-use crate::router::{Resource, Route, Router};
+use crate::router::{Route, Router};
 
 /// Configure routes and define shared global state.
 ///

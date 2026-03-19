@@ -4,6 +4,8 @@ mod shared;
 pub(crate) use service::ServiceAdapter;
 pub use shared::Shared;
 
+use delegate::delegate;
+
 use crate::middleware::Middleware;
 use crate::router::{Route, Router};
 
@@ -84,22 +86,22 @@ pub fn app<App>(app: App) -> Via<App> {
 }
 
 impl<App> Via<App> {
-    /// Returns a new route as a child of the root path `/`.
-    ///
-    /// See also the usage example in [`Route::route`].
-    ///
-    pub fn route(&mut self, path: &'static str) -> Route<'_, App> {
-        self.router.route(path)
-    }
+    delegate! {
+        to self.router.route("/") {
+            /// Append the provided middleware to applications call stack.
+            ///
+            /// Middleware attached with this method runs for every request.
+            ///
+            /// See also the usage example in [`Route::uses`].
+            pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T);
+        }
 
-    /// Append the provided middleware to applications call stack.
-    ///
-    /// Middleware attached with this method runs for every request.
-    ///
-    /// See also the usage example in [`Route::uses`].
-    ///
-    pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T) {
-        self.route("/").uses(middleware);
+        to self.router {
+            /// Returns a new route as a child of the root path `/`.
+            ///
+            /// See also the usage example in [`Route::route`].
+            pub fn route(&mut self, path: &'static str) -> Route<'_, App>;
+        }
     }
 }
 

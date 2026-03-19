@@ -51,14 +51,104 @@ pub struct Index<'a, App>(Route<'a, App>);
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
 /// }
 /// ```
-pub struct Route<'a, App> {
-    pub(super) entry: RouteMut<'a, Arc<dyn Middleware<App>>>,
+pub struct Route<'a, App>(pub(super) RouteMut<'a, Arc<dyn Middleware<App>>>);
+
+/// Describes a RESTful resource by associating path segments with middleware.
+///
+/// A [`Resource`] can be constructed by passing an identifier to a module as well as
+/// a parameter name to the [`rest!`](crate::rest) macro.
+///
+/// # Example
+///
+/// ```
+/// use routes::{channels, reactions, threads};
+/// use via::rest;
+///
+/// // A chat application.
+/// let mut chat = via::app(());
+///
+/// // Our chat application nests routes that return data under an /api prefix.
+/// let mut api = chat.route("/api");
+///
+/// // Let `channel` be an entry to: /api/channels/:channel-id.
+/// let mut channel = api.resource(rest!(channels, ":channel-id"));
+/// //                             ^^^^
+/// // Source CRUD actions from routes::channels and define the following:
+/// //   - GET /api/channels/:channel-id ~> channels::index
+/// //   - POST /api/channels/:channel-id ~> channels::create
+/// //   - GET /api/channels/:channel-id ~> channels::show
+/// //   - PATCH /api/channels/:channel-id ~> channels::update
+/// //   - DELETE /api/channels/:channel-id ~> channels::destroy
+/// //
+/// // The `rest!` macro collapses channels::{index, create} and
+/// // channels::{destroy, show, update} into 2 respective middlewares.
+/// //
+/// // This amortizes the routing cost of HTTP method-based dispatch into a
+/// // single Arc::clone per request rather than a clone per method.
+///
+/// // Now we can define the resources that are owned by a channel as
+/// // descendants of `channel`.
+/// channel.scope(|channel| {
+///     // Let `thread` be an entry to: ./threads/:thread-id.
+///     let mut thread = channel.resource(rest!(threads, ":thread-id"));
+///
+///     // Since a reply is simply a thread that belongs to a thread we can use
+///     // the routes::threads module to define the replies resource.
+///     //
+///     // Let `reply` be an entry to: ./threads/:thread-id/replies/:reply-id.
+///     let mut reply = thread.resource(rest!(threads, ":reply-id", "replies"));
+///
+///     // Since `reply` is holding a mutable borrow to `thread`, we must first
+///     // define the reactions resource on `reply` to prevent a compile error
+///     // from the borrow checker.
+///     reply.resource(rest!(reactions, ":reaction-id"));
+///
+///     // Now we can define the reactions resource on `thread` since `reply`
+///     // is no longer referenced in this scope.
+///     thread.resource(rest!(reactions, ":reaction-id"));
+/// });
+/// #
+/// # macro_rules! action {
+/// #     ($name:ident) => {
+/// #         pub async fn $name(_: via::Request, _: via::Next) -> via::Result { todo!() }
+/// #     };
+/// # }
+/// #
+/// # macro_rules! resource {
+/// #     ($($name:ident),*) => {
+/// #         $(pub mod $name {
+/// #             action!(index);
+/// #             action!(create);
+/// #             action!(show);
+/// #             action!(update);
+/// #             action!(destroy);
+/// #         })*
+/// #     };
+/// # }
+/// #
+/// # mod routes {
+/// #     resource!(channels, reactions, threads);
+/// # }
+/// ```
+pub struct Resource<T, U> {
+    collection: WithPath<T>,
+    member: WithPath<U>,
+}
+
+#[doc(hidden)]
+pub struct ResourceBuilder<T> {
+    collection: WithPath<T>,
+}
+
+struct WithPath<T> {
+    path: &'static str,
+    middleware: T,
 }
 
 impl<'a, App> Index<'a, App> {
     /// Defines how the route should respond when it is visited.
     ///
-    /// Unlike [`Route::to`], the mutable borrow of the route tree entry is
+    /// Unlike [`Route::to`], the mutable borrow to the route tree entry is
     /// consumed and not returned. This prevents logical aliasing errors that
     /// can occur when defining a tree-like structure with a builder style API.
     pub fn to<T: Middleware<App> + 'static>(self, middleware: T) {
@@ -108,7 +198,7 @@ impl<'a, App> Route<'a, App> {
     ///     // Reborrow `users` so it can be consumed by `.to(..)`.
     ///     users.index().to(list);
     ///
-    ///     // The mutable borrow of `users` is still live.
+    ///     // The mutable borrow to `users` is still live.
     ///     users.route("/:user-id").to(show).scope(|user| {
     ///         // Define descendents from /api/users/:user-id.
     ///     });
@@ -116,6 +206,20 @@ impl<'a, App> Route<'a, App> {
     /// ```
     pub fn index(&mut self) -> Index<'_, App> {
         Index(self.route("/"))
+    }
+
+    /// Mount the provided RESTful resource at `self` and return a mutable
+    /// borrow to the "member" route.
+    pub fn resource<T, U>(&mut self, resource: Resource<T, U>) -> Route<'_, App>
+    where
+        T: Middleware<App> + 'static,
+        U: Middleware<App> + 'static,
+    {
+        self.route(resource.collection.path)
+            .to(resource.collection.middleware);
+
+        self.route(resource.member.path)
+            .to(resource.member.middleware)
     }
 
     /// Returns a new child route by appending the provided path to the current
@@ -172,9 +276,7 @@ impl<'a, App> Route<'a, App> {
     /// ```
     ///
     pub fn route(&mut self, path: &'static str) -> Route<'_, App> {
-        Route {
-            entry: self.entry.route(path),
-        }
+        Route(self.0.route(path))
     }
 
     /// Appends the provided middleware to the route's call stack.
@@ -205,7 +307,7 @@ impl<'a, App> Route<'a, App> {
     /// ```
     ///
     pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T) {
-        self.entry.middleware(Arc::new(middleware));
+        self.0.middleware(Arc::new(middleware));
     }
 
     /// Consumes self by calling the provided closure with a mutable reference
@@ -236,8 +338,22 @@ impl<'a, App> Route<'a, App> {
     /// ```
     ///
     pub fn to<T: Middleware<App> + 'static>(self, middleware: T) -> Self {
-        Self {
-            entry: self.entry.to(Arc::new(middleware)),
+        Self(self.0.to(Arc::new(middleware)))
+    }
+}
+
+#[doc(hidden)]
+impl<T> ResourceBuilder<T> {
+    pub fn collection(path: &'static str, middleware: T) -> ResourceBuilder<T> {
+        ResourceBuilder {
+            collection: WithPath { path, middleware },
+        }
+    }
+
+    pub fn member<U>(self, path: &'static str, middleware: U) -> Resource<T, U> {
+        Resource {
+            collection: self.collection,
+            member: WithPath { path, middleware },
         }
     }
 }

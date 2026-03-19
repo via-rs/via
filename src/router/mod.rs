@@ -11,8 +11,19 @@ use via_router::Traverse;
 
 use crate::middleware::Middleware;
 
+pub struct Resource<T, U> {
+    collection: (&'static str, T),
+    member: (&'static str, U),
+}
+
 pub(crate) struct Router<T> {
     inner: via_router::Router<Arc<dyn Middleware<T>>>,
+}
+
+impl<T, U> Resource<T, U> {
+    pub fn new(collection: (&'static str, T), member: (&'static str, U)) -> Self {
+        Self { collection, member }
+    }
 }
 
 impl<T> Router<T> {

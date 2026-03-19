@@ -12,6 +12,7 @@ pub struct PathParam<'a, 'b> {
     name: &'b str,
 }
 
+#[derive(Clone)]
 pub struct PathParams<'a> {
     path: &'a str,
     params: &'a [via_router::PathParam],

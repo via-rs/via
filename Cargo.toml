@@ -44,7 +44,7 @@ smallvec = { version = "1", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tokio-util = { version = "0.7", default-features = false }
 tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
-via-router = { version = "3.0.0-beta.34" }
+via-router = { path = "./via-router" }
 
 [dependencies.futures-util]
 version = "0.3"
@@ -101,7 +101,6 @@ path = "./examples/echo.rs"
 [[example]]
 name = "files"
 path = "./examples/files.rs"
-required-features = ["file"]
 
 [[example]]
 name = "hello"
@@ -113,9 +112,13 @@ path = "./examples/tls/native.rs"
 required-features = ["native-tls"]
 
 [[example]]
+name = "chat-api"
+path = "./examples/chat-api/main.rs"
+
+[[example]]
 name = "rustls"
 path = "./examples/tls/rustls.rs"
-required-features = ["ring", "rustls-23"]
+required-features = ["rustls-23"]
 
 [package.metadata.docs.rs]
 features = ["file", "native-tls", "rustls-23", "tokio-tungstenite"]

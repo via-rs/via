@@ -61,7 +61,7 @@ impl<'a, App> Index<'a, App> {
     /// Unlike [`Route::to`], the mutable borrow of the route tree entry is
     /// consumed and not returned. This prevents logical aliasing errors that
     /// can occur when defining a tree-like structure with a builder style API.
-    pub fn to(self, middleware: impl Middleware<App> + 'static) {
+    pub fn to<T: Middleware<App> + 'static>(self, middleware: T) {
         self.0.to(middleware);
     }
 }
@@ -204,7 +204,7 @@ impl<'a, App> Route<'a, App> {
     /// });
     /// ```
     ///
-    pub fn uses(&mut self, middleware: impl Middleware<App> + 'static) {
+    pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T) {
         self.entry.middleware(Arc::new(middleware));
     }
 
@@ -235,7 +235,7 @@ impl<'a, App> Route<'a, App> {
     /// users.route("/:id").to(via::get(users::show));
     /// ```
     ///
-    pub fn to(self, middleware: impl Middleware<App> + 'static) -> Self {
+    pub fn to<T: Middleware<App> + 'static>(self, middleware: T) -> Self {
         Self {
             entry: self.entry.to(Arc::new(middleware)),
         }

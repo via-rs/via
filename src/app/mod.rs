@@ -98,7 +98,7 @@ impl<App> Via<App> {
     ///
     /// See also the usage example in [`Route::uses`].
     ///
-    pub fn uses(&mut self, middleware: impl Middleware<App> + 'static) {
+    pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T) {
         self.route("/").uses(middleware);
     }
 }

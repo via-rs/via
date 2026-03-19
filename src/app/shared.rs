@@ -32,7 +32,6 @@ use std::sync::Arc;
 /// use serde::{Deserialize, Serialize};
 /// use tokio::io::{self, AsyncWriteExt, Sink};
 /// use tokio::sync::{Mutex, RwLock};
-/// use uuid::Uuid;
 /// use via::{Next, Payload, Request, Response};
 ///
 /// /// An imaginary analytics service.
@@ -52,7 +51,7 @@ use std::sync::Arc;
 ///
 /// #[derive(Clone, Serialize)]
 /// struct User {
-///     id: Uuid,
+///     id: i64,
 ///     email: String,
 ///     username: String,
 /// }
@@ -69,7 +68,7 @@ use std::sync::Arc;
 /// impl From<NewUser> for User {
 ///     fn from(new_user: NewUser) -> Self {
 ///         Self {
-///             id: Uuid::new_v4(),
+///             id: 1235812,
 ///             email: new_user.email,
 ///             username: new_user.username,
 ///         }
@@ -77,8 +76,8 @@ use std::sync::Arc;
 /// }
 ///
 /// async fn find_user(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
-///     // Parse a UUID from the :user-id parameter in the request URI.
-///     let id = request.param("user-id").parse::<Uuid>()?;
+///     // Parse an i64 from the :user-id parameter in the request URI.
+///     let id = request.param("user-id").parse::<i64>()?;
 ///
 ///     let user = {
 ///         // Acquire a read lock on the list of users.
@@ -113,7 +112,6 @@ use std::sync::Arc;
 /// # use serde::{Deserialize, Serialize};
 /// # use tokio::io::Sink;
 /// # use tokio::sync::{Mutex, RwLock};
-/// # use uuid::Uuid;
 /// # use via::{Next, Payload, Request, Response};
 /// #
 /// # /// An imaginary analytics service.
@@ -133,7 +131,7 @@ use std::sync::Arc;
 /// #
 /// # #[derive(Clone, Serialize)]
 /// # struct User {
-/// #     id: Uuid,
+/// #     id: i64,
 /// #     email: String,
 /// #     username: String,
 /// # }
@@ -141,7 +139,7 @@ use std::sync::Arc;
 /// # impl From<NewUser> for User {
 /// #     fn from(new_user: NewUser) -> Self {
 /// #         Self {
-/// #             id: Uuid::new_v4(),
+/// #             id: 1235812,
 /// #             email: new_user.email,
 /// #             username: new_user.username,
 /// #         }
@@ -253,7 +251,6 @@ use std::sync::Arc;
 /// # use serde::{Deserialize, Serialize};
 /// # use tokio::io::{self, AsyncWriteExt, Sink};
 /// # use tokio::sync::{Mutex, RwLock};
-/// # use uuid::Uuid;
 /// # use via::{Next, Request, Response};
 /// #
 /// # /// An imaginary analytics service.
@@ -267,7 +264,7 @@ use std::sync::Arc;
 /// #
 /// # #[derive(Clone, Serialize)]
 /// # struct User {
-/// #     id: Uuid,
+/// #     id: i64,
 /// #     email: String,
 /// #     username: String,
 /// # }
@@ -282,8 +279,8 @@ use std::sync::Arc;
 /// # }
 /// #
 /// async fn destroy_user(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
-///     // Parse a UUID from the :user-id parameter in the request URI.
-///     let id = request.param("user-id").parse::<Uuid>()?;
+///     // Parse an i64 from the :user-id parameter in the request URI.
+///     let id = request.param("user-id").parse::<i64>()?;
 ///
 ///     // This example favors anonymity over performance. Therefore, we clone
 ///     // app as early as we can.

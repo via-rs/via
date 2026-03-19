@@ -1,6 +1,6 @@
 use cookie::{Cookie, Key, SameSite};
 use std::process::ExitCode;
-use time::Duration;
+use std::time::Duration;
 use via::{Cookies, Error, Next, Request, Response, Server};
 
 struct Unicorn {
@@ -36,7 +36,7 @@ async fn hello(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
         Cookie::build(("counter", counter.to_string()))
             .http_only(true)
             .path("/")
-            .max_age(Duration::days(1))
+            .max_age(Duration::from_hours(24).try_into()?)
             .same_site(SameSite::Strict)
             .secure(true),
     );

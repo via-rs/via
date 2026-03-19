@@ -26,11 +26,10 @@ struct SetCookieError;
 /// ```no_run
 /// use cookie::{Cookie, SameSite};
 /// use std::process::ExitCode;
+/// use std::time::Duration;
 /// use via::{Cookies, Error, Next, Request, Response, Server};
 ///
 /// async fn greet(request: Request, _: Next) -> via::Result {
-///     use time::Duration;
-///
 ///     // `should_set_name` indicates whether "name" was sourced from the
 ///     // request URI. When false, the "name" cookie should not be modified.
 ///     //
@@ -50,7 +49,7 @@ struct SetCookieError;
 ///         response.cookies_mut().add(
 ///             Cookie::build(("name", name.into_owned()))
 ///                 .http_only(true)
-///                 .max_age(Duration::hours(1))
+///                 .max_age(Duration::from_hours(1).try_into()?)
 ///                 .path("/")
 ///                 .same_site(SameSite::Strict)
 ///                 .secure(true),
@@ -132,6 +131,7 @@ struct SetCookieError;
 /// use http::StatusCode;
 /// use serde::Deserialize;
 /// use std::process::ExitCode;
+/// use std::time::Duration;
 /// use via::{Cookies, Error, Next, Payload, Request, Response, Server};
 ///
 /// #[derive(Deserialize)]
@@ -145,8 +145,6 @@ struct SetCookieError;
 /// }
 ///
 /// async fn login(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
-///     use time::Duration;
-///
 ///     let (body, app) = request.into_future();
 ///     let params = body.await?.json::<Login>()?;
 ///
@@ -169,7 +167,7 @@ struct SetCookieError;
 ///     response.cookies_mut().signed_mut(&app.secret).add(
 ///         Cookie::build(("via-session", params.username))
 ///             .http_only(true)
-///             .max_age(Duration::hours(1))
+///             .max_age(Duration::from_hours(1).try_into()?)
 ///             .path("/")
 ///             .same_site(SameSite::Strict)
 ///             .secure(true),

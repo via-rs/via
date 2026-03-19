@@ -2,6 +2,9 @@ use std::sync::Arc;
 use via_router::RouteMut;
 
 use crate::middleware::Middleware;
+use crate::router::Resource;
+
+pub struct Index<'a, App>(Route<'a, App>);
 
 /// An entry in the route tree associated with a path segment pattern.
 ///
@@ -52,7 +55,29 @@ pub struct Route<'a, App> {
     pub(super) entry: RouteMut<'a, Arc<dyn Middleware<App>>>,
 }
 
+impl<'a, App> Index<'a, App> {
+    pub fn to<T>(self, middleware: T)
+    where
+        T: Middleware<App> + 'static,
+    {
+        self.0.to(middleware);
+    }
+}
+
 impl<'a, App> Route<'a, App> {
+    pub fn index(&mut self) -> Index<'_, App> {
+        Index(self.route("/"))
+    }
+
+    pub fn resource<T, U>(&mut self, resource: Resource<T, U>) -> Route<'_, App>
+    where
+        T: Middleware<App> + 'static,
+        U: Middleware<App> + 'static,
+    {
+        self.route(resource.collection.0).to(resource.collection.1);
+        self.route(resource.member.0).to(resource.member.1)
+    }
+
     /// Returns a new child route by appending the provided path to the current
     /// route.
     ///

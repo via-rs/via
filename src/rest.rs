@@ -1,4 +1,30 @@
 #[macro_export]
+macro_rules! resource {
+    ($mod:ident, $param:literal) => {
+        $crate::resource!(
+            #[expr]
+            $mod,
+            concat!("/", stringify!($mod)),
+            concat!("/", stringify!($mod), "/", $param)
+        )
+    };
+
+    ($mod:ident, $param:literal, $name:literal) => {
+        $crate::resource!(
+            #[expr]
+            $mod,
+            concat!("/", $name),
+            concat!("/", $name, "/", $param)
+        )
+    };
+
+    (#[expr] $mod:ident, $collection:expr, $member:expr) => {{
+        let (collection, member) = $crate::rest!($mod);
+        $crate::router::Resource::new(($collection, collection), ($member, member))
+    }};
+}
+
+#[macro_export]
 macro_rules! rest {
     ($mod:path) => {
         (
@@ -20,5 +46,28 @@ macro_rules! rest {
             stringify!($other),
             "\"",
         ));
+    }};
+
+    ($mod:ident, $param:literal) => {
+        $crate::resource!(
+            #[expr]
+            $mod,
+            concat!("/", stringify!($mod)),
+            concat!("/", stringify!($mod), "/", $param)
+        )
+    };
+
+    ($mod:ident, $param:literal, $name:literal) => {
+        $crate::resource!(
+            #[expr]
+            $mod,
+            concat!("/", $name),
+            concat!("/", $name, "/", $param)
+        )
+    };
+
+    (#[expr] $mod:ident, $collection:expr, $member:expr) => {{
+        let (collection, member) = $crate::rest!($mod);
+        $crate::router::Resource::new(($collection, collection), ($member, member))
     }};
 }

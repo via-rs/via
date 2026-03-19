@@ -88,12 +88,6 @@ pub fn app<App>(app: App) -> Via<App> {
 impl<App> Via<App> {
     delegate! {
         to self.router.route("/") {
-            /// Mount the provided RESTful resource at the root path `/`.
-            pub fn resource<T, U>(&mut self, resource: Resource<T, U>)
-            where
-                T: Middleware<App> + 'static,
-                U: Middleware<App> + 'static;
-
             /// Append the provided middleware to applications call stack.
             ///
             /// Middleware attached with this method runs for every request.

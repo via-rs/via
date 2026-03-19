@@ -105,7 +105,7 @@ impl<'a, App> Route<'a, App> {
     ///         todo!("Respond with the user with id = :user-id.");
     ///     });
     ///
-    ///     // Reborrow `users` so it can move with `Route::to()`.
+    ///     // Reborrow `users` so it can be consumed by `.to(..)`.
     ///     users.index().to(list);
     ///
     ///     // The mutable borrow of `users` is still live.

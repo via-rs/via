@@ -12,9 +12,10 @@ pub struct PathParam<'a, 'b> {
     name: &'b str,
 }
 
+#[derive(Clone, Copy)]
 pub struct PathParams<'a> {
     path: &'a str,
-    params: &'a [via_router::PathParam],
+    spans: &'a [via_router::PathParam],
 }
 
 pub struct QueryParam<'a, 'b> {
@@ -26,14 +27,14 @@ pub struct QueryParam<'a, 'b> {
 
 pub struct QueryParams<'a> {
     query: Option<&'a str>,
-    params: Vec<(Cow<'a, str>, Option<QueryParamRange>)>,
+    spans: Vec<(Cow<'a, str>, Option<QueryParamRange>)>,
 }
 
 pub(crate) fn get<'a>(
-    params: &'a [via_router::PathParam],
+    spans: &'a [via_router::PathParam],
     name: &str,
 ) -> Option<&'a via_router::PathParam> {
-    params.iter().find(|param| name == param.ident())
+    spans.iter().find(|param| name == param.ident())
 }
 
 fn query_pos_for_key(
@@ -50,27 +51,27 @@ fn query_pos_for_key(
 
 impl<'a> PathParams<'a> {
     pub fn get<'b>(&self, name: &'b str) -> PathParam<'a, 'b> {
-        PathParam::new(self.path, get(self.params, name), name)
+        PathParam::new(self.path, get(self.spans, name), name)
     }
 }
 
 impl<'a> PathParams<'a> {
-    pub(crate) fn new(path: &'a str, params: &'a [via_router::PathParam]) -> Self {
-        Self { path, params }
+    pub(crate) fn new(path: &'a str, spans: &'a [via_router::PathParam]) -> Self {
+        Self { path, spans }
     }
 }
 
 impl<'a> QueryParams<'a> {
     pub(crate) fn new(query: Option<&'a str>) -> Self {
-        let params = query
+        let spans = query
             .map(|input| QueryParser::new(input).collect())
             .unwrap_or_default();
 
-        Self { query, params }
+        Self { query, spans }
     }
 
     pub fn all<'b>(&self, name: &'b str) -> impl Iterator<Item = QueryParam<'a, 'b>> {
-        self.params.iter().filter_map(move |(key, value)| {
+        self.spans.iter().filter_map(move |(key, value)| {
             let value = value.as_ref();
 
             if key.as_ref() == name {
@@ -82,12 +83,12 @@ impl<'a> QueryParams<'a> {
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.params.iter().any(|(key, _)| key.as_ref() == name)
+        self.spans.iter().any(|(key, _)| key.as_ref() == name)
     }
 
     pub fn first<'b>(&self, name: &'b str) -> QueryParam<'a, 'b> {
         let range = self
-            .params
+            .spans
             .iter()
             .find_map(|(key, value)| query_pos_for_key(name, key, value));
 
@@ -96,7 +97,7 @@ impl<'a> QueryParams<'a> {
 
     pub fn last<'b>(&self, name: &'b str) -> QueryParam<'a, 'b> {
         let range = self
-            .params
+            .spans
             .iter()
             .rev()
             .find_map(|(key, value)| query_pos_for_key(name, key, value));

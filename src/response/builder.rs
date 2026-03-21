@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use bytes::Bytes;
 use futures_core::Stream;
 use http::{HeaderName, HeaderValue, StatusCode, Version, header};
@@ -66,7 +64,7 @@ impl ResponseBuilder {
     #[inline]
     pub fn extension<T>(self, extension: T) -> Self
     where
-        T: Clone + Any + Send + Sync + 'static,
+        T: Clone + Send + Sync + 'static,
     {
         Self {
             response: self.response.extension(extension),

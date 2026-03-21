@@ -5,6 +5,7 @@ use hyper::upgrade::OnUpgrade;
 use ring::digest::{Context as Hasher, SHA1_FOR_LEGACY_USE_ONLY};
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
+use tokio::task::coop;
 
 #[cfg(feature = "tokio-tungstenite")]
 use tokio_tungstenite::WebSocketStream;
@@ -89,15 +90,13 @@ async fn handshake(
 }
 
 async fn run<T, App, Await>(
-    stream: WebSocketStream<UpgradedIo>,
+    mut stream: WebSocketStream<UpgradedIo>,
     listener: Arc<T>,
     request: Request<App>,
 ) where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send,
 {
-    tokio::pin!(stream); // Stream is pin from now on.
-
     loop {
         let (facade, mut rendezvous) = Channel::new();
         let mut listen = Box::pin(listener(facade, request.clone()));
@@ -120,7 +119,7 @@ async fn run<T, App, Await>(
 
         let err = tokio::select! {
             result = listen.as_mut() => result.err(),
-            result = trx => match result {
+            result = coop::unconstrained(trx) => match result {
                 Ok(_) => listen.await.err(),
                 Err(error) => Some(error),
             },

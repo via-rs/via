@@ -153,7 +153,7 @@ impl Error {
         if let ErrorKindRef::Message(message) = self.kind() {
             Errors::new(status, message)
         } else {
-            let mut errors = Vec::with_capacity(18);
+            let mut errors = Vec::with_capacity(12);
             let mut source = self.source();
 
             while let Some(error) = source {

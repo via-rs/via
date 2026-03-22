@@ -38,7 +38,7 @@ impl Error for ServerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Http(error) => error.source(),
-            Self::Other(error) => (&**error).source(),
+            Self::Other(error) => Error::source(&**error),
         }
     }
 }

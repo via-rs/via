@@ -1,47 +1,33 @@
 use bytes::Bytes;
-use http::header;
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{Either, Full};
-use serde::Serialize;
 use std::fmt::{self, Debug, Formatter};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::{Finalize, Response, ResponseBuilder};
-use crate::error::{BoxError, Error};
-
-/// Serialize the contained type as an untagged JSON response.
-///
-/// # Example
-/// ```
-/// use serde::Serialize;
-/// use via::response::{Finalize, Json, Response};
-///
-/// #[derive(Serialize)]
-/// struct Cat {
-///     name: String,
-/// }
-///
-/// impl Cat {
-///     fn new(name: String) -> Self {
-///         Self { name }
-///     }
-/// }
-///
-/// let ciro = Cat::new("Ciro".to_owned());
-/// let response = Response::build().json(&ciro).unwrap();
-/// // body: { "data": { "name": "Ciro" } }
-///
-/// let ciro = Cat::new("Ciro".to_owned());
-/// let response = Json(&ciro).finalize(Response::build()).unwrap();
-/// // body: { "name": "Ciro" }
-/// ```
-///
-pub struct Json<'a, T>(pub &'a T);
+use crate::error::BoxError;
 
 pub struct ResponseBody {
     kind: Either<Full<Bytes>, BoxBody<Bytes, BoxError>>,
+}
+
+impl ResponseBody {
+    #[inline]
+    pub fn new(buf: Bytes) -> Self {
+        Self {
+            kind: Either::Left(Full::new(buf)),
+        }
+    }
+
+    pub fn boxed<T>(body: T) -> Self
+    where
+        T: Body<Data = Bytes, Error = BoxError> + Send + Sync + 'static,
+    {
+        Self {
+            kind: Either::Right(BoxBody::new(body)),
+        }
+    }
 }
 
 impl Body for ResponseBody {
@@ -84,18 +70,7 @@ impl Debug for ResponseBody {
 impl Default for ResponseBody {
     #[inline]
     fn default() -> Self {
-        Self {
-            kind: Either::Left(Default::default()),
-        }
-    }
-}
-
-impl From<Bytes> for ResponseBody {
-    #[inline]
-    fn from(buf: Bytes) -> Self {
-        Self {
-            kind: Either::Left(Full::new(buf)),
-        }
+        Self::new(Default::default())
     }
 }
 
@@ -108,42 +83,37 @@ impl From<BoxBody<Bytes, BoxError>> for ResponseBody {
     }
 }
 
+impl From<Bytes> for ResponseBody {
+    #[inline]
+    fn from(buf: Bytes) -> Self {
+        Self::new(buf)
+    }
+}
+
 impl From<String> for ResponseBody {
     #[inline]
     fn from(data: String) -> Self {
-        Self::from(data.into_bytes())
+        Self::new(Bytes::from(data.into_bytes()))
     }
 }
 
 impl From<&'_ str> for ResponseBody {
     #[inline]
     fn from(data: &str) -> Self {
-        Self::from(data.as_bytes())
+        Self::new(Bytes::copy_from_slice(data.as_bytes()))
     }
 }
 
 impl From<Vec<u8>> for ResponseBody {
     #[inline]
     fn from(data: Vec<u8>) -> Self {
-        Self::from(Bytes::from(data))
+        Self::new(Bytes::from(data))
     }
 }
 
 impl From<&'_ [u8]> for ResponseBody {
     #[inline]
     fn from(slice: &'_ [u8]) -> Self {
-        Self::from(Bytes::copy_from_slice(slice))
-    }
-}
-
-impl<T: Serialize> Finalize for Json<'_, T> {
-    #[inline]
-    fn finalize(self, response: ResponseBuilder) -> Result<Response, Error> {
-        let body = serde_json::to_string(self.0)?;
-
-        response
-            .header(header::CONTENT_LENGTH, body.len())
-            .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
-            .body(body.into())
+        Self::new(Bytes::copy_from_slice(slice))
     }
 }

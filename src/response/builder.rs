@@ -1,12 +1,13 @@
 use bytes::Bytes;
 use futures_core::Stream;
-use http::{HeaderName, HeaderValue, StatusCode, Version, header};
+use http::header::{CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING};
+use http::{HeaderName, HeaderValue, StatusCode, Version};
 use http_body::Frame;
 use http_body_util::StreamBody;
-use http_body_util::combinators::BoxBody;
 use serde::Serialize;
 
-use super::{Json, Response, ResponseBody};
+use super::Response;
+use super::body::ResponseBody;
 use crate::error::{BoxError, Error};
 
 /// Define how a type finalizes a [`ResponseBuilder`].
@@ -31,44 +32,40 @@ pub struct ResponseBuilder {
 
 impl ResponseBuilder {
     #[inline]
-    pub fn status<T>(self, status: T) -> Self
+    pub fn status<T>(mut self, status: T) -> Self
     where
         StatusCode: TryFrom<T>,
         <StatusCode as TryFrom<T>>::Error: Into<http::Error>,
     {
-        Self {
-            response: self.response.status(status),
-        }
+        self.response = self.response.status(status);
+        self
     }
 
     #[inline]
-    pub fn version(self, version: Version) -> Self {
-        Self {
-            response: self.response.version(version),
-        }
+    pub fn version(mut self, version: Version) -> Self {
+        self.response = self.response.version(version);
+        self
     }
 
     #[inline]
-    pub fn header<K, V>(self, key: K, value: V) -> Self
+    pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
         <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
         HeaderValue: TryFrom<V>,
         <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
     {
-        Self {
-            response: self.response.header(key, value),
-        }
+        self.response = self.response.header(key, value);
+        self
     }
 
     #[inline]
-    pub fn extension<T>(self, extension: T) -> Self
+    pub fn extension<T>(mut self, extension: T) -> Self
     where
         T: Clone + Send + Sync + 'static,
     {
-        Self {
-            response: self.response.extension(extension),
-        }
+        self.response = self.response.extension(extension);
+        self
     }
 
     #[inline]
@@ -77,34 +74,30 @@ impl ResponseBuilder {
     }
 
     #[inline]
-    pub fn json<T>(self, body: &T) -> Result<Response, Error>
-    where
-        T: Serialize,
-    {
-        #[derive(Serialize)]
-        struct Tagged<'a, D> {
-            data: &'a D,
-        }
+    pub fn json(self, body: &impl Serialize) -> Result<Response, Error> {
+        let body = serde_json::to_vec(body).map_err(Error::ser_json)?;
 
-        Json(&Tagged { data: body }).finalize(self)
+        self.header(CONTENT_LENGTH, body.len())
+            .header(CONTENT_TYPE, "application/json; charset=utf-8")
+            .body(ResponseBody::from(body))
     }
 
     #[inline]
     pub fn html(self, body: impl Into<String>) -> Result<Response, Error> {
-        let string = body.into();
+        let body = body.into();
 
-        self.header(header::CONTENT_LENGTH, string.len())
-            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .body(string.into())
+        self.header(CONTENT_LENGTH, body.len())
+            .header(CONTENT_TYPE, "text/html; charset=utf-8")
+            .body(ResponseBody::from(body))
     }
 
     #[inline]
     pub fn text(self, body: impl Into<String>) -> Result<Response, Error> {
-        let string = body.into();
+        let body = body.into();
 
-        self.header(header::CONTENT_LENGTH, string.len())
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(string.into())
+        self.header(CONTENT_LENGTH, body.len())
+            .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(ResponseBody::from(body))
     }
 
     /// Convert self into a [Response] with an empty payload.
@@ -122,7 +115,7 @@ where
     #[inline]
     fn finalize(self, builder: ResponseBuilder) -> Result<Response, Error> {
         builder
-            .header(header::TRANSFER_ENCODING, "chunked")
-            .body(BoxBody::new(StreamBody::new(self)).into())
+            .header(TRANSFER_ENCODING, "chunked")
+            .body(ResponseBody::boxed(StreamBody::new(self)))
     }
 }

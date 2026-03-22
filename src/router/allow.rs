@@ -154,17 +154,20 @@ impl Mask {
 }
 
 impl MethodNotAllowed {
-    pub fn allows(&self) -> String {
-        self.allow.iter().fold(String::new(), |allow, mask| {
+    pub(crate) fn allows(&self) -> Option<String> {
+        self.allow.iter().fold(None, |mut acc, mask| {
             let Some(method) = mask.as_str() else {
-                return allow;
+                return acc;
             };
 
-            if allow.is_empty() {
-                allow + method
+            if let Some(allow) = acc.as_mut() {
+                allow.push_str(", ");
+                allow.push_str(method);
             } else {
-                allow + ", " + method
+                acc = Some(String::with_capacity(64) + method);
             }
+
+            acc
         })
     }
 }

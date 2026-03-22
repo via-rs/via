@@ -5,10 +5,8 @@ mod raise;
 mod rescue;
 mod server;
 
-use http::header;
+use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use serde::{Serialize, Serializer};
-use smallvec::SmallVec;
-use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::{self, Error as IoError};
 
@@ -36,21 +34,31 @@ pub struct Error {
 
 #[derive(Debug)]
 enum ErrorKind {
+    AllowMethod(Box<MethodNotAllowed>),
     Message(String),
-    MethodNotAllowed(Box<MethodNotAllowed>),
     Other(BoxError),
+    Json(serde_json::Error),
+}
+
+enum ErrorKindRef<'a> {
+    AllowMethod(&'a MethodNotAllowed),
+    Message(&'a str),
+    Other(&'a (dyn std::error::Error + 'static)),
+    Json(&'a serde_json::Error),
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ErrorList<'a> {
+    Original(&'a str),
+    Chain(Vec<String>),
 }
 
 #[derive(Serialize)]
 struct Errors<'a> {
     #[serde(serialize_with = "serialize_status_code")]
     status: StatusCode,
-    errors: SmallVec<[ErrorMessage<'a>; 1]>,
-}
-
-#[derive(Serialize)]
-struct ErrorMessage<'a> {
-    message: Cow<'a, str>,
+    errors: ErrorList<'a>,
 }
 
 fn serialize_status_code<S>(status: &StatusCode, serializer: S) -> Result<S::Ok, S::Error>
@@ -125,9 +133,10 @@ impl Error {
     /// Returns a reference to the error source.
     ///
     pub fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match &self.kind {
-            ErrorKind::MethodNotAllowed(source) => Some(&**source),
-            ErrorKind::Other(source) => Some(&**source),
+        match self.kind() {
+            ErrorKindRef::AllowMethod(source) => Some(source),
+            ErrorKindRef::Other(source) => Some(source),
+            ErrorKindRef::Json(json) => Some(json),
             _ => None,
         }
     }
@@ -136,35 +145,27 @@ impl Error {
         self.status
     }
 
-    pub(crate) fn method_not_allowed(error: MethodNotAllowed) -> Self {
-        Self {
-            status: StatusCode::METHOD_NOT_ALLOWED,
-            kind: ErrorKind::MethodNotAllowed(Box::new(error)),
-        }
-    }
-
     pub(crate) fn status_mut(&mut self) -> &mut StatusCode {
         &mut self.status
     }
 
-    fn repr_json(&self, status_code: StatusCode) -> Errors<'_> {
-        let mut errors = Errors::new(status_code);
-
-        if let ErrorKind::Message(message) = &self.kind {
-            errors.push(Cow::Borrowed(message.as_str()));
+    fn repr_json(&self, status: StatusCode) -> Errors<'_> {
+        if let ErrorKindRef::Message(message) = self.kind() {
+            Errors::new(status, message)
         } else {
+            let mut errors = Vec::with_capacity(18);
             let mut source = self.source();
 
             while let Some(error) = source {
-                errors.push(Cow::Owned(error.to_string()));
+                errors.push(error.to_string());
                 source = error.source();
             }
 
             // Reverse the order of the error messages to match the call stack.
             errors.reverse();
-        }
 
-        errors
+            Errors::chain(status, errors)
+        }
     }
 }
 
@@ -172,8 +173,15 @@ impl Error {
     pub(crate) fn invalid_utf8_sequence(name: &str) -> Self {
         Self::with_status(
             StatusCode::BAD_REQUEST,
-            format!("invalid utf-8 sequence of bytes in \"{}\".", name),
+            format!("invalid utf-8 sequence of bytes in {}.", name),
         )
+    }
+
+    pub(crate) fn method_not_allowed(error: MethodNotAllowed) -> Self {
+        Self {
+            status: StatusCode::METHOD_NOT_ALLOWED,
+            kind: ErrorKind::AllowMethod(Box::new(error)),
+        }
     }
 
     pub(crate) fn require_path_param(name: &str) -> Self {
@@ -189,14 +197,39 @@ impl Error {
             format!("missing required query parameter: \"{}\".", name),
         )
     }
+
+    pub(crate) fn ser_json(source: serde_json::Error) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            kind: ErrorKind::Json(source),
+        }
+    }
+
+    pub(crate) fn de_json(source: serde_json::Error) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            kind: ErrorKind::Json(source),
+        }
+    }
+
+    #[inline]
+    fn kind(&self) -> ErrorKindRef<'_> {
+        match &self.kind {
+            ErrorKind::AllowMethod(source) => ErrorKindRef::AllowMethod(&**source),
+            ErrorKind::Message(message) => ErrorKindRef::Message(&**message),
+            ErrorKind::Other(source) => ErrorKindRef::Other(&**source),
+            ErrorKind::Json(source) => ErrorKindRef::Json(source),
+        }
+    }
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match &self.kind {
-            ErrorKind::Message(message) => Display::fmt(&**message, f),
-            ErrorKind::MethodNotAllowed(error) => Display::fmt(&**error, f),
-            ErrorKind::Other(source) => Display::fmt(&**source, f),
+        match self.kind() {
+            ErrorKindRef::Message(message) => Display::fmt(message, f),
+            ErrorKindRef::AllowMethod(source) => Display::fmt(source, f),
+            ErrorKindRef::Other(source) => Display::fmt(source, f),
+            ErrorKindRef::Json(source) => Display::fmt(source, f),
         }
     }
 }
@@ -220,9 +253,9 @@ impl From<Error> for Response {
 
         let headers = response.headers_mut();
 
-        headers.insert(header::CONTENT_LENGTH, content_len);
+        headers.insert(CONTENT_LENGTH, content_len);
         if let Ok(content_type) = "text/plain; charset=utf-8".try_into() {
-            headers.insert(header::CONTENT_TYPE, content_type);
+            headers.insert(CONTENT_TYPE, content_type);
         }
 
         response
@@ -236,19 +269,17 @@ impl Serialize for Error {
 }
 
 impl<'a> Errors<'a> {
-    pub(crate) fn new(status: StatusCode) -> Self {
+    fn new(status: StatusCode, message: &'a str) -> Self {
         Self {
             status,
-            errors: SmallVec::new(),
+            errors: ErrorList::Original(message),
         }
     }
 
-    pub(crate) fn push(&mut self, message: Cow<'a, str>) -> &mut Self {
-        self.errors.push(ErrorMessage { message });
-        self
-    }
-
-    fn reverse(&mut self) {
-        self.errors.reverse();
+    fn chain(status: StatusCode, chain: Vec<String>) -> Self {
+        Self {
+            status,
+            errors: ErrorList::Chain(chain),
+        }
     }
 }

@@ -5,7 +5,7 @@ mod redirect;
 #[cfg(feature = "file")]
 mod file;
 
-pub use body::{Json, ResponseBody};
+pub use body::ResponseBody;
 pub use builder::{Finalize, ResponseBuilder};
 use delegate::delegate;
 pub use redirect::Redirect;

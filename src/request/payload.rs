@@ -3,7 +3,6 @@ use http::{HeaderMap, StatusCode};
 use http_body::Body;
 use http_body_util::{LengthLimitError, Limited};
 use hyper::body::Incoming;
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -188,37 +187,30 @@ struct RequestPayload {
 }
 
 fn already_read<T>() -> Result<T, Error> {
-    raise!(500, message = "The request body has already been read.")
+    raise!(message = "a request body can only be read once.")
 }
 
+#[inline]
 fn deserialize_json<T>(buf: &[u8]) -> Result<T, Error>
 where
     T: DeserializeOwned,
 {
-    #[derive(Deserialize)]
-    struct Tagged<D> {
-        data: D,
-    }
-
-    match serde_json::from_slice(buf) {
-        Ok(Tagged { data }) => Ok(data),
-        Err(error) => raise!(400, error),
-    }
+    serde_json::from_slice(buf).map_err(Error::de_json)
 }
 
 #[inline]
 fn deserialize_utf8(data: Vec<u8>) -> Result<String, Error> {
-    String::from_utf8(data).or_else(|error| raise!(400, error.utf8_error()))
+    String::from_utf8(data).map_err(|_| Error::invalid_utf8_sequence("request body"))
 }
 
 fn into_future_error<T>(error: BoxError) -> Result<T, Error> {
     if error.is::<LengthLimitError>() {
         // Payload Too Large
-        raise!(413, boxed = error);
+        raise!(413, message = error.to_string());
+    } else {
+        // Bad Request
+        raise!(400, boxed = error);
     }
-
-    // Bad Request
-    raise!(400, boxed = error);
 }
 
 /// Zeroize the buffer backing the provided `Bytes`. Afterwards, the data in

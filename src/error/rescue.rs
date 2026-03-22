@@ -1,11 +1,12 @@
-use http::{StatusCode, header};
+use http::StatusCode;
+use http::header::ALLOW;
 use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use super::{Error, ErrorKind, Errors};
+use super::{Error, ErrorKindRef, Errors};
 use crate::middleware::{BoxFuture, Middleware};
-use crate::response::{Finalize, Json, Response, ResponseBuilder};
+use crate::response::{Finalize, Response, ResponseBuilder};
 use crate::{Next, Request};
 
 /// Recover from errors that occur in downstream middleware.
@@ -110,16 +111,6 @@ impl<'a> Sanitizer<'a> {
     fn status(&self) -> StatusCode {
         self.status.unwrap_or(self.error.status)
     }
-
-    fn repr_json(self, status: StatusCode) -> Errors<'a> {
-        if let Some(message) = self.message {
-            let mut errors = Errors::new(status);
-            errors.push(message);
-            errors
-        } else {
-            self.error.repr_json(status)
-        }
-    }
 }
 
 impl Display for Sanitizer<'_> {
@@ -133,14 +124,21 @@ impl Finalize for Sanitizer<'_> {
         let status = self.status();
         let mut builder = builder.status(status);
 
-        if let ErrorKind::MethodNotAllowed(error) = &self.error.kind {
-            builder = builder.header(header::ALLOW, error.allows());
+        if let ErrorKindRef::AllowMethod(error) = self.error.kind()
+            && let Some(allow) = error.allows()
+        {
+            builder = builder.header(ALLOW, allow);
         }
 
         if self.json {
-            Json(&self.repr_json(status)).finalize(builder)
+            let json = self.message.as_deref().map_or_else(
+                || self.error.repr_json(status),
+                |message| Errors::new(status, message),
+            );
+
+            builder.json(&json)
         } else if let Some(message) = self.message {
-            builder.text(message.into_owned())
+            builder.text(message)
         } else {
             builder.text(self.error.to_string())
         }

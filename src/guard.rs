@@ -19,7 +19,7 @@ use crate::{Middleware, Next, Request};
 ///
 /// app.route("/users").scope(|path| {
 ///     // Subsequently defined routes require a valid API key.
-///     path.uses(Guard::new(validate_api_key));
+///     path.middleware(Guard::new(validate_api_key));
 /// });
 ///
 /// fn validate_api_key(request: &Request) -> via::Result<()> {

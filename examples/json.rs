@@ -22,7 +22,7 @@ async fn hello(request: Request, _: Next) -> via::Result {
     // A future that resolves with the frames that compose the request body.
     let (future, _app) = request.into_future();
 
-    // Deserialize the fragmented request body to a Document<Hello>.
+    // Aggregate the frames of the request body and then deserialize a Document<Hello>.
     let body: Document<Hello> = future.await?.json()?;
 
     // Send a JSON response with our greeting message.
@@ -38,7 +38,7 @@ async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(());
 
     // Errors that occur further down the stack generate a JSON response.
-    app.uses(Rescue::with(|error| error.use_json()));
+    app.middleware(Rescue::with(|error| error.use_json()));
 
     // Define a route that responds to POST /hello.
     app.route("/hello").to(via::post(hello).or_deny());

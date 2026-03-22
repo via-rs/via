@@ -1,7 +1,7 @@
 [package]
 name = "via"
-version = "2.0.0-gm.25"
-authors = ["Zachary Golba <pino@hey.com>"]
+version = "2.0.0-gm.26"
+authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "An async multi-threaded web framework for people who appreciate simplicity."

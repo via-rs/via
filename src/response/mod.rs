@@ -7,6 +7,7 @@ mod file;
 
 pub use body::{Json, ResponseBody};
 pub use builder::{Finalize, ResponseBuilder};
+use delegate::delegate;
 pub use redirect::Redirect;
 
 #[cfg(feature = "file")]
@@ -35,24 +36,23 @@ impl Response {
         Default::default()
     }
 
-    pub fn status(&self) -> StatusCode {
-        self.inner().status()
-    }
+    delegate! {
+        to self.inner() {
+            pub fn status(&self) -> StatusCode;
+        }
 
-    pub fn status_mut(&mut self) -> &mut StatusCode {
-        self.inner_mut().status_mut()
-    }
+        to self.inner_mut() {
+            pub fn status_mut(&mut self) -> &mut StatusCode;
+        }
 
-    pub fn version(&self) -> Version {
-        self.inner().version()
-    }
+        to self.inner() {
+            pub fn version(&self) -> Version;
+            pub fn headers(&self) -> &HeaderMap;
+        }
 
-    pub fn headers(&self) -> &HeaderMap {
-        self.inner().headers()
-    }
-
-    pub fn headers_mut(&mut self) -> &mut HeaderMap {
-        self.inner_mut().headers_mut()
+        to self.inner_mut() {
+            pub fn headers_mut(&mut self) -> &mut HeaderMap;
+        }
     }
 
     /// Returns a reference to the response cookies.
@@ -65,12 +65,14 @@ impl Response {
         &mut self.cookies
     }
 
-    pub fn extensions(&self) -> &Extensions {
-        self.inner().extensions()
-    }
+    delegate! {
+        to self.inner() {
+            pub fn extensions(&self) -> &Extensions;
+        }
 
-    pub fn extensions_mut(&mut self) -> &mut Extensions {
-        self.inner_mut().extensions_mut()
+        to self.inner_mut() {
+            pub fn extensions_mut(&mut self) -> &mut Extensions;
+        }
     }
 
     #[inline]

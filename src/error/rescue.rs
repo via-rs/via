@@ -29,7 +29,7 @@ impl<F> Rescue<F>
 where
     F: Fn(&mut Sanitizer) + Send + Sync,
 {
-    pub fn with(recover: F) -> Self {
+    pub fn new(recover: F) -> Self {
         Self {
             recover: Recover(Box::new(recover)),
         }

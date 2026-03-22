@@ -21,6 +21,8 @@ struct Hello {
 async fn hello(request: Request, _: Next) -> via::Result {
     // A future that resolves with the frames that compose the request body.
     let (future, _app) = request.into_future();
+
+    // Deserialize the fragmented request body to a Document<Hello>.
     let body: Document<Hello> = future.await?.json()?;
 
     // Send a JSON response with our greeting message.

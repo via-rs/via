@@ -229,8 +229,7 @@ impl<App> Request<App> {
     /// copy of `App`.
     ///
     pub fn into_future(self) -> (Coalesce, Shared<App>) {
-        let Self { app, body, .. } = self;
-        (Coalesce::new(body), app)
+        (Coalesce::new(self.body), self.app)
     }
 
     /// Consumes the request and returns a tuple containing it's parts.

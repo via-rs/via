@@ -32,7 +32,7 @@ pub struct Index<'a, App>(Route<'a, App>);
 ///
 ///     // If an error occurs on a descendant of /api, respond with json.
 ///     // Siblings of /api must define their own error handling logic.
-///     api.middleware(Rescue::with(|sanitizer| sanitizer.use_json()));
+///     api.middleware(Rescue::new(|sanitizer| sanitizer.use_json()));
 ///
 ///     // Define a /users resource as a child of /api so the rescue and timeout
 ///     // middleware run before any of the middleware or responders defined in

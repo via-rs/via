@@ -186,6 +186,12 @@ impl<App> Request<App> {
         }
     }
 
+    /// Returns reference to the cookies associated with the request.
+    #[inline]
+    pub fn cookies(&self) -> &CookieJar {
+        self.envelope().cookies()
+    }
+
     /// Returns a mutable reference to the cookies associated with the request.
     pub fn cookies_mut(&mut self) -> &mut CookieJar {
         self.envelope.cookies_mut()

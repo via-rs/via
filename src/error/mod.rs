@@ -215,9 +215,9 @@ impl Error {
     #[inline]
     fn kind(&self) -> ErrorKindRef<'_> {
         match &self.kind {
-            ErrorKind::AllowMethod(source) => ErrorKindRef::AllowMethod(&**source),
-            ErrorKind::Message(message) => ErrorKindRef::Message(&**message),
-            ErrorKind::Other(source) => ErrorKindRef::Other(&**source),
+            ErrorKind::AllowMethod(source) => ErrorKindRef::AllowMethod(source),
+            ErrorKind::Message(message) => ErrorKindRef::Message(message),
+            ErrorKind::Other(source) => ErrorKindRef::Other(source.as_ref()),
             ErrorKind::Json(source) => ErrorKindRef::Json(source),
         }
     }

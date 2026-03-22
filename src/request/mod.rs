@@ -60,20 +60,6 @@ impl Envelope {
         &self.parts.headers
     }
 
-    /// Returns a reference to the associated extensions.
-    ///
-    #[inline]
-    pub fn extensions(&self) -> &Extensions {
-        &self.parts.extensions
-    }
-
-    /// Returns a mutable reference to the associated extensions.
-    ///
-    #[inline]
-    pub fn extensions_mut(&mut self) -> &mut Extensions {
-        &mut self.parts.extensions
-    }
-
     /// Returns reference to the cookies associated with the request.
     ///
     #[inline]
@@ -88,18 +74,18 @@ impl Envelope {
         &mut self.cookies
     }
 
-    pub fn params<'a, T>(&'a self) -> crate::Result<T>
-    where
-        T: TryFrom<PathParams<'a>>,
-        Error: From<T::Error>,
-    {
-        let params = PathParams::new(self.uri().path(), &self.params);
+    /// Returns a reference to the associated extensions.
+    ///
+    #[inline]
+    pub fn extensions(&self) -> &Extensions {
+        &self.parts.extensions
+    }
 
-        T::try_from(params).map_err(|error| {
-            let mut error = Error::from(error);
-            *error.status_mut() = StatusCode::BAD_REQUEST;
-            error
-        })
+    /// Returns a mutable reference to the associated extensions.
+    ///
+    #[inline]
+    pub fn extensions_mut(&mut self) -> &mut Extensions {
+        &mut self.parts.extensions
     }
 
     /// Returns a convenient wrapper around an optional reference to the path
@@ -115,6 +101,20 @@ impl Envelope {
         T: TryFrom<QueryParams<'a>, Error = Error>,
     {
         T::try_from(QueryParams::new(self.uri().query()))
+    }
+
+    pub fn params<'a, T>(&'a self) -> crate::Result<T>
+    where
+        T: TryFrom<PathParams<'a>>,
+        Error: From<T::Error>,
+    {
+        let params = PathParams::new(self.uri().path(), &self.params);
+
+        T::try_from(params).map_err(|error| {
+            let mut error = Error::from(error);
+            *error.status_mut() = StatusCode::BAD_REQUEST;
+            error
+        })
     }
 }
 
@@ -161,13 +161,13 @@ impl<App> Request<App> {
         &self.app
     }
 
+    pub fn app_owned(&self) -> Shared<App> {
+        self.app.clone()
+    }
+
     #[inline]
     pub fn envelope(&self) -> &Envelope {
         &self.envelope
-    }
-
-    pub fn envelope_mut(&mut self) -> &mut Envelope {
-        &mut self.envelope
     }
 
     delegate! {
@@ -183,37 +183,39 @@ impl<App> Request<App> {
 
             /// Returns a reference to the request's headers.
             pub fn headers(&self) -> &HeaderMap;
+        }
+    }
 
-            /// Returns a reference to the associated extensions.
-            pub fn extensions(&self) -> &Extensions;
+    /// Returns a mutable reference to the cookies associated with the request.
+    pub fn cookies_mut(&mut self) -> &mut CookieJar {
+        self.envelope.cookies_mut()
+    }
 
-            /// Returns a mutable reference to the associated extensions.
-            pub fn cookies(&self) -> &CookieJar;
+    /// Returns a reference to the associated extensions.
+    pub fn extensions(&self) -> &Extensions {
+        self.envelope().extensions()
+    }
 
-            pub fn params<'a, T>(&'a self) -> crate::Result<T>
-            where
-                T: TryFrom<PathParams<'a>>,
-                Error: From<T::Error>;
+    /// Returns a mutable reference to the associated extensions.
+    #[inline]
+    pub fn extensions_mut(&mut self) -> &mut Extensions {
+        self.envelope.extensions_mut()
+    }
 
+    delegate! {
+        to self.envelope() {
             /// Returns reference to the cookies associated with the request.
             pub fn param<'b>(&self, name: &'b str) -> PathParam<'_, 'b>;
 
             pub fn query<'a, T>(&'a self) -> crate::Result<T>
             where
                 T: TryFrom<QueryParams<'a>, Error = Error>;
+
+            pub fn params<'a, T>(&'a self) -> crate::Result<T>
+            where
+                T: TryFrom<PathParams<'a>>,
+                Error: From<T::Error>;
         }
-
-        to self.envelope_mut() {
-            /// Returns a mutable reference to the cookies associated with the
-            /// request.
-            pub fn cookies_mut(&mut self) -> &mut CookieJar;
-
-            pub fn extensions_mut(&mut self) -> &mut Extensions;
-        }
-    }
-
-    pub fn app_owned(&self) -> Shared<App> {
-        self.app.clone()
     }
 
     /// Consumes the request and returns a tuple containing a future that
@@ -248,7 +250,7 @@ impl<App> Finalize for Request<App> {
         use http::header::{CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING};
         use http_body_util::combinators::BoxBody;
 
-        let headers = self.envelope().headers();
+        let headers = self.headers();
 
         let mut response = match headers.get(CONTENT_LENGTH).cloned() {
             Some(content_length) => response.header(CONTENT_LENGTH, content_length),

@@ -38,7 +38,7 @@ async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(());
 
     // Errors that occur further down the stack generate a JSON response.
-    app.middleware(Rescue::with(|error| error.use_json()));
+    app.middleware(Rescue::new(|error| error.use_json()));
 
     // Define a route that responds to POST /hello.
     app.route("/hello").to(via::post(hello).or_deny());

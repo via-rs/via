@@ -2,17 +2,18 @@ use http::StatusCode;
 use http::header::ALLOW;
 use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
 
 use super::{Error, ErrorKindRef, Errors};
 use crate::middleware::{BoxFuture, Middleware};
 use crate::response::{Finalize, Response, ResponseBuilder};
 use crate::{Next, Request};
 
+struct Recover<F>(Box<F>);
+
 /// Recover from errors that occur in downstream middleware.
 ///
 pub struct Rescue<F> {
-    recover: Arc<F>,
+    recover: Recover<F>,
 }
 
 /// Customize how an [`Error`] is converted to a response.
@@ -30,18 +31,18 @@ where
 {
     pub fn with(recover: F) -> Self {
         Self {
-            recover: Arc::new(recover),
+            recover: Recover(Box::new(recover)),
         }
     }
 }
 
 impl<App, F> Middleware<App> for Rescue<F>
 where
-    F: Fn(&mut Sanitizer) + Send + Sync + 'static,
+    F: Fn(&mut Sanitizer) + Copy + Send + Sync + Sized + 'static,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        let recover = Arc::clone(&self.recover);
         let future = next.call(request);
+        let recover = *self.recover.0;
 
         Box::pin(async move {
             future.await.or_else(|error| {

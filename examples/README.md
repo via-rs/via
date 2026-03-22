@@ -123,7 +123,7 @@ curl -i http://localhost:8080/hello/Via
 # => set-cookie: counter=KQ0oZDwlGHwMP1dFYswZ16h5WE1jzF3ko03iE3JCtbM=1; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=86400
 # => date: Tue, 03 Mar 2026 21:35:33 GMT
 # =>
-# => Hello, Via!⏎
+# => Hello, Via!
 ```
 
 ## files
@@ -140,14 +140,25 @@ Visit http://localhost:8080/ in your browser to see a nostalgic web page with
 an image of space on the about page.
 
 
+## json
 
+A variation of the hello example that greets users that `POST /hello` with their name.
 
+### Running the Example
 
+```sh
+cargo run --example json
+```
 
+---
 
-
-
-
-
-
-
+```sh
+curl http://localhost:8080/hello -vd "{\"data\":{\"name\":\"Via\"}}"
+# => HTTP/1.1 200 OK
+# => content-length: 34
+# => content-type: application/json; charset=utf-8
+# => date: Sun, 22 Mar 2026 16:01:39 GMT
+# =>
+# => * Connection #0 to host localhost left intact
+# => {"data":{"message":"Hello, Via!"}}
+```

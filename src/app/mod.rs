@@ -45,7 +45,7 @@ use crate::router::{Route, Router};
 ///     });
 ///
 ///     // We can access our database in middleware with `request.app()`.
-///     app.uses(async |request: Request<Unicorn>, next: Next<Unicorn>| {
+///     app.middleware(async |request: Request<Unicorn>, next: Next<Unicorn>| {
 ///         // Print the debug output of our mock database pool to stdout.
 ///         println!("{:?}", request.app().pool());
 ///
@@ -92,8 +92,10 @@ impl<App> Via<App> {
             ///
             /// Middleware attached with this method runs for every request.
             ///
-            /// See also the usage example in [`Route::uses`].
-            pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T);
+            /// See also the usage example in [`Route::middleware`].
+            pub fn middleware<T>(&mut self, middleware: T)
+            where
+                T: Middleware<App> + 'static;
         }
 
         to self.router {

@@ -31,7 +31,7 @@ pub struct Index<'a, App>(Route<'a, App>);
 ///
 ///     // If an error occurs on a descendant of /api, respond with json.
 ///     // Siblings of /api must define their own error handling logic.
-///     api.uses(Rescue::with(|sanitizer| sanitizer.use_json()));
+///     api.middleware(Rescue::with(|sanitizer| sanitizer.use_json()));
 ///
 ///     // Define a /users resource as a child of /api so the rescue and timeout
 ///     // middleware run before any of the middleware or responders defined in
@@ -181,7 +181,7 @@ impl<'a, App> Route<'a, App> {
     /// let mut api = app.route("/api");
     ///
     /// api.route("/users").scope(|users| {
-    ///     users.uses(async |request: Request, next: Next| {
+    ///     users.middleware(async |request: Request, next: Next| {
     ///         // Confirm that the request is authenticated.
     ///         // Then, call the next middleware.
     ///         next.call(request).await
@@ -206,6 +206,40 @@ impl<'a, App> Route<'a, App> {
     /// ```
     pub fn index(&mut self) -> Index<'_, App> {
         Index(self.route("/"))
+    }
+
+    /// Appends the provided middleware to the route's call stack.
+    ///
+    /// Middleware attached to a route runs anytime the route’s path is a
+    /// prefix of the request path.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use via::{Next, Cookies, Request, raise};
+    /// # let mut app = via::app(());
+    /// #
+    /// // Provides application-wide support for request and response cookies.
+    /// app.middleware(Cookies::new().allow("is-admin"));
+    ///
+    /// // Requests made to /admin or any of its descendants must have an
+    /// // is-admin cookie present on the request.
+    /// app.route("/admin").middleware(async |request: Request, next: Next| {
+    ///     // We suggest using signed cookies to prevent tampering.
+    ///     // See the cookies example in our git repo for more information.
+    ///     if request.envelope().cookies().get("is-admin").is_none() {
+    ///         raise!(401);
+    ///     }
+    ///
+    ///     next.call(request).await
+    /// });
+    /// ```
+    ///
+    pub fn middleware<T>(&mut self, middleware: T)
+    where
+        T: Middleware<App> + 'static,
+    {
+        self.0.middleware(Arc::new(middleware));
     }
 
     /// Mount the provided RESTful resource at `self` and return a mutable
@@ -279,37 +313,6 @@ impl<'a, App> Route<'a, App> {
         Route(self.0.route(path))
     }
 
-    /// Appends the provided middleware to the route's call stack.
-    ///
-    /// Middleware attached to a route runs anytime the route’s path is a
-    /// prefix of the request path.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use via::{Next, Cookies, Request, raise};
-    /// # let mut app = via::app(());
-    /// #
-    /// // Provides application-wide support for request and response cookies.
-    /// app.uses(Cookies::new().allow("is-admin"));
-    ///
-    /// // Requests made to /admin or any of its descendants must have an
-    /// // is-admin cookie present on the request.
-    /// app.route("/admin").uses(async |request: Request, next: Next| {
-    ///     // We suggest using signed cookies to prevent tampering.
-    ///     // See the cookies example in our git repo for more information.
-    ///     if request.envelope().cookies().get("is-admin").is_none() {
-    ///         raise!(401);
-    ///     }
-    ///
-    ///     next.call(request).await
-    /// });
-    /// ```
-    ///
-    pub fn uses<T: Middleware<App> + 'static>(&mut self, middleware: T) {
-        self.0.middleware(Arc::new(middleware));
-    }
-
     /// Consumes self by calling the provided closure with a mutable reference
     /// to self.
     ///
@@ -337,7 +340,10 @@ impl<'a, App> Route<'a, App> {
     /// users.route("/:id").to(via::get(users::show));
     /// ```
     ///
-    pub fn to<T: Middleware<App> + 'static>(self, middleware: T) -> Self {
+    pub fn to<T>(self, middleware: T) -> Self
+    where
+        T: Middleware<App> + 'static,
+    {
         Self(self.0.to(Arc::new(middleware)))
     }
 }

@@ -29,7 +29,7 @@ impl Display for ServerError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Self::Http(error) => Display::fmt(error, f),
-            Self::Other(error) => Display::fmt(error, f),
+            Self::Other(error) => Display::fmt(&**error, f),
         }
     }
 }
@@ -38,7 +38,7 @@ impl Error for ServerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Http(error) => error.source(),
-            Self::Other(error) => error.source(),
+            Self::Other(error) => (&**error).source(),
         }
     }
 }

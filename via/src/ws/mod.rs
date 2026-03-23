@@ -1,11 +1,20 @@
+#[cfg(all(feature = "aws-lc-rs", feature = "ring"))]
+compile_error!("features \"aws-lc-rs\" and \"ring\" are mutually exclusive.");
+
+#[cfg(not(any(feature = "aws-lc-rs", feature = "ring")))]
+compile_error!("either \"aws-lc-rs\" or \"ring\" must be enabled to use the ws module.");
+
 #[cfg(all(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-compile_error!("Features \"tokio-tungstenite\" and \"tokio-websockets\" are mutually exclusive.");
+compile_error!("features \"tokio-tungstenite\" and \"tokio-websockets\" are mutually exclusive.");
 
 mod channel;
 mod error;
 mod io;
 mod request;
 mod upgrade;
+
+#[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
+mod sha1;
 
 pub use channel::*;
 pub use error::{Result, ResultExt};

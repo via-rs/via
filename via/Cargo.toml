@@ -12,8 +12,8 @@ repository = "https://github.com/via-rs/via"
 [features]
 default = []
 
-aws-lc-rs = ["dep:aws-lc-rs", "tokio-rustls/aws-lc-rs"]
-ring = ["dep:ring", "tokio-rustls/ring"]
+aws-lc-rs = ["dep:aws-lc-rs", "rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
+ring = ["dep:ring", "rustls/ring", "tokio-rustls/ring"]
 
 file = ["dep:httpdate", "tokio/fs"]
 

@@ -1,6 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use via::{Error, Next, Request, Response, Server};
+
+const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 async fn hello(request: Request, _: Next) -> via::Result {
     // Get a reference to the path parameter `name` from the request uri.
@@ -10,13 +12,22 @@ async fn hello(request: Request, _: Next) -> via::Result {
     Response::build().text(format!("Hello, {}! (via TLS)", name))
 }
 
+fn resolve_example_dir() -> PathBuf {
+    let manifest_dir = Path::new(CARGO_MANIFEST_DIR);
+
+    if CARGO_MANIFEST_DIR.ends_with("examples") {
+        manifest_dir.join("rustls")
+    } else {
+        manifest_dir.join("examples/rustls")
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode, Error> {
+    let example_dir = resolve_example_dir();
+
     // Make sure that our TLS config is present and valid before we proceed.
-    let tls_config = {
-        let path_to_this_file = PathBuf::from(file!());
-        tls::server_config(path_to_this_file.parent().unwrap())
-    };
+    let tls_config = tls::server_config(&example_dir)?;
 
     let mut app = via::app(());
 
@@ -33,41 +44,25 @@ mod tls {
     // https://github.com/rustls/tokio-rustls/blob/main/examples/server.rs
     //
 
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-    use std::fs::File;
-    use std::io::BufReader;
+    use std::fs;
     use std::path::Path;
     use tokio_rustls::rustls;
+    use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use via::Error;
 
     /// Load the certificate and private key from the file system and use them
     /// to create a rustls::ServerConfig.
     ///
-    pub fn server_config(load_from: &Path) -> rustls::ServerConfig {
-        let key = load_key(load_from.join("localhost.key"));
-        let certs = load_certs(load_from.join("localhost.cert"));
+    pub fn server_config(load_from: &Path) -> Result<rustls::ServerConfig, Error> {
+        let key = PrivateKeyDer::Pkcs1(fs::read(load_from.join("localhost.key"))?.into());
+        let cert = CertificateDer::from(fs::read(load_from.join("localhost.cert"))?);
         let mut config = rustls::ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(certs, key)
+            .with_single_cert(vec![cert], key)
             .expect("tls config is invalid or missing");
 
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
-        config
-    }
-
-    fn load_certs(path: impl AsRef<Path>) -> Vec<CertificateDer<'static>> {
-        let file = File::open(path).expect("cert file is missing or corrupt");
-        let mut reader = BufReader::new(file);
-
-        rustls_pemfile::certs(&mut reader)
-            .collect::<Result<_, _>>()
-            .expect("cert chain is missing or invalid")
-    }
-
-    fn load_key(path: impl AsRef<Path>) -> PrivateKeyDer<'static> {
-        File::open(path)
-            .and_then(|file| rustls_pemfile::private_key(&mut BufReader::new(file)))
-            .expect("failed to load private key")
-            .expect("private key is missing or invalid")
+        Ok(config)
     }
 }

@@ -7,17 +7,11 @@ use via::{Error, Middleware, Next, Request, Server};
 
 const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 const MAX_CONNECTIONS: usize = 500;
+
+#[cfg(feature = "fs")]
 const MAX_ALLOC_SIZE: usize = 1024 * 1024; // 1 MB
 
-macro_rules! trym {
-    ($result:expr) => {
-        match $result {
-            Ok(value) => value,
-            Err(error) => return Box::pin(async { Err(error) }),
-        }
-    };
-}
-
+#[allow(dead_code)]
 struct ServeFrom {
     /// The directory from which files can be served.
     public_dir: PathBuf,
@@ -53,21 +47,25 @@ impl ServeFrom {
 }
 
 #[cfg(not(feature = "fs"))]
-impl Middleware<()> for ServeFrom {
-    fn call(&self, _: Request, _: Next) -> via::BoxFuture {
+impl<T: Send + Sync> Middleware<T> for ServeFrom {
+    fn call(&self, _: Request<T>, _: Next<T>) -> via::BoxFuture {
         unreachable!()
     }
 }
 
 #[cfg(feature = "fs")]
-impl Middleware<()> for ServeFrom {
-    fn call(&self, request: Request, _: Next) -> via::BoxFuture {
+impl<T: Send + Sync> Middleware<T> for ServeFrom {
+    fn call(&self, request: Request<T>, _: Next<T>) -> via::BoxFuture {
         use std::ffi::OsStr;
         use via::response::File;
 
-        let path = trym!(request.param("path").ok()).unwrap_or("index.html".into());
-        let mut path = self.public_dir.join(path.as_ref());
         let semaphore = self.semaphore.clone();
+        let mut path = match request.param("path").ok() {
+            Err(error) => return Box::pin(async { Err(error) }),
+            Ok(option) => self
+                .public_dir
+                .join(option.as_deref().unwrap_or("index.html")),
+        };
 
         Box::pin(async move {
             let permit = semaphore.acquire_owned().await?;

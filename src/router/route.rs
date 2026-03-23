@@ -349,11 +349,11 @@ impl<'a, App> Route<'a, App> {
     }
 }
 
-impl<Tc, Uc, Mc, Mu> Resource<Branch<Tc, Uc>, Branch<Mc, Mu>> {
+impl<T, U, X, Y> Resource<Branch<T, X>, Branch<U, Y>> {
     /// Returns a `405 Method Not Allowed` response if the request method is
     /// not supported by the resource.
     #[allow(clippy::type_complexity)]
-    pub fn or_deny(self) -> Resource<Branch<Branch<Tc, Uc>, Deny>, Branch<Branch<Mc, Mu>, Deny>> {
+    pub fn or_deny(self) -> Resource<Branch<Branch<T, X>, Deny>, Branch<Branch<U, Y>, Deny>> {
         Resource {
             collection: WithPath {
                 path: self.collection.path,

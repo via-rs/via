@@ -10,7 +10,9 @@ use crate::{Error, raise};
 
 const WS_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-pub fn sha1(input: &[u8]) -> Result<[u8; 28], Error> {
+pub struct Base64EncodedDigest([u8; 28]);
+
+pub fn sha1(input: &[u8]) -> Result<Base64EncodedDigest, Error> {
     let mut hasher = Context::new(&SHA1_FOR_LEGACY_USE_ONLY);
     let mut buf = [0; 28];
 
@@ -21,5 +23,12 @@ pub fn sha1(input: &[u8]) -> Result<[u8; 28], Error> {
         raise!(message = "an error occurred while generating the websocket accept key.");
     };
 
-    Ok(buf)
+    Ok(Base64EncodedDigest(buf))
+}
+
+impl Base64EncodedDigest {
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
 }

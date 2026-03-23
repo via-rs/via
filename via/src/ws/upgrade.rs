@@ -239,7 +239,7 @@ where
 
         Box::pin(async move {
             // Safety: Base64 is guaranteed to be valid UTF-8.
-            let accept = unsafe { str::from_utf8_unchecked(&accept) };
+            let accept = unsafe { str::from_utf8_unchecked(accept.as_slice()) };
 
             Response::build()
                 .status(StatusCode::SWITCHING_PROTOCOLS)

@@ -88,7 +88,7 @@ cargo run --example rustls --features="<aws-lc-rs|ring> rustls-23"
 ---
 
 ```sh
-curl -k --http2-prior-knowledge https://localhost:8080/hello/Via
+curl -k https://localhost:8080/hello/Via
 # => Hello, Via! (via TLS)
 ```
 

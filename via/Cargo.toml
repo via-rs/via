@@ -90,4 +90,4 @@ default-features = false
 tokio = { version = "1", features = ["macros", "io-util", "rt-multi-thread"] }
 
 [package.metadata.docs.rs]
-features = ["file", "native-tls", "rustls-23", "tokio-tungstenite"]
+features = ["file", "native-tls", "ring", "rustls-23", "tokio-tungstenite"]

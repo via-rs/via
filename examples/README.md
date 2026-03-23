@@ -51,23 +51,13 @@ A native-tls version of the hello world example in the [README](../README.md).
 Run the following command to generate a self-signed .p12 cert and .env file.
 
 ```sh
-./tls/self-sign-native.sh
+./native-tls/self-sign-cert.sh
 ```
 
 ### Running the Example
 
-**Bash/Zsh/Sh**
-
 ```sh
-set -a; . ./examples/tls/.env; set +a; \
-  cargo run --example native-tls --features="native-tls"
-```
-
-**Fish**
-
-```sh
-env (cat ./examples/tls/.env | string split \n | string match -r '.*') \
-  cargo run --example native-tls --features="native-tls"
+cargo run --example native-tls --features="native-tls"
 ```
 
 ---
@@ -86,19 +76,19 @@ A rustls version of the hello world example in the [README](../README.md).
 Run the following command to generate a self-signed cert and key.
 
 ```sh
-./tls/self-sign-rustls.sh
+./rustls/self-sign-cert.sh
 ```
 
 ### Running the Example
 
 ```sh
-cargo run --example rustls --features="http2 ring rustls"
+cargo run --example rustls --features="<aws-lc-rs|ring> rustls-23"
 ```
 
 ---
 
 ```sh
-curl -k --http2-prior-knowledge https://localhost:8080/hello/Via
+curl -k https://localhost:8080/hello/Via
 # => Hello, Via! (via TLS)
 ```
 
@@ -133,7 +123,7 @@ A simple file server with hardcoded mime type resolution.
 ### Running the Example
 
 ```sh
-cargo run --example files --features="file"
+cargo run --example files --features="fs"
 ```
 
 Visit http://localhost:8080/ in your browser to see a nostalgic web page with

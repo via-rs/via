@@ -1,0 +1,58 @@
+[package]
+name = "examples"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+fs = ["via/file"]
+
+aws-lc-rs = ["via/aws-lc-rs"]
+ring = ["via/ring"]
+
+native-tls = ["via/native-tls"]
+rustls-23 = ["via/rustls-23"]
+
+tokio-tungstenite = ["via/tokio-tungstenite"]
+tokio-websockets = ["via/tokio-websockets"]
+
+[[example]]
+name = "cookies"
+path = "./cookies.rs"
+
+[[example]]
+name = "echo"
+path = "./echo.rs"
+
+[[example]]
+name = "files"
+path = "./files/main.rs"
+
+[[example]]
+name = "hello"
+path = "./hello.rs"
+
+[[example]]
+name = "json"
+path = "./json.rs"
+
+[[example]]
+name = "native-tls"
+path = "./native-tls/main.rs"
+required-features = ["native-tls"]
+
+[[example]]
+name = "rustls"
+path = "./rustls/main.rs"
+required-features = ["rustls-23"]
+
+[dev-dependencies]
+cookie = { version = "0.18", features = ["percent-encode", "signed"] }
+dotenvy = "0.15"
+mime_guess = "2"
+native-tls = { version = "0.2", features = ["alpn"] }
+tokio-rustls = { version = "0.26", default-features = false }
+serde = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+via = { path = "../via" }

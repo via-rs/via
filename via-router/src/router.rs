@@ -156,6 +156,7 @@ impl<T> Node<T> {
 }
 
 impl<T: Clone> Router<T> {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             tree: Node::new(Pattern::Root),

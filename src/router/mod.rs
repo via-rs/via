@@ -2,7 +2,7 @@ mod allow;
 mod route;
 
 pub use allow::*;
-pub use route::{Resource, ResourceBuilder, Route};
+pub use route::{Index, Resource, ResourceBuilder, Route};
 
 pub(crate) use allow::MethodNotAllowed;
 

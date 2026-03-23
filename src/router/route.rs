@@ -152,7 +152,10 @@ impl<'a, App> Index<'a, App> {
     /// Unlike [`Route::to`], the mutable borrow to the route tree entry is
     /// consumed and not returned. This prevents logical aliasing errors that
     /// can occur when defining a tree-like structure with a builder style API.
-    pub fn to<T: Middleware<App> + 'static>(self, middleware: T) {
+    pub fn to<T>(self, middleware: T)
+    where
+        T: Middleware<App> + 'static,
+    {
         self.0.to(middleware);
     }
 }

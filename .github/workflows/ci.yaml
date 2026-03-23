@@ -41,9 +41,8 @@ jobs:
       - name: test
         uses: actions-rs/cargo@v1
         with:
-          working-directory: ./via
           command: test
-          args: --features="ring tokio-tungstenite"
+          args: --package via --features="ring tokio-tungstenite"
 
       - name: test router
         uses: actions-rs/cargo@v1

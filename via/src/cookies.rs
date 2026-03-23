@@ -127,7 +127,7 @@ struct SetCookieError;
 ///   the `https:` scheme or to `localhost`.
 ///
 /// ```no_run
-/// use cookie::{Cookie, Key, SameSite};
+/// use cookie::{Cookie, SameSite};
 /// use http::StatusCode;
 /// use serde::Deserialize;
 /// use std::process::ExitCode;
@@ -140,11 +140,7 @@ struct SetCookieError;
 ///     password: String,
 /// }
 ///
-/// struct Unicorn {
-///     secret: Key,
-/// }
-///
-/// async fn login(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
+/// async fn login(request: Request, _: Next) -> via::Result {
 ///     let (body, app) = request.into_future();
 ///     let params = body.await?.json::<Login>()?;
 ///
@@ -164,7 +160,7 @@ struct SetCookieError;
 ///     // Add our session cookie that contains the username of the active user
 ///     // to our signed cookie jar. The value of the cookie will be signed
 ///     // and encrypted before it is included as a set-cookie header.
-///     response.cookies_mut().signed_mut(&app.secret).add(
+///     response.cookies_mut().add(
 ///         Cookie::build(("via-session", params.username))
 ///             .http_only(true)
 ///             .max_age(Duration::from_hours(1).try_into()?)
@@ -178,12 +174,7 @@ struct SetCookieError;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
-///     let mut app = via::app(Unicorn {
-///         secret: std::env::var("VIA_SECRET_KEY")
-///             .map(|secret| secret.as_bytes().try_into())
-///             .expect("missing required env var: VIA_SECRET_KEY")
-///             .expect("unexpected end of input while parsing VIA_SECRET_KEY"),
-///     });
+///     let mut app = via::app(());
 ///
 ///     // Unencoded cookie support.
 ///     app.middleware(Cookies::new().allow("via-session"));

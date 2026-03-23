@@ -1,8 +1,6 @@
-use base64::engine::{Engine, general_purpose::STANDARD as base64};
 use futures_util::{SinkExt, StreamExt};
 use http::{Method, StatusCode, header};
 use hyper::upgrade::OnUpgrade;
-use ring::digest::{Context as Hasher, SHA1_FOR_LEGACY_USE_ONLY};
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
 
@@ -14,11 +12,11 @@ use tokio_websockets::WebSocketStream;
 
 use super::error::try_rescue;
 use super::io::UpgradedIo;
+use super::sha1::sha1;
 use super::{Channel, Request};
 use crate::{BoxFuture, Error, Middleware, Next, Response, raise};
 
 const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
-const WS_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 pub struct Ws<T> {
     listener: Arc<T>,
@@ -30,15 +28,6 @@ struct WsConfig {
     buffer_size: usize,
     max_frame_size: Option<usize>,
     max_message_size: Option<usize>,
-}
-
-fn gen_accept_key(key: &[u8]) -> String {
-    let mut hasher = Hasher::new(&SHA1_FOR_LEGACY_USE_ONLY);
-
-    hasher.update(key);
-    hasher.update(WS_ACCEPT_GUID);
-
-    base64.encode(hasher.finish())
 }
 
 #[cfg(feature = "tokio-tungstenite")]
@@ -211,14 +200,18 @@ where
             });
         }
 
-        let Some(accept) = request
+        let accept = match request
             .headers()
             .get(header::SEC_WEBSOCKET_KEY)
-            .map(|value| gen_accept_key(value.as_bytes()))
-        else {
-            return Box::pin(async {
-                raise!(400, message = "missing required header: sec-websocket-key");
-            });
+            .map(|value| sha1(value.as_bytes()))
+        {
+            Some(Ok(buf)) => buf,
+            Some(Err(error)) => return Box::pin(async { Err(error) }),
+            None => {
+                return Box::pin(async {
+                    raise!(400, message = "missing required header: sec-websocket-key");
+                });
+            }
         };
 
         tokio::spawn({
@@ -244,7 +237,10 @@ where
             }
         });
 
-        Box::pin(async {
+        Box::pin(async move {
+            // Safety: Base64 is guaranteed to be valid UTF-8.
+            let accept = unsafe { str::from_utf8_unchecked(&accept) };
+
             Response::build()
                 .status(StatusCode::SWITCHING_PROTOCOLS)
                 .header(header::CONNECTION, "upgrade")

@@ -5,12 +5,18 @@ async fn echo(request: Request, _: Next) -> via::Result {
     request.finalize(Response::build())
 }
 
-#[cfg(not(any(feature = "tokio-tungstenite", feature = "tokio-websockets")))]
+#[cfg(not(all(
+    any(feature = "aws-lc-rs", feature = "ring"),
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets")
+)))]
 async fn relay(request: Request, next: Next) -> via::Result {
     next.call(request).await
 }
 
-#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+#[cfg(all(
+    any(feature = "aws-lc-rs", feature = "ring"),
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets")
+))]
 async fn relay(mut channel: via::ws::Channel, _: via::ws::Request) -> via::ws::Result {
     while let Some(message) = channel.recv().await {
         if message.is_close() {

@@ -20,8 +20,8 @@ file = ["dep:httpdate", "tokio/fs"]
 native-tls = ["dep:native-tls", "dep:tokio-native-tls", "hyper/http2"]
 rustls-23 = ["dep:rustls", "dep:tokio-rustls", "hyper/http2"]
 
-tokio-tungstenite = ["dep:base64", "dep:futures-util", "dep:ring", "dep:tungstenite", "dep:tokio-tungstenite"]
-tokio-websockets = ["dep:base64", "dep:futures-util", "dep:ring", "dep:tokio-websockets"]
+tokio-tungstenite = ["dep:base64", "dep:futures-util", "dep:tungstenite", "dep:tokio-tungstenite"]
+tokio-websockets = ["dep:base64", "dep:futures-util", "dep:tokio-websockets"]
 
 [dependencies]
 aws-lc-rs = { version = "1", optional = true }

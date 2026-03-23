@@ -38,11 +38,12 @@ jobs:
           command: check
           args: --all --bins --examples
 
-      - name: test via
+      - name: test
         uses: actions-rs/cargo@v1
         with:
+          working-directory: ./via
           command: test
-          args: --package via --features="ring tokio-tungstenite"
+          args: --features="ring tokio-tungstenite"
 
       - name: test router
         uses: actions-rs/cargo@v1

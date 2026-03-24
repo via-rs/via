@@ -1,6 +1,6 @@
 use futures_core::{FusedFuture, Future, Stream};
 use futures_sink::Sink;
-use http::{Method, StatusCode, header};
+use http::{HeaderValue, Method, StatusCode, header};
 use hyper::upgrade::OnUpgrade;
 use std::marker::PhantomPinned;
 use std::ops::ControlFlow::{Break, Continue};
@@ -55,6 +55,15 @@ struct WsConfig {
     buffer_size: usize,
     max_frame_size: Option<usize>,
     max_message_size: Option<usize>,
+}
+
+#[inline(always)]
+fn has_token(header: &HeaderValue, token: &str) -> bool {
+    header.to_str().is_ok_and(|input| {
+        input
+            .split(',')
+            .any(|value| value.trim_ascii().eq_ignore_ascii_case(token))
+    })
 }
 
 #[cfg(feature = "tokio-tungstenite")]
@@ -313,8 +322,7 @@ where
                 .get(header::CONNECTION)
                 .zip(request.headers().get(header::UPGRADE))
                 .is_some_and(|(connection, upgrade)| {
-                    connection.as_bytes().eq_ignore_ascii_case(b"upgrade")
-                        && upgrade.as_bytes().eq_ignore_ascii_case(b"websocket")
+                    has_token(connection, "upgrade") && has_token(upgrade, "websocket")
                 })
         {
             return next.call(request);
@@ -326,36 +334,32 @@ where
             .is_none_or(|value| value.as_bytes() != b"13")
         {
             return Box::pin(async {
-                raise!(400, message = "sec-websocket-version header must be \"13\"");
+                raise!(426, message = "sec-websocket-version must be \"13\".");
             });
         }
 
         let accept = match request
             .headers()
             .get(header::SEC_WEBSOCKET_KEY)
-            .map(|value| sha1(value.as_bytes()))
-        {
-            Some(Ok(buf)) => buf,
-            Some(Err(error)) => return Box::pin(async { Err(error) }),
-            None => {
-                return Box::pin(async {
-                    raise!(400, message = "missing required header: sec-websocket-key");
-                });
-            }
+            .and_then(|value| value.to_str().ok().map(sha1))
+            .unwrap_or_else(|| {
+                let message = "missing required header \"sec-websocket-key\"";
+                raise!(400, message = message);
+            }) {
+            Ok(digest) => digest,
+            Err(error) => return Box::pin(async { Err(error) }),
+        };
+
+        let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
+            return Box::pin(async {
+                raise!(message = "connection does not support websocket upgrades");
+            });
         };
 
         let listener = Arc::clone(&self.listener);
         let config = self.config.clone();
 
         Box::pin(async move {
-            let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
-                raise!(message = "connection does not support websocket upgrades");
-            };
-
-            let Ok(accept) = str::from_utf8(accept.as_slice()) else {
-                raise!(message = "fail to base64 encode header \"sec-websocket-accept\".");
-            };
-
             let request = Request::new(request);
 
             tokio::spawn(async move {
@@ -372,7 +376,7 @@ where
             Response::build()
                 .status(StatusCode::SWITCHING_PROTOCOLS)
                 .header(header::CONNECTION, "upgrade")
-                .header(header::SEC_WEBSOCKET_ACCEPT, accept)
+                .header(header::SEC_WEBSOCKET_ACCEPT, accept.as_str())
                 .header(header::UPGRADE, "websocket")
                 .finish()
         })

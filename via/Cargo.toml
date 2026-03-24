@@ -10,7 +10,7 @@ homepage = "https://github.com/via-rs/via"
 repository = "https://github.com/via-rs/via"
 
 [features]
-default = []
+default = ["ring", "tokio-tungstenite"]
 
 aws-lc-rs = ["dep:aws-lc-rs", "rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
 ring = ["dep:ring", "rustls/ring", "tokio-rustls/ring"]
@@ -20,8 +20,8 @@ file = ["dep:httpdate", "tokio/fs"]
 native-tls = ["dep:native-tls", "dep:tokio-native-tls", "hyper/http2"]
 rustls-23 = ["dep:rustls", "dep:tokio-rustls", "hyper/http2"]
 
-tokio-tungstenite = ["dep:base64", "dep:futures-util", "dep:tungstenite", "dep:tokio-tungstenite"]
-tokio-websockets = ["dep:base64", "dep:futures-util", "dep:tokio-websockets"]
+tokio-tungstenite = ["dep:base64", "dep:futures-sink", "dep:tungstenite", "dep:tokio-tungstenite"]
+tokio-websockets = ["dep:base64", "dep:futures-sink", "dep:tokio-websockets"]
 
 [dependencies]
 aws-lc-rs = { version = "1", optional = true }
@@ -31,6 +31,7 @@ bytes = "1"
 cookie = { version = "0.18", features = ["percent-encode"] }
 delegate = "0.13"
 futures-core = "0.3"
+futures-sink = { version = "0.3", optional = true }
 http = "1"
 http-body = "1"
 http-body-util = "0.1"
@@ -44,12 +45,6 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal
 tokio-util = { version = "0.7", default-features = false }
 tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
 via-router = { version = "3.0.0-beta.34" }
-
-[dependencies.futures-util]
-version = "0.3"
-default-features = false
-features = ["sink", "std"]
-optional = true
 
 [dependencies.native-tls]
 version = "0.2"
@@ -68,7 +63,6 @@ default-features = false
 [dependencies.tokio-tungstenite]
 version = "0.28"
 optional = true
-features = ["stream"]
 default-features = false
 
 [dependencies.ring]
@@ -85,9 +79,6 @@ default-features = false
 version = "0.26"
 optional = true
 default-features = false
-
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "io-util", "rt-multi-thread"] }
 
 [package.metadata.docs.rs]
 features = ["file", "native-tls", "ring", "rustls-23", "tokio-tungstenite"]

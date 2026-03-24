@@ -356,10 +356,12 @@ where
                 raise!(message = "fail to base64 encode header \"sec-websocket-accept\".");
             };
 
+            let request = Request::new(request);
+
             tokio::spawn(Box::pin(async move {
                 match handshake(upgrade, config).await {
                     Ok(stream) => {
-                        run(stream, listener, Request::new(request)).await;
+                        run(stream, listener, request).await;
                     }
                     Err(error) => {
                         eprintln!("error(upgrade): {}", error);

@@ -10,7 +10,7 @@ homepage = "https://github.com/via-rs/via"
 repository = "https://github.com/via-rs/via"
 
 [features]
-default = ["ring", "tokio-tungstenite"]
+default = []
 
 aws-lc-rs = ["dep:aws-lc-rs", "rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
 ring = ["dep:ring", "rustls/ring", "tokio-rustls/ring"]

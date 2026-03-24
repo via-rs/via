@@ -358,7 +358,7 @@ where
 
             let request = Request::new(request);
 
-            tokio::spawn(Box::pin(async move {
+            tokio::spawn(async move {
                 match handshake(upgrade, config).await {
                     Ok(stream) => {
                         run(stream, listener, request).await;
@@ -367,7 +367,7 @@ where
                         eprintln!("error(upgrade): {}", error);
                     }
                 }
-            }));
+            });
 
             Response::build()
                 .status(StatusCode::SWITCHING_PROTOCOLS)

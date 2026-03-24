@@ -8,17 +8,14 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::task::{JoinSet, coop};
 use tokio::time::timeout;
-use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use hyper_util::rt::TokioExecutor;
 
+use super::cancel::Cancellation;
 use super::{IoWithPermit, tls};
 use crate::app::ServiceAdapter;
 use crate::error::ServerError;
-
-#[derive(Clone)]
-struct InitializationToken(CancellationToken);
 
 macro_rules! log {
     ($($arg:tt)*) => {
@@ -51,7 +48,7 @@ where
 
     // Notify the accept loop and connection tasks to initiate a graceful
     // shutdown when a "ctrl-c" notification is sent to the process.
-    let shutdown = wait_for_ctrl_c();
+    let cancellation = wait_for_ctrl_c();
 
     // Start accepting incoming connections.
     let exit_code = loop {
@@ -80,7 +77,7 @@ where
             },
 
             // A graceful shutdown signal was sent to the process.
-            _ = shutdown.requested() => {
+            _ = cancellation.wait() => {
                 break ExitCode::SUCCESS;
             }
         };
@@ -94,7 +91,7 @@ where
         };
 
         let service = service.clone();
-        let shutdown = shutdown.clone();
+        let cancellation = cancellation.clone();
 
         // Spawn a task to serve the connection.
         #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
@@ -107,16 +104,17 @@ where
                 let io = IoWithPermit::new(io, permit);
 
                 if alpn == tls::Alpn::HTTP_2 {
-                    serve_http2_connection(io, service, shutdown).await
+                    serve_http2_connection(io, service, cancellation).await
                 } else {
-                    serve_http1_connection(io, service, shutdown).await
+                    serve_http1_connection(io, service, cancellation).await
                 }
             }
         });
 
         #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
         connections.spawn(async move {
-            serve_http1_connection(IoWithPermit::new(io, permit), service, shutdown).await
+            let io = IoWithPermit::new(io, permit);
+            serve_http1_connection(io, service, cancellation).await
         });
 
         if connections.len() >= 1024 {
@@ -156,7 +154,7 @@ async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), 
 async fn serve_http1_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-    shutdown: InitializationToken,
+    cancellation: Cancellation,
 ) -> Result<(), ServerError>
 where
     App: Send + Sync + 'static,
@@ -184,7 +182,7 @@ where
         // The connection future is ready.
         result = connection.as_mut() => result?,
         // A graceful shutdown signal was sent to the process.
-        _ = shutdown.requested() => {
+        _ = cancellation.wait() => {
             connection.as_mut().graceful_shutdown();
             connection.await?;
         }
@@ -197,7 +195,7 @@ where
 async fn serve_http2_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-    shutdown: InitializationToken,
+    cancellation: Cancellation,
 ) -> Result<(), ServerError>
 where
     App: Send + Sync + 'static,
@@ -223,7 +221,7 @@ where
         // The connection future is ready.
         result = connection.as_mut() => result?,
         // A graceful shutdown signal was sent to the process.
-        _ = shutdown.requested() => {
+        _ = cancellation.wait() => {
             connection.as_mut().graceful_shutdown();
             connection.await?;
         }
@@ -232,31 +230,16 @@ where
     Ok(())
 }
 
-fn wait_for_ctrl_c() -> InitializationToken {
-    let token = InitializationToken::new();
-    let shutdown = token.clone();
+fn wait_for_ctrl_c() -> Cancellation {
+    let (cancellation, remote) = Cancellation::new();
 
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_err() {
             eprintln!("unable to register the 'ctrl-c' signal.");
         }
 
-        shutdown.start();
+        remote.cancel();
     });
 
-    token
-}
-
-impl InitializationToken {
-    fn new() -> Self {
-        Self(CancellationToken::new())
-    }
-
-    fn requested(&self) -> WaitForCancellationFuture<'_> {
-        self.0.cancelled()
-    }
-
-    fn start(&self) {
-        self.0.cancel();
-    }
+    cancellation
 }

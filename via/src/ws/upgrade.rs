@@ -119,23 +119,18 @@ async fn run<T, App, Await>(
         let mut listen = Box::pin(listener(facade, request.clone()));
         let trx = async {
             loop {
-                return match Receive::new(stream.as_mut(), rendezvous.recv()).await {
-                    Dispatch::Done => Ok(true),
+                match Receive::new(stream.as_mut(), rendezvous.recv()).await {
+                    Dispatch::Done => return Ok(true),
+                    Dispatch::Out(None) => return Ok(false),
 
-                    Dispatch::Out(None) => Ok(false),
                     Dispatch::Out(Some(message)) => {
                         let forward = Forward::new(stream.as_mut(), message);
-                        if let Err(error) = forward.await {
-                            Err(try_rescue(error))
-                        } else {
-                            continue;
-                        }
+                        forward.await.map_err(try_rescue)?;
                     }
 
                     Dispatch::In(result) => {
                         let message = result.map_err(try_rescue)?;
                         rendezvous.send(message).await?;
-                        continue;
                     }
                 };
             }

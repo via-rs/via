@@ -23,6 +23,10 @@ rustls-23 = ["dep:rustls", "dep:tokio-rustls", "hyper/http2"]
 tokio-tungstenite = ["dep:base64", "dep:futures-sink", "dep:tungstenite", "dep:tokio-tungstenite"]
 tokio-websockets = ["dep:base64", "dep:futures-sink", "dep:tokio-websockets"]
 
+# Internal
+
+__test = ["ring", "tokio-tungstenite", "tokio/io-util"]
+
 [dependencies]
 aws-lc-rs = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }

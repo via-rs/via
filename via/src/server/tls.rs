@@ -17,7 +17,7 @@ pub struct TcpAcceptor;
 
 pub trait Acceptor {
     type Io: AsyncRead + AsyncWrite;
-    type Error: Error;
+    type Error: Error + Send;
 
     #[cfg_attr(
         not(any(feature = "native-tls", feature = "rustls-23")),

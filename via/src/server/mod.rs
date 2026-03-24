@@ -2,6 +2,7 @@
 //!
 
 mod accept;
+mod cancel;
 mod io;
 mod tls;
 

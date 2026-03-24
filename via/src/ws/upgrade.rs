@@ -366,6 +366,10 @@ where
         let config = self.config.clone();
 
         Box::pin(async move {
+            let Ok(accept) = str::from_utf8(accept.as_slice()) else {
+                raise!(message = "fail to base64 encode header \"sec-websocket-accept\".");
+            };
+
             tokio::spawn(Box::pin(async move {
                 match handshake(upgrade, config).await {
                     Ok(stream) => {
@@ -380,10 +384,7 @@ where
             Response::build()
                 .status(StatusCode::SWITCHING_PROTOCOLS)
                 .header(header::CONNECTION, "upgrade")
-                .header(
-                    header::SEC_WEBSOCKET_ACCEPT,
-                    str::from_utf8(accept.as_slice())?,
-                )
+                .header(header::SEC_WEBSOCKET_ACCEPT, accept)
                 .header(header::UPGRADE, "websocket")
                 .finish()
         })

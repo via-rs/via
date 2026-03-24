@@ -355,17 +355,14 @@ where
             }
         };
 
-        let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
-            return Box::pin(async {
-                raise!(message = "connection does not support websocket upgrades");
-            });
-        };
-
         let listener = Arc::clone(&self.listener);
-        let request = Request::new(request);
         let config = self.config.clone();
 
         Box::pin(async move {
+            let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
+                raise!(message = "connection does not support websocket upgrades");
+            };
+
             let Ok(accept) = str::from_utf8(accept.as_slice()) else {
                 raise!(message = "fail to base64 encode header \"sec-websocket-accept\".");
             };
@@ -373,7 +370,7 @@ where
             tokio::spawn(Box::pin(async move {
                 match handshake(upgrade, config).await {
                     Ok(stream) => {
-                        run(stream, listener, request).await;
+                        run(stream, listener, Request::new(request)).await;
                     }
                     Err(error) => {
                         eprintln!("error(upgrade): {}", error);

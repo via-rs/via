@@ -355,18 +355,18 @@ where
             }
         };
 
-        tokio::spawn({
-            let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
-                return Box::pin(async {
-                    raise!(message = "connection does not support websocket upgrades");
-                });
-            };
+        let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
+            return Box::pin(async {
+                raise!(message = "connection does not support websocket upgrades");
+            });
+        };
 
-            let listener = Arc::clone(&self.listener);
-            let request = Request::new(request);
-            let config = self.config.clone();
+        let listener = Arc::clone(&self.listener);
+        let request = Request::new(request);
+        let config = self.config.clone();
 
-            async move {
+        Box::pin(async move {
+            tokio::spawn(Box::pin(async move {
                 match handshake(upgrade, config).await {
                     Ok(stream) => {
                         run(stream, listener, request).await;
@@ -375,17 +375,15 @@ where
                         eprintln!("error(upgrade): {}", error);
                     }
                 }
-            }
-        });
-
-        Box::pin(async move {
-            // Safety: Base64 is guaranteed to be valid UTF-8.
-            let accept = unsafe { str::from_utf8_unchecked(accept.as_slice()) };
+            }));
 
             Response::build()
                 .status(StatusCode::SWITCHING_PROTOCOLS)
                 .header(header::CONNECTION, "upgrade")
-                .header(header::SEC_WEBSOCKET_ACCEPT, accept)
+                .header(
+                    header::SEC_WEBSOCKET_ACCEPT,
+                    str::from_utf8(accept.as_slice())?,
+                )
                 .header(header::UPGRADE, "websocket")
                 .finish()
         })

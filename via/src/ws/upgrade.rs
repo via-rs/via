@@ -2,6 +2,7 @@ use futures_core::{FusedFuture, Future, Stream};
 use futures_sink::Sink;
 use http::{Method, StatusCode, header};
 use hyper::upgrade::OnUpgrade;
+use std::marker::PhantomPinned;
 use std::ops::ControlFlow::{Break, Continue};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -46,6 +47,7 @@ struct Forward<'a> {
 struct Receive<'a, T> {
     stream: Pin<&'a mut WebSocketStream<UpgradedIo>>,
     recv: T,
+    _pin: PhantomPinned,
 }
 
 #[derive(Clone, Debug)]
@@ -229,7 +231,11 @@ impl<'a> FusedFuture for Forward<'a> {
 
 impl<'a, T> Receive<'a, T> {
     fn new(stream: Pin<&'a mut WebSocketStream<UpgradedIo>>, recv: T) -> Self {
-        Self { stream, recv }
+        Self {
+            stream,
+            recv,
+            _pin: PhantomPinned,
+        }
     }
 }
 

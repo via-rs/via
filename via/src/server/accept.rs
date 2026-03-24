@@ -96,11 +96,13 @@ where
         // Spawn a task to serve the connection.
         #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
         connections.spawn({
-            let handshake = acceptor.accept(io);
+            let handshake = timeout(
+                service.config().tls_handshake_timeout(),
+                acceptor.accept(io),
+            );
 
             async move {
-                let (io, alpn) =
-                    timeout(service.config().tls_handshake_timeout(), handshake).await??;
+                let (io, alpn) = handshake.await??;
                 let io = IoWithPermit::new(io, permit);
 
                 if alpn == tls::Alpn::HTTP_2 {

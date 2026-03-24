@@ -59,12 +59,12 @@ version = "0.3"
 optional = true
 
 [dependencies.tungstenite]
-version = "0.28"
+version = "0.29"
 optional = true
 default-features = false
 
 [dependencies.tokio-tungstenite]
-version = "0.28"
+version = "0.29"
 optional = true
 default-features = false
 

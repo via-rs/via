@@ -48,11 +48,6 @@ struct Receive<'a, T> {
     recv: T,
 }
 
-struct ReceiveProjection<'a, T> {
-    stream: Pin<&'a mut WebSocketStream<UpgradedIo>>,
-    recv: Pin<&'a mut T>,
-}
-
 #[derive(Clone, Debug)]
 struct WsConfig {
     buffer_size: usize,
@@ -238,21 +233,6 @@ impl<'a, T> Receive<'a, T> {
     }
 }
 
-impl<'a, T> Receive<'a, T> {
-    #[inline]
-    fn project(self: Pin<&mut Self>) -> ReceiveProjection<'_, T> {
-        // Safety: A pin projection. Neither data or refs move out of self.
-        unsafe {
-            let this = self.get_unchecked_mut();
-
-            ReceiveProjection {
-                stream: this.stream.as_mut(),
-                recv: Pin::new_unchecked(&mut this.recv),
-            }
-        }
-    }
-}
-
 impl<'a, T> Future for Receive<'a, T>
 where
     T: Future<Output = Option<Message>>,
@@ -260,11 +240,19 @@ where
     type Output = Dispatch;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        let this = self.project();
+        // Safety:
+        //
+        // We must project the recv field in order to call <T as Future>::poll.
+        // None of the fields in self are moved once self is constructed.
+        let this = unsafe { self.get_unchecked_mut() };
 
-        if let Poll::Ready(next) = this.recv.poll(context) {
+        // Safety:
+        // The recv future is !Unpin and requires projection.
+        let recv = unsafe { Pin::new_unchecked(&mut this.recv) };
+
+        if let Poll::Ready(next) = recv.poll(context) {
             Poll::Ready(Dispatch::Out(next))
-        } else if let Poll::Ready(next) = this.stream.poll_next(context) {
+        } else if let Poll::Ready(next) = this.stream.as_mut().poll_next(context) {
             Poll::Ready(next.map_or(Dispatch::Done, Dispatch::In))
         } else {
             Poll::Pending

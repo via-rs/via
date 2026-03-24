@@ -1,8 +1,12 @@
-use futures_util::{SinkExt, StreamExt};
+use futures_core::{FusedFuture, Future, Stream};
+use futures_sink::Sink;
 use http::{Method, StatusCode, header};
 use hyper::upgrade::OnUpgrade;
+use std::marker::PhantomPinned;
 use std::ops::ControlFlow::{Break, Continue};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 #[cfg(feature = "tokio-tungstenite")]
 use tokio_tungstenite::WebSocketStream;
@@ -10,10 +14,10 @@ use tokio_tungstenite::WebSocketStream;
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
-use super::error::try_rescue;
+use super::error::{WebSocketError, try_rescue};
 use super::io::UpgradedIo;
 use super::sha1::sha1;
-use super::{Channel, Request};
+use super::{Channel, Message, Request};
 use crate::{BoxFuture, Error, Middleware, Next, Response, raise};
 
 const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
@@ -21,6 +25,29 @@ const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 pub struct Ws<T> {
     listener: Arc<T>,
     config: WsConfig,
+}
+
+enum Dispatch {
+    Done,
+    Out(Option<Message>),
+    In(Result<Message, WebSocketError>),
+}
+
+enum ForwardState {
+    Done,
+    Flush,
+    Waiting(Message),
+}
+
+struct Forward<'a> {
+    stream: Pin<&'a mut WebSocketStream<UpgradedIo>>,
+    state: ForwardState,
+}
+
+struct Receive<'a, T> {
+    stream: Pin<&'a mut WebSocketStream<UpgradedIo>>,
+    recv: T,
+    _pin: PhantomPinned,
 }
 
 #[derive(Clone, Debug)]
@@ -78,38 +105,43 @@ async fn handshake(
 }
 
 async fn run<T, App, Await>(
-    mut stream: WebSocketStream<UpgradedIo>,
+    stream: WebSocketStream<UpgradedIo>,
     listener: Arc<T>,
     request: Request<App>,
 ) where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send,
 {
+    tokio::pin!(stream);
+
     loop {
         let (facade, mut rendezvous) = Channel::new();
         let mut listen = Box::pin(listener(facade, request.clone()));
         let trx = async {
             loop {
-                tokio::select! {
-                    // Receive a message from the channel and send it to the stream.
-                    next = rendezvous.recv() => match next {
-                        Some(message) => stream.send(message).await.map_err(try_rescue)?,
-                        None => break Ok(()),
-                    },
-                    // Receive a message from the stream and send it to the channel.
-                    next = stream.next() => match next {
-                        Some(result) => rendezvous.send(result.map_err(try_rescue)?).await?,
-                        None => break Ok(()),
-                    },
-                }
+                match Receive::new(stream.as_mut(), rendezvous.recv()).await {
+                    Dispatch::Done => return Ok(true),
+                    Dispatch::Out(None) => return Ok(false),
+
+                    Dispatch::Out(Some(message)) => {
+                        let forward = Forward::new(stream.as_mut(), message);
+                        forward.await.map_err(try_rescue)?;
+                    }
+
+                    Dispatch::In(result) => {
+                        let message = result.map_err(try_rescue)?;
+                        rendezvous.send(message).await?;
+                    }
+                };
             }
         };
 
         let err = tokio::select! {
             result = listen.as_mut() => result.err(),
             result = trx => match result {
-                Ok(_) => listen.await.err(),
+                Ok(graceful) if graceful => listen.await.err(),
                 Err(error) => Some(error),
+                _ => None,
             },
         };
 
@@ -128,6 +160,104 @@ async fn run<T, App, Await>(
 
     if cfg!(debug_assertions) {
         eprintln!("info(ws): websocket session ended");
+    }
+}
+
+impl<'a> Forward<'a> {
+    fn new(stream: Pin<&'a mut WebSocketStream<UpgradedIo>>, message: Message) -> Self {
+        Self {
+            stream,
+            state: ForwardState::Waiting(message),
+        }
+    }
+}
+
+impl<'a> Future for Forward<'a> {
+    type Output = Result<(), WebSocketError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        loop {
+            match &mut this.state {
+                ForwardState::Done => {
+                    return Poll::Ready(Ok(()));
+                }
+                state @ ForwardState::Flush => {
+                    let flush = this.stream.as_mut().poll_flush(context);
+
+                    if flush.is_ready() {
+                        *state = ForwardState::Done;
+                    }
+
+                    return flush;
+                }
+                state @ ForwardState::Waiting(_) => {
+                    let Poll::Ready(ready) = this.stream.as_mut().poll_ready(context) else {
+                        return Poll::Pending;
+                    };
+
+                    if ready.is_err() {
+                        *state = ForwardState::Done;
+                        return Poll::Ready(ready);
+                    }
+
+                    let ForwardState::Waiting(message) =
+                        std::mem::replace(state, ForwardState::Flush)
+                    else {
+                        unreachable!();
+                    };
+
+                    if let Err(error) = this.stream.as_mut().start_send(message) {
+                        *state = ForwardState::Done;
+                        return Poll::Ready(Err(error));
+                    }
+                }
+            };
+        }
+    }
+}
+
+impl<'a> FusedFuture for Forward<'a> {
+    fn is_terminated(&self) -> bool {
+        matches!(self.state, ForwardState::Done)
+    }
+}
+
+impl<'a, T> Receive<'a, T> {
+    fn new(stream: Pin<&'a mut WebSocketStream<UpgradedIo>>, recv: T) -> Self {
+        Self {
+            stream,
+            recv,
+            _pin: PhantomPinned,
+        }
+    }
+}
+
+impl<'a, T> Future for Receive<'a, T>
+where
+    T: Future<Output = Option<Message>>,
+{
+    type Output = Dispatch;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        // Safety:
+        //
+        // We must project the recv field in order to call <T as Future>::poll.
+        // None of the fields in self are moved once self is constructed.
+        let this = unsafe { self.get_unchecked_mut() };
+
+        // Safety:
+        // The recv future is !Unpin and requires projection.
+        let recv = unsafe { Pin::new_unchecked(&mut this.recv) };
+
+        if let Poll::Ready(next) = recv.poll(context) {
+            Poll::Ready(Dispatch::Out(next))
+        } else if let Poll::Ready(next) = this.stream.as_mut().poll_next(context) {
+            Poll::Ready(next.map_or(Dispatch::Done, Dispatch::In))
+        } else {
+            Poll::Pending
+        }
     }
 }
 
@@ -214,18 +344,21 @@ where
             }
         };
 
-        tokio::spawn({
+        let listener = Arc::clone(&self.listener);
+        let config = self.config.clone();
+
+        Box::pin(async move {
             let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
-                return Box::pin(async {
-                    raise!(message = "connection does not support websocket upgrades");
-                });
+                raise!(message = "connection does not support websocket upgrades");
             };
 
-            let listener = Arc::clone(&self.listener);
-            let request = Request::new(request);
-            let config = self.config.clone();
+            let Ok(accept) = str::from_utf8(accept.as_slice()) else {
+                raise!(message = "fail to base64 encode header \"sec-websocket-accept\".");
+            };
 
-            async move {
+            let request = Request::new(request);
+
+            tokio::spawn(async move {
                 match handshake(upgrade, config).await {
                     Ok(stream) => {
                         run(stream, listener, request).await;
@@ -234,12 +367,7 @@ where
                         eprintln!("error(upgrade): {}", error);
                     }
                 }
-            }
-        });
-
-        Box::pin(async move {
-            // Safety: Base64 is guaranteed to be valid UTF-8.
-            let accept = unsafe { str::from_utf8_unchecked(accept.as_slice()) };
+            });
 
             Response::build()
                 .status(StatusCode::SWITCHING_PROTOCOLS)

@@ -4,7 +4,6 @@ use std::fmt::{self, Display, Formatter};
 use std::num::{NonZeroU64, TryFromIntError};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use via::Error;
 use via::error::BoxError;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -57,8 +56,8 @@ where
         self.store.values()
     }
 
-    pub fn remove(&mut self, id: &Id) {
-        self.store.remove(id);
+    pub fn remove(&mut self, id: &Id) -> Option<T> {
+        self.store.remove(id)
     }
 }
 

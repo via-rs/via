@@ -7,15 +7,15 @@ use crate::database::{Id, Identify, Persist};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct User {
     id: Id,
-    org_id: Id,
     username: String,
+    #[serde(with = "time::serde::iso8601")]
     created_at: OffsetDateTime,
+    #[serde(with = "time::serde::iso8601")]
     updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct NewUser {
-    org_id: Option<Id>,
     username: String,
 }
 
@@ -40,7 +40,6 @@ impl Persist for NewUser {
 
         Ok(User {
             id,
-            org_id: self.org_id.ok_or("org_id is required.")?,
             username: self.username,
             created_at: now,
             updated_at: now,

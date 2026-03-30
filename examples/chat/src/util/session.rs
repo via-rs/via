@@ -1,7 +1,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cookie::{Cookie, Key, SameSite};
-use http::StatusCode;
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
 use via::{Error, Response, raise};
@@ -90,8 +89,8 @@ impl Identity {
     pub fn new(user: Id) -> Self {
         let mut buf = [0; TOKEN_LEN];
 
-        (&mut buf[..EXPIRES_AT]).copy_from_slice(user.to_bytes().as_slice());
-        (&mut buf[EXPIRES_AT..]).copy_from_slice(in_an_hour().to_be_bytes().as_slice());
+        buf[..EXPIRES_AT].copy_from_slice(user.to_bytes().as_slice());
+        buf[EXPIRES_AT..].copy_from_slice(in_an_hour().to_be_bytes().as_slice());
 
         Self(buf)
     }
@@ -124,9 +123,9 @@ impl FromStr for Identity {
     type Err = via::Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let mut buf = [0u8; 16];
+        let mut buf = [0u8; TOKEN_LEN];
 
-        if URL_SAFE_NO_PAD.decode_slice(input, &mut buf).is_err() {
+        if input.len() != ENCODED_LEN || URL_SAFE_NO_PAD.decode_slice(input, &mut buf).is_err() {
             raise!(400, message = "unknown session cookie format.");
         }
 

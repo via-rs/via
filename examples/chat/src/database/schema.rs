@@ -3,6 +3,7 @@ use std::path::Path;
 use std::{fs, io};
 use tokio::sync::{mpsc, oneshot};
 use via::error::{BoxError, Error};
+use via::raise;
 
 use super::models::*;
 use super::table::{Id, Table};
@@ -16,7 +17,13 @@ pub struct Database {
     tx: mpsc::Sender<Command>,
 }
 
+#[allow(dead_code)]
 enum Command {
+    DeleteUser {
+        tx: oneshot::Sender<Option<User>>,
+        id: Id,
+    },
+
     FindChannel {
         tx: oneshot::Sender<Option<Channel>>,
         id: Id,
@@ -44,7 +51,7 @@ enum Command {
     },
     InsertUser {
         tx: oneshot::Sender<Result<User, BoxError>>,
-        payload: NewUser,
+        new_user: NewUser,
     },
 }
 
@@ -61,9 +68,22 @@ fn warn_receiver_dropped<T>(_: &T) {
     }
 }
 
-async fn recv_loop(mut schema: Schema, mut rx: mpsc::Receiver<Command>) {
+fn resolve_schema_path() -> &'static Path {
+    Path::new(if CARGO_MANIFEST_DIR.ends_with("examples") {
+        SCHEMA_FROM_EXAMPLES
+    } else {
+        SCHEMA_FROM_WORKSPACE
+    })
+}
+
+async fn recv_loop(mut schema: Schema, mut rx: mpsc::Receiver<Command>) -> Result<(), BoxError> {
     while let Some(command) = rx.recv().await {
         match command {
+            Command::DeleteUser { tx, id } => {
+                let delete_user = schema.users.remove(&id);
+                let _ = tx.send(delete_user).inspect_err(warn_receiver_dropped);
+            }
+
             Command::FindChannel { tx, id } => {
                 let channel_opt = schema.channels.get(&id);
                 let _ = tx.send(channel_opt).inspect_err(warn_receiver_dropped);
@@ -96,26 +116,45 @@ async fn recv_loop(mut schema: Schema, mut rx: mpsc::Receiver<Command>) {
                     .send(insert_subscription)
                     .inspect_err(warn_receiver_dropped);
             }
-            Command::InsertUser { tx, payload } => {
-                let insert_user = schema.users.insert(payload);
+            Command::InsertUser { tx, new_user } => {
+                let insert_user = schema.users.insert(new_user);
                 let _ = tx.send(insert_user).inspect_err(warn_receiver_dropped);
             }
         }
     }
+
+    fs::write(resolve_schema_path(), serde_json::to_vec_pretty(&schema)?)?;
+
+    Ok(())
 }
 
 impl Database {
     pub fn new() -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel(1024);
-        let schema = Schema::load(if CARGO_MANIFEST_DIR.ends_with("examples") {
-            SCHEMA_FROM_EXAMPLES
-        } else {
-            SCHEMA_FROM_WORKSPACE
-        })?;
+        let schema = Schema::load(resolve_schema_path())?;
 
         tokio::spawn(Box::pin(recv_loop(schema, rx)));
 
         Ok(Self { tx })
+    }
+
+    pub async fn delete_user(&self, id: Id) -> Result<Option<User>, Error> {
+        let (tx, rx) = oneshot::channel();
+
+        self.tx.send(Command::DeleteUser { tx, id }).await?;
+
+        Ok(rx.await?)
+    }
+
+    pub async fn insert_user(&self, new_user: NewUser) -> Result<User, Error> {
+        let (tx, rx) = oneshot::channel();
+
+        self.tx.send(Command::InsertUser { tx, new_user }).await?;
+        let Ok(result) = rx.await else {
+            raise!(500);
+        };
+
+        result.or_else(|error| raise!(boxed = error))
     }
 
     pub async fn find_user(&self, id: Id) -> Result<Option<User>, Error> {

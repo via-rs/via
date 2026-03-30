@@ -9,7 +9,7 @@ use via::{Server, cookies, guard, rest};
 
 use database::Database;
 use routes::{auth, channels, reactions, threads, users};
-use util::session::{self, Identity};
+use util::session;
 
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;

@@ -69,7 +69,7 @@ impl<'a> TryFrom<PathParams<'a>> for ReactionCollectionParams {
 
     fn try_from(params: PathParams<'a>) -> Result<Self, Self::Error> {
         Ok(Self {
-            channel: params.clone().try_into()?,
+            channel: params.try_into()?,
             reply_id: params.get("reply-id").parse().ok(),
             thread_id: params.get("thread-id").parse()?,
         })
@@ -81,7 +81,7 @@ impl<'a> TryFrom<PathParams<'a>> for ReactionMemberParams {
 
     fn try_from(params: PathParams<'a>) -> Result<Self, Self::Error> {
         Ok(Self {
-            channel: params.clone().try_into()?,
+            channel: params.try_into()?,
             reply_id: params.get("reply-id").parse().ok(),
             thread_id: params.get("thread-id").parse()?,
             reaction_id: params.get("reaction-id").parse()?,

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use time::UtcDateTime;
+use time::OffsetDateTime;
 
 use crate::database::{Id, Identify, Persist};
 
@@ -9,8 +9,10 @@ pub struct Subscription {
     id: Id,
     channel_id: Id,
     user_id: Id,
-    created_at: UtcDateTime,
-    updated_at: UtcDateTime,
+    #[serde(with = "time::serde::iso8601")]
+    created_at: OffsetDateTime,
+    #[serde(with = "time::serde::iso8601")]
+    updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,7 +33,7 @@ impl Persist for NewSubscription {
     type Error = Infallible;
 
     fn persist(self, id: Id) -> Result<Self::Output, Self::Error> {
-        let now = UtcDateTime::now();
+        let now = OffsetDateTime::now_utc();
 
         Ok(Subscription {
             id,

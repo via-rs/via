@@ -73,6 +73,30 @@ impl Envelope {
         &mut self.cookies
     }
 
+    #[inline]
+    pub fn get<T>(&self) -> Option<&T>
+    where
+        T: Send + Sync + 'static,
+    {
+        Extensions::get(&self.parts.extensions)
+    }
+
+    #[inline]
+    pub fn get_mut<T>(&mut self) -> Option<&mut T>
+    where
+        T: Send + Sync + 'static,
+    {
+        Extensions::get_mut(&mut self.parts.extensions)
+    }
+
+    #[inline]
+    pub fn insert<T>(&mut self, value: T) -> Option<T>
+    where
+        T: Clone + Send + Sync + 'static,
+    {
+        Extensions::insert(&mut self.parts.extensions, value)
+    }
+
     /// Returns a reference to the associated extensions.
     ///
     #[inline]
@@ -202,6 +226,17 @@ impl<App> Request<App> {
     #[inline]
     pub fn extensions_mut(&mut self) -> &mut Extensions {
         self.envelope.extensions_mut()
+    }
+
+    delegate! {
+        to self.envelope() {
+            pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T>;
+        }
+
+        to (&mut self.envelope) {
+            pub fn get_mut<T: Send + Sync + 'static>(&mut self) -> Option<&mut T>;
+            pub fn insert<T: Clone + Send + Sync + 'static>(&mut self, value: T) -> Option<T>;
+        }
     }
 
     delegate! {

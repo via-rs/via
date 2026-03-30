@@ -67,6 +67,10 @@ impl<'a> Sanitizer<'a> {
         self.error.source()
     }
 
+    pub fn respond_with_json(&mut self) {
+        self.json = true;
+    }
+
     /// Provide a custom message to use for the response generated from this
     /// error.
     ///

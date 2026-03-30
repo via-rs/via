@@ -13,8 +13,4 @@ impl<T> Body<T> {
     pub fn new(data: T) -> Self {
         Self { data }
     }
-
-    pub fn data(&self) -> &T {
-        &self.data
-    }
 }

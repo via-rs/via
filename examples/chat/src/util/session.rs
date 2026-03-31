@@ -135,7 +135,7 @@ impl FromStr for Identity {
 
 impl Session for Request {
     fn session(&self) -> via::Result<&Identity> {
-        let Some(session) = self.get::<ProtectFromForgery>() else {
+        let Some(session) = self.extensions().get::<ProtectFromForgery>() else {
             raise!(401);
         };
 

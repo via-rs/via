@@ -192,6 +192,20 @@ pub struct Cookies {
     allow: HashSet<String>,
 }
 
+/// Returns middleware that provides support for unencoded request and
+/// response cookies.
+///
+/// # Example
+///
+/// ```
+/// let mut app = via::app(());
+/// app.middleware(via::cookies());
+/// ```
+///
+pub fn cookies() -> Cookies {
+    Cookies::new()
+}
+
 #[inline(always)]
 fn split_parse<'a>(encoding: &UriEncoding, input: &'a str) -> SplitCookies<'a> {
     if let UriEncoding::Percent = *encoding {
@@ -202,21 +216,6 @@ fn split_parse<'a>(encoding: &UriEncoding, input: &'a str) -> SplitCookies<'a> {
 }
 
 impl Cookies {
-    /// Returns middleware that provides support for unencoded request and
-    /// response cookies.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use via::{Cookies};
-    /// # let mut app = via::app(());
-    /// app.middleware(Cookies::new());
-    /// ```
-    ///
-    pub fn new() -> Self {
-        Default::default()
-    }
-
     /// Add the provided cookie name to the allow list.
     ///
     /// By default, the Cookies middleware ignores cookies with names that are
@@ -251,6 +250,15 @@ impl Cookies {
         self.encoding = UriEncoding::Percent;
         self
     }
+}
+
+impl Cookies {
+    fn new() -> Self {
+        Self {
+            encoding: UriEncoding::Unencoded,
+            allow: HashSet::new(),
+        }
+    }
 
     fn parse(&self, input: &str) -> impl Iterator<Item = Cookie<'static>> {
         split_parse(&self.encoding, input).filter_map(|result| {
@@ -269,15 +277,6 @@ impl Cookies {
                 .contains(shared.name())
                 .then(|| shared.into_owned())
         })
-    }
-}
-
-impl Default for Cookies {
-    fn default() -> Self {
-        Self {
-            encoding: UriEncoding::Unencoded,
-            allow: HashSet::new(),
-        }
     }
 }
 

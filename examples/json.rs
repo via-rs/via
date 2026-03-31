@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
-use via::error::{Error, Rescue};
-use via::{Next, Payload, Request, Response, Server};
+use via::{Error, Next, Payload, Request, Response, Server};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Document<T> {
@@ -38,7 +37,7 @@ async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(());
 
     // Errors that occur further down the stack generate a JSON response.
-    app.middleware(Rescue::new(|error| error.use_json()));
+    app.middleware(via::rescue(|error| error.use_json()));
 
     // Define a route that responds to POST /hello.
     app.route("/hello").to(via::post(hello).or_deny());

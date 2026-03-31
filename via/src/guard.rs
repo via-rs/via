@@ -36,11 +36,10 @@ pub struct Guard<T> {
     check: T,
 }
 
-impl<T> Guard<T> {
-    /// Returns a new guard that uses the provided check function.
-    pub fn new(check: T) -> Self {
-        Self { check }
-    }
+/// Create a guard middleware from the provided check function.
+///
+pub fn guard<T>(check: T) -> Guard<T> {
+    Guard { check }
 }
 
 impl<T, App> Middleware<App> for Guard<T>

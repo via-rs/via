@@ -13,7 +13,7 @@ use std::io::{self, Error as IoError};
 #[doc(hidden)]
 pub use http::StatusCode; // Required for the raise macro.
 
-pub use rescue::{Rescue, Sanitizer};
+pub use rescue::{Rescue, Sanitizer, rescue};
 pub(crate) use server::ServerError;
 
 use crate::response::Response;

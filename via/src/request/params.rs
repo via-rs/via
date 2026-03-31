@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::str::FromStr;
 
 use super::query::{QueryParamRange, QueryParser};
+use crate::error::BoxError;
 use crate::util::UriEncoding;
 use crate::{Error, raise};
 
@@ -137,13 +138,13 @@ impl<'a, 'b> PathParam<'a, 'b> {
     ///
     pub fn parse<U>(self) -> Result<U, Error>
     where
+        BoxError: From<U::Err>,
         U: FromStr,
-        U::Err: std::error::Error + Send + Sync + 'static,
     {
         self.ok_or_bad_request()?
             .as_ref()
             .parse()
-            .or_else(|error| raise!(400, error))
+            .or_else(|error| raise!(400, boxed = BoxError::from(error)))
     }
 
     pub fn ok(self) -> Result<Option<Cow<'a, str>>, Error> {
@@ -201,13 +202,13 @@ impl<'a, 'b> QueryParam<'a, 'b> {
     ///
     pub fn parse<U>(self) -> Result<U, Error>
     where
+        BoxError: From<U::Err>,
         U: FromStr,
-        U::Err: std::error::Error + Send + Sync + 'static,
     {
         self.ok_or_bad_request()?
             .as_ref()
             .parse()
-            .or_else(|error| raise!(400, error))
+            .or_else(|error| raise!(400, boxed = BoxError::from(error)))
     }
 
     pub fn ok(self) -> Result<Option<Cow<'a, str>>, Error> {

@@ -14,7 +14,7 @@ use crate::{BoxFuture, Middleware, Next, Request};
 #[derive(Debug)]
 struct SetCookieError;
 
-/// Parse request cookies and serialize response cookies.
+/// Parse and manage the specified request and response cookies.
 ///
 /// A bidirectional middleware that parses the cookie header of an incoming
 /// request and extends the request's cookie jar with the extracted cookies,
@@ -27,7 +27,7 @@ struct SetCookieError;
 /// use cookie::{Cookie, SameSite};
 /// use std::process::ExitCode;
 /// use std::time::Duration;
-/// use via::{Error, Next, Request, Response, Server, cookies};
+/// use via::{Error, Next, Request, Response, Server};
 ///
 /// async fn greet(request: Request, _: Next) -> via::Result {
 ///     // `should_set_name` indicates whether "name" was sourced from the
@@ -64,7 +64,7 @@ struct SetCookieError;
 ///     let mut app = via::app(());
 ///
 ///     // Provide cookie support for downstream middleware.
-///     app.middleware(cookies().allow("name").decode());
+///     app.middleware(via::cookies(["name"]).decode());
 ///
 ///     // Respond with a greeting when a user visits /hello/:name.
 ///     app.route("/hello/:name").to(via::get(greet));
@@ -177,7 +177,7 @@ struct SetCookieError;
 ///     let mut app = via::app(());
 ///
 ///     // Unencoded cookie support.
-///     app.middleware(cookies().allow("via-session"));
+///     app.middleware(via::cookies(["session"]));
 ///
 ///     // Add our login route to our application.
 ///     app.route("/auth/login").to(via::post(login));
@@ -192,19 +192,27 @@ pub struct Cookies {
     allow: HashSet<String>,
 }
 
-/// Returns middleware that provides support for unencoded request and
-/// response cookies.
+/// Parse and manage the specified request and response cookies.
+///
+/// The default behavior of the Cookies middleware is to ignore all cookies
+/// unless they are specified by name in the provided allow list.
+///
+/// This prevents irrelevant cookies from becoming a DoS vector by keeping
+/// the length of the request and response cookie jars bounded.
 ///
 /// # Example
 ///
 /// ```
-/// # use via::cookies;
 /// # let mut app = via::app(());
-/// app.middleware(cookies());
+/// app.middleware(via::cookies(["session"]));
 /// ```
 ///
-pub fn cookies() -> Cookies {
-    Cookies::new()
+pub fn cookies<I>(allow: I) -> Cookies
+where
+    I: IntoIterator,
+    I::Item: AsRef<str> + 'static,
+{
+    allow.into_iter().fold(Cookies::new(), Cookies::allow)
 }
 
 #[inline(always)]
@@ -217,34 +225,14 @@ fn split_parse<'a>(encoding: &UriEncoding, input: &'a str) -> SplitCookies<'a> {
 }
 
 impl Cookies {
-    /// Add the provided cookie name to the allow list.
-    ///
-    /// By default, the Cookies middleware ignores cookies with names that are
-    /// not explicitly allowed. This filters out irrelevant cookies and keeps
-    /// the number of cookies in the request and response cookie jars bounded.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use via::cookies;
-    /// # let mut app = via::app(());
-    /// app.middleware(cookies().allow("via-session"));
-    /// ```
-    ///
-    pub fn allow(mut self, name: impl AsRef<str>) -> Self {
-        self.allow.insert(name.as_ref().to_owned());
-        self
-    }
-
     /// Specify that cookies should be percent-decoded when parsed and percent-
     /// encoded when serialized as a Set-Cookie header.
     ///
     /// # Example
     ///
     /// ```
-    /// # use via::cookies;
     /// # let mut app = via::app(());
-    /// app.middleware(cookies().allow("via-session").decode());
+    /// app.middleware(via::cookies(["session"]).decode());
     /// ```
     ///
     pub fn decode(mut self) -> Self {
@@ -259,6 +247,11 @@ impl Cookies {
             encoding: UriEncoding::Unencoded,
             allow: HashSet::new(),
         }
+    }
+
+    fn allow(mut self, name: impl AsRef<str>) -> Self {
+        self.allow.insert(name.as_ref().to_owned());
+        self
     }
 
     fn parse(&self, input: &str) -> impl Iterator<Item = Cookie<'static>> {

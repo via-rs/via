@@ -3,7 +3,7 @@ use http::header::ALLOW;
 use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 
-use super::{Error, ErrorKindRef, Errors};
+use super::{Error, ErrorSourceRef, Errors};
 use crate::middleware::{BoxFuture, Middleware};
 use crate::response::{Finalize, Response, ResponseBuilder};
 use crate::{Next, Request};
@@ -123,7 +123,7 @@ impl Finalize for Sanitizer<'_> {
         let status = self.status();
         let mut builder = builder.status(status);
 
-        if let ErrorKindRef::AllowMethod(error) = self.error.kind()
+        if let ErrorSourceRef::AllowMethod(error) = self.error.as_source()
             && let Some(allow) = error.allows()
         {
             builder = builder.header(ALLOW, allow);

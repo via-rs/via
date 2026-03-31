@@ -16,11 +16,11 @@
 //!
 //! ```no_run
 //! use std::process::ExitCode;
-//! use via::{Error, Next, Request, Response, Server};
+//! use via::{Error, Next, Request, Response, ResultExt, Server};
 //!
 //! async fn hello(request: Request, _: Next) -> via::Result {
 //!     // Get a reference to the path parameter `name` from the request uri.
-//!     let name = request.param("name").percent_decode().ok_or_bad_request()?;
+//!     let name = request.param("name").percent_decode().or_bad_request()?;
 //!
 //!     // Send a plain text response with our greeting message.
 //!     Response::build().text(format!("Hello, {}!", name))
@@ -57,7 +57,7 @@ mod util;
 
 pub use app::{Shared, Via, app};
 pub use cookies::{Cookies, cookies};
-pub use error::{Error, rescue};
+pub use error::{Error, ResultExt, rescue};
 pub use guard::guard;
 pub use middleware::{BoxFuture, Middleware, Result};
 pub use next::{Continue, Next};

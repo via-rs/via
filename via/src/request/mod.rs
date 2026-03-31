@@ -9,11 +9,12 @@ pub use payload::{Aggregate, Coalesce, Payload};
 use cookie::CookieJar;
 use delegate::delegate;
 use http::request::Parts;
-use http::{Extensions, HeaderMap, Method, StatusCode, Uri, Version};
+use http::{Extensions, HeaderMap, Method, Uri, Version};
 use http_body_util::Limited;
 use hyper::body::Incoming;
 use std::fmt::{self, Debug, Formatter};
 
+use crate::ResultExt;
 use crate::app::Shared;
 use crate::error::Error;
 use crate::response::{Finalize, Response, ResponseBuilder};
@@ -108,13 +109,10 @@ impl Envelope {
         T: TryFrom<PathParams<'a>>,
         Error: From<T::Error>,
     {
-        let params = PathParams::new(self.uri().path(), &self.params);
+        let path = self.uri().path();
+        let params = &self.params;
 
-        T::try_from(params).map_err(|error| {
-            let mut error = Error::from(error);
-            *error.status_mut() = StatusCode::BAD_REQUEST;
-            error
-        })
+        T::try_from(PathParams::new(path, params)).or_bad_request()
     }
 }
 

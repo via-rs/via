@@ -3,6 +3,7 @@
 
 mod raise;
 mod rescue;
+mod result;
 mod server;
 
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
@@ -14,6 +15,7 @@ use std::io::{self, Error as IoError};
 pub use http::StatusCode; // Required for the raise macro.
 
 pub use rescue::{Rescue, Sanitizer, rescue};
+pub use result::ResultExt;
 pub(crate) use server::ServerError;
 
 use crate::response::Response;
@@ -29,18 +31,18 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 #[derive(Debug)]
 pub struct Error {
     status: StatusCode,
-    kind: ErrorKind,
+    source: ErrorSource,
 }
 
 #[derive(Debug)]
-enum ErrorKind {
+enum ErrorSource {
     AllowMethod(Box<MethodNotAllowed>),
     Message(String),
     Other(BoxError),
     Json(serde_json::Error),
 }
 
-enum ErrorKindRef<'a> {
+enum ErrorSourceRef<'a> {
     AllowMethod(&'a MethodNotAllowed),
     Message(&'a str),
     Other(&'a (dyn std::error::Error + 'static)),
@@ -72,24 +74,16 @@ impl Error {
     /// Returns a new error with the provided status and message.
     ///
     pub fn new(message: impl Into<String>) -> Self {
-        Self::with_status(StatusCode::INTERNAL_SERVER_ERROR, message)
-    }
-
-    /// Returns a new error with the provided status and message.
-    ///
-    pub fn with_status(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
-            status,
-            kind: ErrorKind::Message(message.into()),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            source: ErrorSource::Message(message.into()),
         }
     }
 
-    /// Returns a new error with the provided status and source.
-    ///
-    pub fn from_source(status: StatusCode, source: BoxError) -> Self {
+    pub fn other(source: BoxError) -> Self {
         Self {
-            status,
-            kind: ErrorKind::Other(source),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            source: ErrorSource::Other(source),
         }
     }
 
@@ -127,16 +121,16 @@ impl Error {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
-        Self::from_source(status, Box::new(error))
+        Self::other_with_status(Box::new(error), status)
     }
 
     /// Returns a reference to the error source.
     ///
     pub fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self.kind() {
-            ErrorKindRef::AllowMethod(source) => Some(source),
-            ErrorKindRef::Other(source) => Some(source),
-            ErrorKindRef::Json(json) => Some(json),
+        match self.as_source() {
+            ErrorSourceRef::AllowMethod(source) => Some(source),
+            ErrorSourceRef::Other(source) => Some(source),
+            ErrorSourceRef::Json(source) => Some(source),
             _ => None,
         }
     }
@@ -144,14 +138,75 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         self.status
     }
+}
 
-    pub(crate) fn status_mut(&mut self) -> &mut StatusCode {
-        &mut self.status
+impl Error {
+    pub(crate) fn invalid_utf8_sequence(name: &str) -> Self {
+        let mut error = Self::new(format!("invalid utf-8 sequence of bytes in {}.", name));
+        error.status = StatusCode::BAD_REQUEST;
+        error
     }
 
-    fn repr_json(&self, status: StatusCode) -> Errors<'_> {
-        if let ErrorKindRef::Message(message) = self.kind() {
-            Errors::new(status, message)
+    pub(crate) fn method_not_allowed(error: MethodNotAllowed) -> Self {
+        Self {
+            source: ErrorSource::AllowMethod(Box::new(error)),
+            status: StatusCode::METHOD_NOT_ALLOWED,
+        }
+    }
+
+    pub(crate) fn require_path_param(name: &str) -> Self {
+        let mut error = Self::new(format!("missing required path parameter: \"{}\".", name));
+        error.status = StatusCode::BAD_REQUEST;
+        error
+    }
+
+    pub(crate) fn require_query_param(name: &str) -> Self {
+        let mut error = Self::new(format!("missing required query parameter: \"{}\".", name));
+        error.status = StatusCode::BAD_REQUEST;
+        error
+    }
+
+    pub(crate) fn ser_json(source: serde_json::Error) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            source: ErrorSource::Json(source),
+        }
+    }
+
+    pub(crate) fn de_json(source: serde_json::Error) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            source: ErrorSource::Json(source),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_status(message: impl Into<String>, status: StatusCode) -> Self {
+        let mut error = Self::new(message);
+        error.status = status;
+        error
+    }
+
+    #[doc(hidden)]
+    pub fn other_with_status(source: BoxError, status: StatusCode) -> Self {
+        let mut error = Self::other(source);
+        error.status = status;
+        error
+    }
+
+    #[inline]
+    fn as_source(&self) -> ErrorSourceRef<'_> {
+        match &self.source {
+            ErrorSource::AllowMethod(source) => ErrorSourceRef::AllowMethod(source),
+            ErrorSource::Message(message) => ErrorSourceRef::Message(message),
+            ErrorSource::Other(source) => ErrorSourceRef::Other(source.as_ref()),
+            ErrorSource::Json(source) => ErrorSourceRef::Json(source),
+        }
+    }
+
+    fn repr_json(&self) -> Errors<'_> {
+        if let ErrorSourceRef::Message(message) = self.as_source() {
+            Errors::new(self.status, message)
         } else {
             let mut errors = Vec::with_capacity(12);
             let mut source = self.source();
@@ -164,72 +219,18 @@ impl Error {
             // Reverse the order of the error messages to match the call stack.
             errors.reverse();
 
-            Errors::chain(status, errors)
-        }
-    }
-}
-
-impl Error {
-    pub(crate) fn invalid_utf8_sequence(name: &str) -> Self {
-        Self::with_status(
-            StatusCode::BAD_REQUEST,
-            format!("invalid utf-8 sequence of bytes in {}.", name),
-        )
-    }
-
-    pub(crate) fn method_not_allowed(error: MethodNotAllowed) -> Self {
-        Self {
-            status: StatusCode::METHOD_NOT_ALLOWED,
-            kind: ErrorKind::AllowMethod(Box::new(error)),
-        }
-    }
-
-    pub(crate) fn require_path_param(name: &str) -> Self {
-        Self::with_status(
-            StatusCode::BAD_REQUEST,
-            format!("missing required path parameter: \"{}\".", name),
-        )
-    }
-
-    pub(crate) fn require_query_param(name: &str) -> Self {
-        Self::with_status(
-            StatusCode::BAD_REQUEST,
-            format!("missing required query parameter: \"{}\".", name),
-        )
-    }
-
-    pub(crate) fn ser_json(source: serde_json::Error) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            kind: ErrorKind::Json(source),
-        }
-    }
-
-    pub(crate) fn de_json(source: serde_json::Error) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            kind: ErrorKind::Json(source),
-        }
-    }
-
-    #[inline]
-    fn kind(&self) -> ErrorKindRef<'_> {
-        match &self.kind {
-            ErrorKind::AllowMethod(source) => ErrorKindRef::AllowMethod(source),
-            ErrorKind::Message(message) => ErrorKindRef::Message(message),
-            ErrorKind::Other(source) => ErrorKindRef::Other(source.as_ref()),
-            ErrorKind::Json(source) => ErrorKindRef::Json(source),
+            Errors::chain(self.status, errors)
         }
     }
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self.kind() {
-            ErrorKindRef::Message(message) => Display::fmt(message, f),
-            ErrorKindRef::AllowMethod(source) => Display::fmt(source, f),
-            ErrorKindRef::Other(source) => Display::fmt(source, f),
-            ErrorKindRef::Json(source) => Display::fmt(source, f),
+        match self.as_source() {
+            ErrorSourceRef::Message(message) => Display::fmt(message, f),
+            ErrorSourceRef::AllowMethod(source) => Display::fmt(source, f),
+            ErrorSourceRef::Other(source) => Display::fmt(source, f),
+            ErrorSourceRef::Json(source) => Display::fmt(source, f),
         }
     }
 }
@@ -239,7 +240,7 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     fn from(source: E) -> Self {
-        Self::from_source(StatusCode::INTERNAL_SERVER_ERROR, Box::new(source))
+        Self::other(Box::new(source))
     }
 }
 
@@ -264,7 +265,7 @@ impl From<Error> for Response {
 
 impl Serialize for Error {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.repr_json(self.status).serialize(serializer)
+        self.repr_json().serialize(serializer)
     }
 }
 

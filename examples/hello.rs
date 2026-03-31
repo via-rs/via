@@ -1,9 +1,9 @@
 use std::process::ExitCode;
-use via::{Error, Next, Request, Response, Server};
+use via::{Error, Next, Request, Response, ResultExt, Server};
 
 async fn hello(request: Request, _: Next) -> via::Result {
     // Get a reference to `name` from the request uri path.
-    let name = request.param("name").ok_or_bad_request()?;
+    let name = request.param("name").percent_decode().into_result()?;
 
     // Send a plain text response with our greeting message.
     Response::build().text(format!("Hello, {}!", name.as_ref()))

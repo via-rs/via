@@ -536,9 +536,9 @@ impl Future for Coalesce {
                 }
                 Err(frame) => {
                     let Ok(trailers) = frame.into_trailers() else {
-                        return Poll::Ready(Err(Error::with_status(
-                            StatusCode::BAD_REQUEST,
+                        return Poll::Ready(Err(Error::new_with_status(
                             "unexpected frame type received while reading the request body",
+                            StatusCode::BAD_REQUEST,
                         )));
                     };
 

@@ -23,9 +23,11 @@ pub trait Predicate<App> {
 ///
 /// api.middleware(via::guard(
 ///     || raise!(401, message = "\"x-api-key\" is missing or invalid."),
-///     |request| request.headers().get("x-api-key").is_some_and(|value| {
-///         todo!("validate api key value.");
-///     }),
+///     |request: &Request<_>| {
+///         request.headers().get("x-api-key").is_some_and(|value| {
+///             todo!("validate api key value");
+///         })
+///     },
 /// ));
 ///
 /// // Subsequent routes have a valid API key.
@@ -51,9 +53,11 @@ pub struct Guard<E, T> {
 ///
 /// api.middleware(via::guard(
 ///     || raise!(401, message = "\"x-api-key\" is missing or invalid."),
-///     |request| request.headers().get("x-api-key").is_some_and(|value| {
-///         todo!("validate api key value");
-///     }),
+///     |request: &Request<_>| {
+///         request.headers().get("x-api-key").is_some_and(|value| {
+///             todo!("validate api key value");
+///         })
+///     },
 /// ));
 ///
 /// // Subsequent routes have a valid API key.

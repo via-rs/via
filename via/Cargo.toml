@@ -1,9 +1,10 @@
 [package]
 name = "via"
-version = "2.0.0-gm.28"
+version = "2.0.0-gm.29"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
+readme = "../README.md"
 description = "An async multi-threaded web framework for people who appreciate simplicity."
 categories = ["web-programming::http-server"]
 homepage = "https://github.com/via-rs/via"

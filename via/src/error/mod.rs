@@ -74,30 +74,15 @@ impl Error {
     /// Returns a new error with the provided status and message.
     ///
     pub fn new(message: impl Into<String>) -> Self {
-        Self::with_status(StatusCode::INTERNAL_SERVER_ERROR, message)
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            source: ErrorSource::Message(message.into()),
+        }
     }
 
     pub fn other(source: BoxError) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            source: ErrorSource::Other(source),
-        }
-    }
-
-    /// Returns a new error with the provided status and message.
-    ///
-    pub fn with_status(status: StatusCode, message: impl Into<String>) -> Self {
-        Self {
-            status,
-            source: ErrorSource::Message(message.into()),
-        }
-    }
-
-    /// Returns a new error with the provided status and source.
-    ///
-    pub fn from_source(status: StatusCode, source: BoxError) -> Self {
-        Self {
-            status,
             source: ErrorSource::Other(source),
         }
     }
@@ -136,7 +121,7 @@ impl Error {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
-        Self::from_source(status, Box::new(error))
+        Self::other_with_status(Box::new(error), status)
     }
 
     /// Returns a reference to the error source.
@@ -152,29 +137,6 @@ impl Error {
 
     pub fn status(&self) -> StatusCode {
         self.status
-    }
-
-    pub(crate) fn status_mut(&mut self) -> &mut StatusCode {
-        &mut self.status
-    }
-
-    fn repr_json(&self, status: StatusCode) -> Errors<'_> {
-        if let ErrorSourceRef::Message(message) = self.as_source() {
-            Errors::new(status, message)
-        } else {
-            let mut errors = Vec::with_capacity(12);
-            let mut source = self.source();
-
-            while let Some(error) = source {
-                errors.push(error.to_string());
-                source = error.source();
-            }
-
-            // Reverse the order of the error messages to match the call stack.
-            errors.reverse();
-
-            Errors::chain(status, errors)
-        }
     }
 }
 
@@ -218,6 +180,20 @@ impl Error {
         }
     }
 
+    #[doc(hidden)]
+    pub fn new_with_status(message: impl Into<String>, status: StatusCode) -> Self {
+        let mut error = Self::new(message);
+        error.status = status;
+        error
+    }
+
+    #[doc(hidden)]
+    pub fn other_with_status(source: BoxError, status: StatusCode) -> Self {
+        let mut error = Self::other(source);
+        error.status = status;
+        error
+    }
+
     #[inline]
     fn as_source(&self) -> ErrorSourceRef<'_> {
         match &self.source {
@@ -225,6 +201,25 @@ impl Error {
             ErrorSource::Message(message) => ErrorSourceRef::Message(message),
             ErrorSource::Other(source) => ErrorSourceRef::Other(source.as_ref()),
             ErrorSource::Json(source) => ErrorSourceRef::Json(source),
+        }
+    }
+
+    fn repr_json(&self) -> Errors<'_> {
+        if let ErrorSourceRef::Message(message) = self.as_source() {
+            Errors::new(self.status, message)
+        } else {
+            let mut errors = Vec::with_capacity(12);
+            let mut source = self.source();
+
+            while let Some(error) = source {
+                errors.push(error.to_string());
+                source = error.source();
+            }
+
+            // Reverse the order of the error messages to match the call stack.
+            errors.reverse();
+
+            Errors::chain(self.status, errors)
         }
     }
 }
@@ -270,7 +265,7 @@ impl From<Error> for Response {
 
 impl Serialize for Error {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.repr_json(self.status).serialize(serializer)
+        self.repr_json().serialize(serializer)
     }
 }
 

@@ -73,18 +73,23 @@
 #[macro_export]
 macro_rules! raise {
     (#[ctor] $status:expr, message = $message:expr $(,)?) => {
-        return Err($crate::Error::with_status($status, $message))
+        return Err($crate::Error::new_with_status($message, $status))
     };
     (#[ctor] $status:expr, boxed = $source:expr $(,)?) => {
-        return Err($crate::Error::from_source($status, $source))
+        return Err($crate::Error::other_with_status($source, $status))
     };
     (#[ctor] $status:expr, $source:expr $(,)?) => {
-        return Err($crate::Error::from_source($status, Box::new($source)))
+        return Err($crate::Error::other_with_status(Box::new($source), $status))
     };
     (#[ctor] $status:expr) => {{
         let status = $status;
-        let message = status.canonical_reason().unwrap_or_default().to_owned();
-        return Err($crate::Error::with_status(status, message))
+        let message = status
+            .canonical_reason()
+            .unwrap_or_default()
+            .to_owned()
+            .to_ascii_lowercase() + ".";
+
+        return Err($crate::Error::new_with_status(message, status))
     }};
 
     (|| $($args:tt)*) => { (|| { $crate::raise!($($args)*) })() };

@@ -18,8 +18,7 @@ pub struct Rescue<F> {
 ///
 pub struct Sanitizer<'a> {
     json: bool,
-    error: &'a Error,
-    status: Option<StatusCode>,
+    error: &'a mut Error,
     message: Option<Cow<'a, str>>,
 }
 
@@ -43,8 +42,8 @@ where
         let recover = *self.recover;
 
         Box::pin(async move {
-            future.await.or_else(|error| {
-                let mut sanitizer = Sanitizer::new(&error);
+            future.await.or_else(|mut error| {
+                let mut sanitizer = Sanitizer::new(&mut error);
                 recover(&mut sanitizer);
 
                 let response = Response::build();
@@ -81,7 +80,7 @@ impl<'a> Sanitizer<'a> {
     /// Overrides the HTTP status code of the error.
     ///
     pub fn set_status(&mut self, status: StatusCode) {
-        self.status = Some(status);
+        self.error.status = status;
     }
 
     /// Use the canonical reason of the status code as the error message.
@@ -95,20 +94,19 @@ impl<'a> Sanitizer<'a> {
     pub fn use_json(&mut self) {
         self.json = true;
     }
+
+    fn status(&self) -> StatusCode {
+        self.error.status
+    }
 }
 
 impl<'a> Sanitizer<'a> {
-    fn new(error: &'a Error) -> Self {
+    fn new(error: &'a mut Error) -> Self {
         Self {
             json: false,
             error,
-            status: None,
             message: None,
         }
-    }
-
-    fn status(&self) -> StatusCode {
-        self.status.unwrap_or(self.error.status)
     }
 }
 
@@ -120,8 +118,7 @@ impl Display for Sanitizer<'_> {
 
 impl Finalize for Sanitizer<'_> {
     fn finalize(self, builder: ResponseBuilder) -> Result<Response, Error> {
-        let status = self.status();
-        let mut builder = builder.status(status);
+        let mut builder = builder.status(self.status());
 
         if let ErrorSourceRef::AllowMethod(error) = self.error.as_source()
             && let Some(allow) = error.allows()
@@ -131,8 +128,8 @@ impl Finalize for Sanitizer<'_> {
 
         if self.json {
             let json = self.message.as_deref().map_or_else(
-                || self.error.repr_json(status),
-                |message| Errors::new(status, message),
+                || self.error.repr_json(),
+                |message| Errors::new(self.status(), message),
             );
 
             builder.json(&json)

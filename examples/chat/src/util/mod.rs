@@ -1,6 +1,6 @@
 pub mod session;
 
-pub use session::{Authenticate, Session};
+pub use session::{Authenticate, Identity, Session};
 
 use serde::{Deserialize, Serialize};
 

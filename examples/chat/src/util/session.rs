@@ -9,7 +9,6 @@ use crate::database::Id;
 use crate::database::models::User;
 use crate::{Next, Request};
 
-const ENCODED_LEN: usize = 24;
 const EXPIRES_AT: usize = 8;
 const TOKEN_LEN: usize = 16;
 
@@ -125,7 +124,7 @@ impl FromStr for Identity {
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let mut buf = [0u8; TOKEN_LEN];
 
-        if input.len() != ENCODED_LEN || URL_SAFE_NO_PAD.decode_slice(input, &mut buf).is_err() {
+        if URL_SAFE_NO_PAD.decode_slice(input, &mut buf).is_err() {
             raise!(400, message = "unknown session cookie format.");
         }
 
@@ -165,7 +164,7 @@ impl Authenticate for Response {
 
         if let Some(Identity(value)) = identity {
             // Set the value of the cookie to the user.
-            cookie.set_value(URL_SAFE_NO_PAD.encode(value));
+            cookie.set_value(URL_SAFE_NO_PAD.encode(value.as_slice()));
         } else {
             // Indicates to the client that the cookie should be removed.
             cookie.make_removal();

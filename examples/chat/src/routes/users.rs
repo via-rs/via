@@ -1,8 +1,9 @@
 use http::StatusCode;
 use via::{Payload, Response, raise};
 
+use crate::database::Identify;
 use crate::database::models::NewUser;
-use crate::util::Body;
+use crate::util::{Authenticate, Body, Identity};
 use crate::{Next, Request};
 
 pub async fn index(_: Request, _: Next) -> via::Result {
@@ -14,8 +15,12 @@ pub async fn create(request: Request, _: Next) -> via::Result {
     let Body { data } = future.await?.json::<Body<NewUser>>()?;
 
     let user = app.database().insert_user(data).await?;
+    let identity = Identity::new(*user.id());
+    let mut response = Response::build().json(&Body::new(user))?;
 
-    Response::build().json(&Body::new(user))
+    response.authenticate(app.secret(), Some(identity));
+
+    Ok(response)
 }
 
 pub async fn show(request: Request, _: Next) -> via::Result {

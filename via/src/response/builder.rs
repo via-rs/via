@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::Response;
 use super::body::ResponseBody;
-use crate::error::{BoxError, Error};
+use crate::error::Error;
 
 /// Define how a type finalizes a [`ResponseBuilder`].
 ///
@@ -110,7 +110,7 @@ impl ResponseBuilder {
 
 impl<T> Finalize for T
 where
-    T: Stream<Item = Result<Frame<Bytes>, BoxError>> + Send + Sync + 'static,
+    T: Stream<Item = Result<Frame<Bytes>, Error>> + Send + Sync + 'static,
 {
     #[inline]
     fn finalize(self, builder: ResponseBuilder) -> Result<Response, Error> {

@@ -154,6 +154,15 @@ impl Error {
         }
     }
 
+    pub(crate) fn payload_too_large() -> Self {
+        let message = "request body exceeds the maximum length".to_owned();
+
+        Self {
+            source: ErrorSource::Message(message),
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+        }
+    }
+
     pub(crate) fn require_path_param(name: &str) -> Self {
         let mut error = Self::new(format!("missing required path parameter: \"{}\".", name));
         error.status = StatusCode::BAD_REQUEST;
@@ -231,6 +240,17 @@ impl Display for Error {
             ErrorSourceRef::AllowMethod(source) => Display::fmt(source, f),
             ErrorSourceRef::Other(source) => Display::fmt(source, f),
             ErrorSourceRef::Json(source) => Display::fmt(source, f),
+        }
+    }
+}
+
+impl From<Error> for BoxError {
+    fn from(error: Error) -> Self {
+        match error.source {
+            ErrorSource::AllowMethod(source) => source,
+            ErrorSource::Message(string) => string.into(),
+            ErrorSource::Other(source) => source,
+            ErrorSource::Json(source) => source.into(),
         }
     }
 }

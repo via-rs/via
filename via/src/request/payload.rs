@@ -574,12 +574,13 @@ impl Body for RequestBody {
         Poll::Ready(next.map(|result| {
             result.or_bad_request().and_then(|frame| {
                 if let Some(data) = frame.data_ref()
-                    && self.remaining.checked_sub(data.len()).is_none()
+                    && let Some(remaining) = self.remaining.checked_sub(data.len())
                 {
+                    self.remaining = remaining;
+                    Ok(frame)
+                } else {
                     self.remaining = 0;
                     Err(Error::payload_too_large())
-                } else {
-                    Ok(frame)
                 }
             })
         }))

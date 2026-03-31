@@ -3,6 +3,7 @@
 
 mod raise;
 mod rescue;
+mod result;
 mod server;
 
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
@@ -14,6 +15,7 @@ use std::io::{self, Error as IoError};
 pub use http::StatusCode; // Required for the raise macro.
 
 pub use rescue::{Rescue, Sanitizer, rescue};
+pub use result::ResultExt;
 pub(crate) use server::ServerError;
 
 use crate::response::Response;

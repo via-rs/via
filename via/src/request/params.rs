@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::str::FromStr;
 
 use super::query::{QueryParamRange, QueryParser};
+use crate::error::{Error, ResultExt};
 use crate::util::UriEncoding;
-use crate::{Error, raise};
 
 pub struct PathParam<'a, 'b> {
     encoding: UriEncoding,
@@ -138,12 +138,10 @@ impl<'a, 'b> PathParam<'a, 'b> {
     pub fn parse<U>(self) -> Result<U, Error>
     where
         U: FromStr,
-        U::Err: std::error::Error + Send + Sync + 'static,
+        Error: From<U::Err>,
     {
-        self.ok_or_bad_request()?
-            .as_ref()
-            .parse()
-            .or_else(|error| raise!(400, error))
+        self.into_result()
+            .and_then(|value| value.as_ref().parse().or_bad_request())
     }
 
     pub fn ok(self) -> Result<Option<Cow<'a, str>>, Error> {
@@ -152,17 +150,14 @@ impl<'a, 'b> PathParam<'a, 'b> {
             .map(|value| self.encoding.decode_as(self.name, value))
             .transpose()
     }
+}
 
-    /// Returns a result with the parameter value if it exists. If the param is
-    /// encoded, it will be decoded before it is returned.
-    ///
-    /// # Errors
-    ///
-    /// If the parameter does not exist or could not be decoded with the
-    /// implementation of `T::decode`, an error is returned with a 400 Bad
-    /// Request status code.
-    ///
-    pub fn ok_or_bad_request(self) -> Result<Cow<'a, str>, Error> {
+impl<'a, 'b> ResultExt for PathParam<'a, 'b> {
+    type Output = Cow<'a, str>;
+
+    /// Returns a result with the parameter value if it exists.
+    #[inline]
+    fn into_result(self) -> Result<Self::Output, Error> {
         self.param
             .and_then(|param| param.slice(self.source))
             .ok_or_else(|| Error::require_path_param(self.name))
@@ -202,33 +197,16 @@ impl<'a, 'b> QueryParam<'a, 'b> {
     pub fn parse<U>(self) -> Result<U, Error>
     where
         U: FromStr,
-        U::Err: std::error::Error + Send + Sync + 'static,
+        Error: From<U::Err>,
     {
-        self.ok_or_bad_request()?
-            .as_ref()
-            .parse()
-            .or_else(|error| raise!(400, error))
+        self.into_result()
+            .and_then(|value| value.as_ref().parse().or_bad_request())
     }
 
     pub fn ok(self) -> Result<Option<Cow<'a, str>>, Error> {
         self.slice()
             .map(|value| self.encoding.decode_as(self.name, value))
             .transpose()
-    }
-
-    /// Returns a result with the parameter value if it exists. If the param is
-    /// encoded, it will be decoded before it is returned.
-    ///
-    /// # Errors
-    ///
-    /// If the parameter does not exist or could not be decoded with the
-    /// implementation of `T::decode`, an error is returned with a 400 Bad
-    /// Request status code.
-    ///
-    pub fn ok_or_bad_request(self) -> Result<Cow<'a, str>, Error> {
-        self.slice()
-            .ok_or_else(|| Error::require_query_param(self.name))
-            .and_then(|value| self.encoding.decode_as(self.name, value))
     }
 }
 
@@ -246,5 +224,17 @@ impl<'a, 'b> QueryParam<'a, 'b> {
                 [Some(from), None] => source.get(from..),
                 [None, _] => None,
             })
+    }
+}
+
+impl<'a, 'b> ResultExt for QueryParam<'a, 'b> {
+    type Output = Cow<'a, str>;
+
+    /// Returns a result with the parameter value if it exists.
+    #[inline]
+    fn into_result(self) -> Result<Self::Output, Error> {
+        self.slice()
+            .ok_or_else(|| Error::require_query_param(self.name))
+            .and_then(|value| self.encoding.decode_as(self.name, value))
     }
 }

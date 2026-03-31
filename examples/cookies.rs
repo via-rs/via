@@ -1,7 +1,7 @@
 use cookie::{Cookie, Key, SameSite};
 use std::process::ExitCode;
 use std::time::Duration;
-use via::{Error, Next, Request, Response, Server};
+use via::{Error, Next, Request, Response, ResultExt, Server};
 
 struct Unicorn {
     secret: Key,
@@ -23,7 +23,7 @@ async fn hello(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
     // Increment the value of the visit counter.
     counter += 1;
 
-    let name = request.param("name").percent_decode().ok_or_bad_request()?;
+    let name = request.param("name").percent_decode().into_result()?;
     let name = name.as_ref();
 
     // Print the number of times the user has visited the site to stdout.

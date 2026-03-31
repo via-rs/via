@@ -4,12 +4,13 @@ mod util;
 
 use cookie::Key;
 use std::process::ExitCode;
-use via::error::{Error, rescue};
-use via::{Server, cookies, guard, rest};
+use via::{Error, Server, raise, rest};
 
 use database::Database;
 use routes::{auth, channels, reactions, threads, users};
 use util::session;
+
+use crate::util::Session;
 
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
@@ -36,12 +37,16 @@ async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(Unicorn {
         database: Database::new()?,
         secret: Key::generate(),
+        // secret: std::env::var("VIA_SECRET_KEY")
+        //     .map(|secret| secret.as_bytes().try_into())
+        //     .expect("missing required env var: VIA_SECRET_KEY")
+        //     .expect("unexpected end of input while parsing VIA_SECRET_KEY"),
     });
 
     let mut api = app.route("/api");
 
-    api.middleware(rescue(|sanitizer| sanitizer.respond_with_json()));
-    api.middleware(cookies([session::COOKIE]));
+    api.middleware(via::rescue(|sanitizer| sanitizer.use_json()));
+    api.middleware(via::cookies([session::COOKIE]));
     api.middleware(session::restore);
 
     api.route("/auth").scope(|auth| {
@@ -92,7 +97,10 @@ async fn main() -> Result<ExitCode, Error> {
 
     api.route("/chat").scope(|chat| {
         // Any request to subequently defined routes must be authenticated.
-        chat.middleware(guard(|_| Ok(())));
+        chat.middleware(via::guard(
+            || raise!(401, message = "unauthorized"),
+            |request: &Request| request.session().is_ok(),
+        ));
 
         // Upgrade to a websocket and start chatting.
         chat.index().to(via::ws(routes::chat));
@@ -101,9 +109,6 @@ async fn main() -> Result<ExitCode, Error> {
     api.route("/users").scope(|users| {
         // Creating an account does not require authentication.
         users.index().to(via::post(users::create));
-
-        // Any request to subequently defined routes must be authenticated.
-        users.middleware(guard(|_| Ok(())));
 
         users.index().to(via::get(users::index));
         users.route("/:user-id").to(rest!(users as member));

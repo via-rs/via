@@ -39,6 +39,7 @@
 //!
 
 pub mod error;
+pub mod guard;
 pub mod request;
 pub mod response;
 pub mod router;
@@ -48,7 +49,6 @@ pub mod ws;
 
 mod app;
 mod cookies;
-mod guard;
 mod middleware;
 mod next;
 mod rest;
@@ -58,7 +58,7 @@ mod util;
 pub use app::{Shared, Via, app};
 pub use cookies::{Cookies, cookies};
 pub use error::{Error, rescue};
-pub use guard::{Guard, guard};
+pub use guard::guard;
 pub use middleware::{BoxFuture, Middleware, Result};
 pub use next::{Continue, Next};
 pub use request::{Payload, Request};

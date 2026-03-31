@@ -55,10 +55,10 @@ async fn main() -> Result<ExitCode, Error> {
         secret: Key::generate(),
     });
 
-    // The CookieParser middleware can be added at any depth of the route tree.
-    // In this example, we add it to the root of the app. This means that every
-    // request will pass through the CookieParser middleware.
-    app.middleware(via::cookies().allow("counter"));
+    // The Cookies middleware can be added at any depth of the route tree.
+    // In this example, we add it at the root path of our application. This
+    // enables cookie support for all of the subsequently defined middlewares.
+    app.middleware(via::cookies(["counter"]));
 
     // Add a route that responds with a greeting message.
     app.route("/hello/:name").to(via::get(hello));

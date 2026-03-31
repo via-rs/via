@@ -219,11 +219,11 @@ impl<'a, App> Route<'a, App> {
     /// # Example
     ///
     /// ```
-    /// # use via::{Next, Request, cookies, raise};
+    /// # use via::{Next, Request, raise};
     /// # let mut app = via::app(());
     /// #
     /// // Provides application-wide support for request and response cookies.
-    /// app.middleware(cookies().allow("is-admin"));
+    /// app.middleware(via::cookies(["is-admin"]));
     ///
     /// // Requests made to /admin or any of its descendants must have an
     /// // is-admin cookie present on the request.

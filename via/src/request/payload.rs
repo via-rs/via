@@ -1,7 +1,6 @@
 use bytes::{Buf, Bytes};
 use http::{HeaderMap, StatusCode};
-use http_body::Body;
-use http_body_util::{LengthLimitError, Limited};
+use http_body::{Body, Frame, SizeHint};
 use hyper::body::Incoming;
 use serde::de::DeserializeOwned;
 use std::future::Future;
@@ -12,7 +11,7 @@ use std::rc::Rc;
 use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 
-use crate::error::{BoxError, Error};
+use crate::error::{Error, ResultExt};
 use crate::raise;
 
 mod sealed {
@@ -177,8 +176,14 @@ pub struct Aggregate {
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Coalesce {
-    body: Limited<Incoming>,
+    body: RequestBody,
     payload: Option<RequestPayload>,
+}
+
+#[derive(Debug)]
+pub struct RequestBody {
+    remaining: usize,
+    body: Incoming,
 }
 
 struct RequestPayload {
@@ -201,16 +206,6 @@ where
 #[inline]
 fn deserialize_utf8(data: Vec<u8>) -> Result<String, Error> {
     String::from_utf8(data).map_err(|_| Error::invalid_utf8_sequence("request body"))
-}
-
-fn into_future_error<T>(error: BoxError) -> Result<T, Error> {
-    if error.is::<LengthLimitError>() {
-        // Payload Too Large
-        raise!(413, message = error.to_string());
-    } else {
-        // Bad Request
-        raise!(400, boxed = error);
-    }
 }
 
 /// Zeroize the buffer backing the provided `Bytes`. Afterwards, the data in
@@ -504,7 +499,7 @@ impl Payload for Bytes {
 }
 
 impl Coalesce {
-    pub(super) fn new(body: Limited<Incoming>) -> Self {
+    pub(super) fn new(body: RequestBody) -> Self {
         Self {
             body,
             payload: Some(RequestPayload::new()),
@@ -520,14 +515,13 @@ impl Future for Coalesce {
         let mut body = Pin::new(body);
 
         loop {
-            let Some(result) = ready!(body.as_mut().poll_frame(context)) else {
+            let Some(frame) = ready!(body.as_mut().poll_frame(context)?) else {
                 return Poll::Ready(match payload.take() {
                     Some(payload) => Ok(Aggregate::new(payload)),
                     None => already_read(),
                 });
             };
 
-            let frame = result.or_else(into_future_error)?;
             let payload = payload.as_mut().map_or_else(already_read, Ok)?;
             let trailers = match frame.into_data() {
                 Ok(data) => {
@@ -552,6 +546,59 @@ impl Future for Coalesce {
                 payload.trailers = Some(trailers);
             }
         }
+    }
+}
+
+impl RequestBody {
+    pub(crate) fn new(body: Incoming, remaining: usize) -> Self {
+        Self { body, remaining }
+    }
+}
+
+impl Body for RequestBody {
+    type Data = Bytes;
+    type Error = Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        context: &mut Context,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        if self.remaining == 0 {
+            return Poll::Ready(Some(Err(Error::payload_too_large())));
+        }
+
+        let Poll::Ready(next) = Pin::new(&mut self.body).poll_frame(context) else {
+            return Poll::Pending;
+        };
+
+        Poll::Ready(next.map(|result| {
+            result.or_bad_request().and_then(|frame| {
+                if let Some(data) = frame.data_ref()
+                    && self.remaining.checked_sub(data.len()).is_none()
+                {
+                    self.remaining = 0;
+                    Err(Error::payload_too_large())
+                } else {
+                    Ok(frame)
+                }
+            })
+        }))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.remaining == 0 || self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        let mut hint = self.body.size_hint();
+
+        if hint.exact().is_none()
+            && let Ok(upper) = self.remaining.try_into()
+        {
+            hint.set_upper(upper);
+        }
+
+        hint
     }
 }
 

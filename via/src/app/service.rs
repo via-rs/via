@@ -1,4 +1,3 @@
-use http_body_util::Limited;
 use hyper::body::Incoming;
 use hyper::service::Service;
 use std::collections::VecDeque;
@@ -7,10 +6,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::request::Envelope;
+use crate::request::{Envelope, Request, RequestBody};
 use crate::response::{Response, ResponseBody};
 use crate::server::ServerConfig;
-use crate::{BoxFuture, Next, Request, Via, raise};
+use crate::{BoxFuture, Next, Via, raise};
 
 const MAX_URI_PATH_LEN: usize = 8092; // 8 KB
 
@@ -121,7 +120,7 @@ impl<App> Service<http::Request<Incoming>> for ViaService<App> {
             let envelope = Envelope::new(parts, params);
 
             // Limit request body sizes to the configured maximum.
-            let body = Limited::new(body, self.config.max_request_size());
+            let body = RequestBody::new(body, self.config.max_request_size());
 
             Request::new(envelope, body, app)
         };

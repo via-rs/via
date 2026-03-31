@@ -4,14 +4,12 @@ mod payload;
 mod query;
 
 pub use params::{PathParams, QueryParams};
-pub use payload::{Aggregate, Coalesce, Payload};
+pub use payload::{Aggregate, Coalesce, Payload, RequestBody};
 
 use cookie::CookieJar;
 use delegate::delegate;
 use http::request::Parts;
 use http::{Extensions, HeaderMap, Method, Uri, Version};
-use http_body_util::Limited;
-use hyper::body::Incoming;
 use std::fmt::{self, Debug, Formatter};
 
 use crate::ResultExt;
@@ -28,7 +26,7 @@ pub struct Envelope {
 
 pub struct Request<App = ()> {
     envelope: Envelope,
-    body: Limited<Incoming>,
+    body: RequestBody,
     app: Shared<App>,
 }
 
@@ -146,7 +144,7 @@ impl Debug for Envelope {
 
 impl<App> Request<App> {
     #[inline]
-    pub(crate) fn new(envelope: Envelope, body: Limited<Incoming>, app: Shared<App>) -> Self {
+    pub(crate) fn new(envelope: Envelope, body: RequestBody, app: Shared<App>) -> Self {
         Self {
             envelope,
             body,
@@ -233,7 +231,7 @@ impl<App> Request<App> {
     /// Consumes the request and returns a tuple containing it's parts.
     ///
     #[inline]
-    pub fn into_parts(self) -> (Envelope, Limited<Incoming>, Shared<App>) {
+    pub fn into_parts(self) -> (Envelope, RequestBody, Shared<App>) {
         (self.envelope, self.body, self.app)
     }
 }

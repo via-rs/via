@@ -22,8 +22,7 @@ pub struct Index<'a, App>(Route<'a, App>);
 ///
 /// ```no_run
 /// use std::process::ExitCode;
-/// use via::error::{Error, Rescue};
-/// use via::{Next, Request, Server};
+/// use via::{Error, Next, Request, Server, rescue};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
@@ -32,7 +31,7 @@ pub struct Index<'a, App>(Route<'a, App>);
 ///
 ///     // If an error occurs on a descendant of /api, respond with json.
 ///     // Siblings of /api must define their own error handling logic.
-///     api.middleware(Rescue::new(|sanitizer| sanitizer.use_json()));
+///     api.middleware(rescue(|sanitizer| sanitizer.use_json()));
 ///
 ///     // Define a /users resource as a child of /api so the rescue and timeout
 ///     // middleware run before any of the middleware or responders defined in
@@ -220,11 +219,11 @@ impl<'a, App> Route<'a, App> {
     /// # Example
     ///
     /// ```
-    /// # use via::{Next, Cookies, Request, raise};
+    /// # use via::{Next, Request, cookies, raise};
     /// # let mut app = via::app(());
     /// #
     /// // Provides application-wide support for request and response cookies.
-    /// app.middleware(Cookies::new().allow("is-admin"));
+    /// app.middleware(cookies().allow("is-admin"));
     ///
     /// // Requests made to /admin or any of its descendants must have an
     /// // is-admin cookie present on the request.

@@ -26,6 +26,7 @@ pub struct Reaction {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewReaction {
     pub conversation_id: Option<Uuid>,
     pub user_id: Option<Id>,

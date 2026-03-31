@@ -4,6 +4,7 @@ use std::fmt::{self, Display, Formatter};
 use std::num::{NonZeroU64, TryFromIntError};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use via::Error;
 use via::error::BoxError;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -79,7 +80,7 @@ impl Display for Id {
 }
 
 impl FromStr for Id {
-    type Err = BoxError;
+    type Err = Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         Ok(Self(input.parse()?))

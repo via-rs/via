@@ -1,6 +1,6 @@
 use bytes::{Buf, Bytes};
 use http::{HeaderMap, StatusCode};
-use http_body::{Body, Frame, SizeHint};
+use http_body::{Body, Frame};
 use hyper::body::Incoming;
 use serde::de::DeserializeOwned;
 use std::future::Future;
@@ -573,11 +573,14 @@ impl Body for RequestBody {
 
         Poll::Ready(next.map(|result| {
             result.or_bad_request().and_then(|frame| {
-                if let Some(data) = frame.data_ref()
-                    && self.remaining.checked_sub(data.len()).is_none()
-                {
-                    self.remaining = 0;
-                    Err(Error::payload_too_large())
+                if let Some(data) = frame.data_ref() {
+                    if let Some(remaining) = self.remaining.checked_sub(data.len()) {
+                        self.remaining = remaining;
+                        Ok(frame)
+                    } else {
+                        self.remaining = 0;
+                        Err(Error::payload_too_large())
+                    }
                 } else {
                     Ok(frame)
                 }
@@ -586,19 +589,7 @@ impl Body for RequestBody {
     }
 
     fn is_end_stream(&self) -> bool {
-        self.remaining == 0 || self.body.is_end_stream()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        let mut hint = self.body.size_hint();
-
-        if hint.exact().is_none()
-            && let Ok(upper) = self.remaining.try_into()
-        {
-            hint.set_upper(upper);
-        }
-
-        hint
+        self.body.is_end_stream()
     }
 }
 

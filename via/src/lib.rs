@@ -56,9 +56,9 @@ mod server;
 mod util;
 
 pub use app::{Shared, Via, app};
-pub use cookies::Cookies;
-pub use error::Error;
-pub use guard::Guard;
+pub use cookies::{Cookies, cookies};
+pub use error::{Error, rescue};
+pub use guard::{Guard, guard};
 pub use middleware::{BoxFuture, Middleware, Result};
 pub use next::{Continue, Next};
 pub use request::{Payload, Request};

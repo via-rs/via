@@ -27,7 +27,7 @@ struct SetCookieError;
 /// use cookie::{Cookie, SameSite};
 /// use std::process::ExitCode;
 /// use std::time::Duration;
-/// use via::{Cookies, Error, Next, Request, Response, Server};
+/// use via::{Error, Next, Request, Response, Server, cookies};
 ///
 /// async fn greet(request: Request, _: Next) -> via::Result {
 ///     // `should_set_name` indicates whether "name" was sourced from the
@@ -64,7 +64,7 @@ struct SetCookieError;
 ///     let mut app = via::app(());
 ///
 ///     // Provide cookie support for downstream middleware.
-///     app.middleware(Cookies::new().allow("name").decode());
+///     app.middleware(cookies().allow("name").decode());
 ///
 ///     // Respond with a greeting when a user visits /hello/:name.
 ///     app.route("/hello/:name").to(via::get(greet));
@@ -132,7 +132,7 @@ struct SetCookieError;
 /// use serde::Deserialize;
 /// use std::process::ExitCode;
 /// use std::time::Duration;
-/// use via::{Cookies, Error, Next, Payload, Request, Response, Server};
+/// use via::{Error, Next, Payload, Request, Response, Server, cookies};
 ///
 /// #[derive(Deserialize)]
 /// struct Login {
@@ -177,7 +177,7 @@ struct SetCookieError;
 ///     let mut app = via::app(());
 ///
 ///     // Unencoded cookie support.
-///     app.middleware(Cookies::new().allow("via-session"));
+///     app.middleware(cookies().allow("via-session"));
 ///
 ///     // Add our login route to our application.
 ///     app.route("/auth/login").to(via::post(login));
@@ -192,6 +192,21 @@ pub struct Cookies {
     allow: HashSet<String>,
 }
 
+/// Returns middleware that provides support for unencoded request and
+/// response cookies.
+///
+/// # Example
+///
+/// ```
+/// # use via::cookies;
+/// # let mut app = via::app(());
+/// app.middleware(cookies());
+/// ```
+///
+pub fn cookies() -> Cookies {
+    Cookies::new()
+}
+
 #[inline(always)]
 fn split_parse<'a>(encoding: &UriEncoding, input: &'a str) -> SplitCookies<'a> {
     if let UriEncoding::Percent = *encoding {
@@ -202,21 +217,6 @@ fn split_parse<'a>(encoding: &UriEncoding, input: &'a str) -> SplitCookies<'a> {
 }
 
 impl Cookies {
-    /// Returns middleware that provides support for unencoded request and
-    /// response cookies.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use via::{Cookies};
-    /// # let mut app = via::app(());
-    /// app.middleware(Cookies::new());
-    /// ```
-    ///
-    pub fn new() -> Self {
-        Default::default()
-    }
-
     /// Add the provided cookie name to the allow list.
     ///
     /// By default, the Cookies middleware ignores cookies with names that are
@@ -226,9 +226,9 @@ impl Cookies {
     /// # Example
     ///
     /// ```
-    /// # use via::{Cookies};
+    /// # use via::cookies;
     /// # let mut app = via::app(());
-    /// app.middleware(Cookies::new().allow("via-session"));
+    /// app.middleware(cookies().allow("via-session"));
     /// ```
     ///
     pub fn allow(mut self, name: impl AsRef<str>) -> Self {
@@ -242,14 +242,23 @@ impl Cookies {
     /// # Example
     ///
     /// ```
-    /// # use via::{Cookies};
+    /// # use via::cookies;
     /// # let mut app = via::app(());
-    /// app.middleware(Cookies::new().allow("via-session").decode());
+    /// app.middleware(cookies().allow("via-session").decode());
     /// ```
     ///
     pub fn decode(mut self) -> Self {
         self.encoding = UriEncoding::Percent;
         self
+    }
+}
+
+impl Cookies {
+    fn new() -> Self {
+        Self {
+            encoding: UriEncoding::Unencoded,
+            allow: HashSet::new(),
+        }
     }
 
     fn parse(&self, input: &str) -> impl Iterator<Item = Cookie<'static>> {
@@ -269,15 +278,6 @@ impl Cookies {
                 .contains(shared.name())
                 .then(|| shared.into_owned())
         })
-    }
-}
-
-impl Default for Cookies {
-    fn default() -> Self {
-        Self {
-            encoding: UriEncoding::Unencoded,
-            allow: HashSet::new(),
-        }
     }
 }
 

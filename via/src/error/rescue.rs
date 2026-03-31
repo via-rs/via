@@ -8,12 +8,10 @@ use crate::middleware::{BoxFuture, Middleware};
 use crate::response::{Finalize, Response, ResponseBuilder};
 use crate::{Next, Request};
 
-struct Recover<F>(Box<F>);
-
 /// Recover from errors that occur in downstream middleware.
 ///
 pub struct Rescue<F> {
-    recover: Recover<F>,
+    recover: Box<F>,
 }
 
 /// Customize how an [`Error`] is converted to a response.
@@ -25,14 +23,14 @@ pub struct Sanitizer<'a> {
     message: Option<Cow<'a, str>>,
 }
 
-impl<F> Rescue<F>
+/// Sanitize errors that occur in downstream middleware.
+///
+pub fn rescue<F>(recover: F) -> Rescue<F>
 where
-    F: Fn(&mut Sanitizer) + Send + Sync,
+    F: Fn(&mut Sanitizer) + Copy + Send + Sync,
 {
-    pub fn new(recover: F) -> Self {
-        Self {
-            recover: Recover(Box::new(recover)),
-        }
+    Rescue {
+        recover: Box::new(recover),
     }
 }
 
@@ -42,7 +40,7 @@ where
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
         let future = next.call(request);
-        let recover = *self.recover.0;
+        let recover = *self.recover;
 
         Box::pin(async move {
             future.await.or_else(|error| {

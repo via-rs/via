@@ -13,13 +13,13 @@ use crate::{Middleware, Next, Request};
 /// # Example
 ///
 /// ```rust
-/// use via::{Guard, Request, raise};
+/// use via::{Request, guard, raise};
 ///
 /// let mut app = via::app(());
 ///
 /// app.route("/users").scope(|path| {
 ///     // Subsequently defined routes require a valid API key.
-///     path.middleware(Guard::new(validate_api_key));
+///     path.middleware(guard(validate_api_key));
 /// });
 ///
 /// fn validate_api_key(request: &Request) -> via::Result<()> {
@@ -36,11 +36,10 @@ pub struct Guard<T> {
     check: T,
 }
 
-impl<T> Guard<T> {
-    /// Returns a new guard that uses the provided check function.
-    pub fn new(check: T) -> Self {
-        Self { check }
-    }
+/// Create a guard middleware from the provided check function.
+///
+pub fn guard<T>(check: T) -> Guard<T> {
+    Guard { check }
 }
 
 impl<T, App> Middleware<App> for Guard<T>

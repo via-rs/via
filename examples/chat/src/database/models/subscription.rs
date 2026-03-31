@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 use crate::database::{Id, Identify, Persist};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Subscription {
     id: Id,
     channel_id: Id,

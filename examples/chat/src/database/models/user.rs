@@ -5,6 +5,7 @@ use via::error::BoxError;
 use crate::database::{Id, Identify, Persist};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct User {
     id: Id,
     username: String,
@@ -15,6 +16,7 @@ pub struct User {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewUser {
     username: String,
 }

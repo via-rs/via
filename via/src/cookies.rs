@@ -27,7 +27,7 @@ struct SetCookieError;
 /// use cookie::{Cookie, SameSite};
 /// use std::process::ExitCode;
 /// use std::time::Duration;
-/// use via::{Error, Next, Request, Response, Server};
+/// use via::{Error, Next, Request, Response, ResultExt, Server, cookies};
 ///
 /// async fn greet(request: Request, _: Next) -> via::Result {
 ///     // `should_set_name` indicates whether "name" was sourced from the
@@ -38,7 +38,7 @@ struct SetCookieError;
 ///     // parameter in the request URI.
 ///     let (should_set_name, name) = match request.cookies().get("name") {
 ///         Some(cookie) => (false, cookie.value().into()),
-///         None => (true, request.param("name").percent_decode().ok_or_bad_request()?),
+///         None => (true, request.param("name").percent_decode().or_bad_request()?),
 ///     };
 ///
 ///     // Build the greeting response using a reference to name.

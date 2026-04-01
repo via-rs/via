@@ -1,5 +1,5 @@
 use bytes::{Buf, Bytes};
-use http::{HeaderMap, StatusCode};
+use http::HeaderMap;
 use http_body::{Body, Frame, SizeHint};
 use hyper::body::Incoming;
 use serde::de::DeserializeOwned;
@@ -13,7 +13,6 @@ use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 
 use crate::error::Error;
-use crate::raise;
 
 mod sealed {
     /// Prevents external implementations of Payload. Allowing us to make
@@ -190,10 +189,6 @@ pub struct RequestBody {
 struct RequestPayload {
     frames: Vec<Bytes>,
     trailers: Option<HeaderMap>,
-}
-
-fn already_read<T>() -> Result<T, Error> {
-    raise!(message = "a request body can only be read once.")
 }
 
 #[inline]
@@ -508,45 +503,41 @@ impl Coalesce {
     }
 }
 
+fn already_read() -> Error {
+    Error::new("a request body can only be read once.")
+}
+
+fn unknown_frame_type() -> Error {
+    Error::new("unknown frame type received while reading a request body.")
+}
+
 impl Future for Coalesce {
     type Output = Result<Aggregate, Error>;
 
-    fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        let Self { body, payload } = self.get_mut();
-        let mut body = Pin::new(body);
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        while let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) {
+            let payload = self.payload.as_mut().ok_or_else(already_read)?;
 
-        loop {
-            let Some(frame) = ready!(body.as_mut().poll_frame(context)?) else {
-                return Poll::Ready(match payload.take() {
-                    Some(payload) => Ok(Aggregate::new(payload)),
-                    None => already_read(),
-                });
-            };
-
-            let payload = payload.as_mut().map_or_else(already_read, Ok)?;
-            let trailers = match frame.into_data() {
-                Ok(data) => {
-                    payload.frames.push(data);
-                    continue;
-                }
+            match frame.into_data() {
+                Ok(data) => payload.frames.push(data),
                 Err(frame) => {
-                    let Ok(trailers) = frame.into_trailers() else {
-                        return Poll::Ready(Err(Error::new_with_status(
-                            "unexpected frame type received while reading the request body",
-                            StatusCode::BAD_REQUEST,
-                        )));
-                    };
+                    let trailers = frame.into_trailers().map_err(|_| unknown_frame_type())?;
 
-                    trailers
+                    if let Some(existing) = payload.trailers.as_mut() {
+                        existing.extend(trailers);
+                    } else {
+                        payload.trailers = Some(trailers);
+                    }
                 }
-            };
-
-            if let Some(existing) = payload.trailers.as_mut() {
-                existing.extend(trailers);
-            } else {
-                payload.trailers = Some(trailers);
             }
         }
+
+        Poll::Ready(
+            self.payload
+                .take()
+                .map(Aggregate::new)
+                .ok_or_else(already_read),
+        )
     }
 }
 
@@ -634,11 +625,11 @@ impl RequestPayload {
 
     #[inline]
     fn frames(&self) -> &[Bytes] {
-        self.frames.as_slice()
+        &self.frames
     }
 
     #[inline]
     fn frames_mut(&mut self) -> &mut [Bytes] {
-        self.frames.as_mut_slice()
+        &mut self.frames
     }
 }

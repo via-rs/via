@@ -8,7 +8,6 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Once;
 use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 
@@ -587,6 +586,8 @@ impl Body for RequestBody {
             hint.set_lower(self.body.size_hint().lower());
 
             if cfg!(debug_assertions) {
+                use std::sync::Once;
+
                 static ONCE: Once = Once::new();
 
                 ONCE.call_once(|| {

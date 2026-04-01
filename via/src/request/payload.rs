@@ -1,6 +1,6 @@
 use bytes::{Buf, Bytes};
 use http::{HeaderMap, StatusCode};
-use http_body::{Body, Frame};
+use http_body::{Body, Frame, SizeHint};
 use hyper::body::Incoming;
 use serde::de::DeserializeOwned;
 use std::future::Future;
@@ -8,10 +8,11 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::ptr;
 use std::rc::Rc;
+use std::sync::Once;
 use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 
-use crate::error::{Error, ResultExt};
+use crate::error::Error;
 use crate::raise;
 
 mod sealed {
@@ -567,29 +568,61 @@ impl Body for RequestBody {
             return Poll::Ready(Some(Err(Error::payload_too_large())));
         }
 
-        let Poll::Ready(next) = Pin::new(&mut self.body).poll_frame(context) else {
-            return Poll::Pending;
-        };
-
-        Poll::Ready(next.map(|result| {
-            result.or_bad_request().and_then(|frame| {
-                if let Some(data) = frame.data_ref() {
-                    if let Some(remaining) = self.remaining.checked_sub(data.len()) {
-                        self.remaining = remaining;
-                        Ok(frame)
-                    } else {
-                        self.remaining = 0;
-                        Err(Error::payload_too_large())
-                    }
-                } else {
-                    Ok(frame)
+        match Pin::new(&mut self.body).poll_frame(context) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Some(result)) => {
+                if let Some(data) = result.as_ref().ok().and_then(Frame::data_ref) {
+                    self.remaining =
+                        self.remaining
+                            .checked_sub(data.remaining())
+                            .ok_or_else(|| {
+                                self.remaining = 0;
+                                Error::payload_too_large()
+                            })?;
                 }
-            })
-        }))
+
+                Poll::Ready(Some(result.map_err(|error| error.into())))
+            }
+        }
     }
 
     fn is_end_stream(&self) -> bool {
         self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        let Ok(remaining) = u64::try_from(self.remaining) else {
+            let mut hint = SizeHint::new();
+
+            hint.set_lower(self.body.size_hint().lower());
+
+            if cfg!(debug_assertions) {
+                static ONCE: Once = Once::new();
+
+                ONCE.call_once(|| {
+                    print!("warn: a lossy size hint must be used for RequestBody. ");
+                    println!("usize::MAX exceeds u64::MAX on this platform.");
+                });
+            }
+
+            return hint;
+        };
+
+        let mut hint = self.body.size_hint();
+
+        if remaining < hint.lower() {
+            hint.set_exact(remaining);
+        } else {
+            let upper = hint
+                .upper()
+                .map(|upper| upper.min(remaining))
+                .unwrap_or(remaining);
+
+            hint.set_upper(upper);
+        }
+
+        hint
     }
 }
 

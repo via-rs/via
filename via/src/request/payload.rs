@@ -568,23 +568,21 @@ impl Body for RequestBody {
             return Poll::Ready(Some(Err(Error::payload_too_large())));
         }
 
-        match Pin::new(&mut self.body).poll_frame(context) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Ready(Some(result)) => {
-                if let Some(data) = result.as_ref().ok().and_then(Frame::data_ref) {
-                    self.remaining =
-                        self.remaining
-                            .checked_sub(data.remaining())
-                            .ok_or_else(|| {
-                                self.remaining = 0;
-                                Error::payload_too_large()
-                            })?;
-                }
+        let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) else {
+            return Poll::Ready(None);
+        };
 
-                Poll::Ready(Some(result.map_err(|error| error.into())))
-            }
+        if let Some(data) = frame.data_ref() {
+            self.remaining = self
+                .remaining
+                .checked_sub(data.remaining())
+                .ok_or_else(|| {
+                    self.remaining = 0;
+                    Error::payload_too_large()
+                })?;
         }
+
+        Poll::Ready(Some(Ok(frame)))
     }
 
     fn is_end_stream(&self) -> bool {

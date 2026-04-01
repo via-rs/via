@@ -586,7 +586,7 @@ impl Body for RequestBody {
     }
 
     fn is_end_stream(&self) -> bool {
-        self.body.is_end_stream()
+        self.remaining == 0 || self.body.is_end_stream()
     }
 
     fn size_hint(&self) -> SizeHint {

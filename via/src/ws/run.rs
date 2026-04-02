@@ -1,6 +1,9 @@
-use futures_core::{FusedFuture, Future, Stream};
+use futures_channel::mpsc::TryRecvError;
+use futures_core::Stream;
 use futures_sink::Sink;
+use std::future::Future;
 use std::marker::PhantomPinned;
+use std::mem;
 use std::ops::ControlFlow::{Break, Continue};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -14,7 +17,7 @@ use tokio_websockets::WebSocketStream;
 
 use crate::Error;
 
-use super::error::{WebSocketError, try_rescue};
+use super::error::try_rescue;
 use super::io::UpgradedIo;
 use super::{Channel, Message, Request};
 
@@ -23,16 +26,16 @@ pub struct RunTask<T, App> {
 }
 
 enum IoState {
-    Receive,
     Listen,
-    Send,
+    Send(Message),
     Flush,
+    Receive,
 }
 
 struct Facade {
-    state: IoState,
     stream: *mut WebSocketStream<UpgradedIo>,
     listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
+    state: IoState,
     rendezvous: Channel,
 }
 
@@ -60,8 +63,6 @@ where
     }
 }
 
-unsafe impl Send for Facade {}
-
 impl<T, App, Await> Future for RunTask<T, App>
 where
     T: Fn(Channel, Request<App>) -> Await + Send,
@@ -83,7 +84,7 @@ impl Facade {
         let (ours, theirs) = Channel::new();
 
         Self {
-            state: IoState::Receive,
+            state: IoState::Listen,
             stream: &mut run.stream as *mut _,
             listener: Box::pin((run.listener)(theirs, run.request.clone())),
             rendezvous: ours,
@@ -91,11 +92,80 @@ impl Facade {
     }
 }
 
+unsafe impl Send for Facade {}
+
 impl Future for Facade {
     type Output = super::Result;
 
-    fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        todo!()
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        loop {
+            match self.state {
+                IoState::Listen => {
+                    if self.listener.as_mut().poll(context)?.is_ready() {
+                        return Poll::Ready(Ok(()));
+                    }
+
+                    self.state = match self.rendezvous.rx().try_recv() {
+                        Ok(message) => IoState::Send(message),
+                        Err(TryRecvError::Empty) => IoState::Receive,
+                        Err(TryRecvError::Closed) => return Poll::Ready(Ok(())),
+                    };
+                }
+
+                IoState::Send(_) => {
+                    let mut sink = Pin::new(unsafe { &mut *self.stream });
+
+                    if sink
+                        .as_mut()
+                        .poll_ready(context)
+                        .map_err(try_rescue)?
+                        .is_pending()
+                    {
+                        return Poll::Pending;
+                    }
+
+                    if let IoState::Send(message) = mem::replace(&mut self.state, IoState::Flush)
+                        && let Err(error) = sink.as_mut().start_send(message)
+                    {
+                        self.state = IoState::Listen;
+                        return Poll::Ready(Err(try_rescue(error)));
+                    }
+                }
+
+                IoState::Receive => {
+                    let Poll::Ready(next) =
+                        Pin::new(unsafe { &mut *self.stream }).poll_next(context)
+                    else {
+                        return Poll::Pending;
+                    };
+
+                    self.state = IoState::Listen;
+                    let message = match next {
+                        Some(Ok(message)) => message,
+                        Some(Err(error)) => return Poll::Ready(Err(try_rescue(error))),
+                        None => continue,
+                    };
+
+                    if self.rendezvous.tx().try_send(message).is_err() {
+                        return Poll::Ready(Ok(()));
+                    }
+                }
+
+                IoState::Flush => {
+                    let Poll::Ready(result) =
+                        Pin::new(unsafe { &mut *self.stream }).poll_flush(context)
+                    else {
+                        return Poll::Pending;
+                    };
+
+                    self.state = IoState::Listen;
+
+                    if let Err(error) = result {
+                        return Poll::Ready(Err(try_rescue(error)));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -136,6 +206,7 @@ where
             None => {
                 let facade = Facade::new(this);
                 this.facade = Some(facade);
+
                 // Safety: We just assigned a Some value to this.facade.
                 Pin::new(unsafe { this.facade.as_mut().unwrap_unchecked() })
             }
@@ -143,7 +214,13 @@ where
 
         match ready!(future.poll(context)) {
             Ok(_) => Poll::Ready(Ok(())),
-            Err(Break(error)) => Poll::Ready(Err(error)),
+            Err(Break(error)) => {
+                if cfg!(debug_assertions) {
+                    eprintln!("error(ws): {}", &error);
+                }
+
+                Poll::Ready(Err(error))
+            }
             Err(Continue(error)) => {
                 if cfg!(debug_assertions) {
                     eprintln!("warn(ws): {}", &error);

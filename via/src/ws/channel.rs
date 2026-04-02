@@ -1,8 +1,8 @@
-use futures_core::Stream;
-use loole::{RecvStream, Sender};
-use std::future::{Future, poll_fn};
+use futures_channel::mpsc::{self, Receiver, Sender};
+use std::future::Future;
 use std::ops::ControlFlow;
 use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use crate::error::Error;
 
@@ -12,28 +12,61 @@ pub use tungstenite::protocol::{CloseFrame, Message, frame::Utf8Bytes};
 #[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
 pub use tokio_websockets::{CloseCode, Message};
 
-pub struct Channel(Sender<Message>, RecvStream<Message>);
+pub struct Channel {
+    tx: Sender<Message>,
+    rx: Receiver<Message>,
+}
+
+struct Send<'a> {
+    tx: &'a mut Sender<Message>,
+    message: Option<Message>,
+}
 
 impl Channel {
-    pub async fn send(&mut self, message: impl Into<Message>) -> super::Result<()> {
-        let Ok(_) = self.0.send_async(message.into()).await else {
-            let message = "failed to send ws message. channel disconnected.";
-            return Err(ControlFlow::Break(Error::new(message)));
-        };
-
-        Ok(())
+    pub fn send(&mut self, message: impl Into<Message>) -> impl Future<Output = super::Result> {
+        Send {
+            tx: &mut self.tx,
+            message: Some(message.into()),
+        }
     }
 
-    pub fn recv(&mut self) -> impl Future<Output = Option<Message>> {
-        poll_fn(|context| Pin::new(&mut self.1).poll_next(context))
+    pub async fn recv(&mut self) -> Option<Message> {
+        self.rx.recv().await.ok()
     }
 }
 
 impl Channel {
     pub(super) fn new() -> (Self, Self) {
-        let (tx1, rx2) = loole::bounded(0);
-        let (tx2, rx1) = loole::bounded(0);
+        let (tx1, rx2) = mpsc::channel(1);
+        let (tx2, rx1) = mpsc::channel(1);
 
-        (Self(tx1, rx1.into_stream()), Self(tx2, rx2.into_stream()))
+        (Self { tx: tx1, rx: rx1 }, Self { tx: tx2, rx: rx2 })
+    }
+
+    pub(super) fn rx(&mut self) -> &mut Receiver<Message> {
+        &mut self.rx
+    }
+
+    pub(super) fn tx(&mut self) -> &mut Sender<Message> {
+        &mut self.tx
+    }
+}
+
+impl<'a> Future for Send<'a> {
+    type Output = super::Result;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        if Pin::new(&mut self.tx).poll_ready(context).is_pending() {
+            return Poll::Pending;
+        }
+
+        if let Some(message) = self.message.take()
+            && self.tx.try_send(message).is_ok()
+        {
+            Poll::Ready(Ok(()))
+        } else {
+            let message = "failed to send ws message. channel disconnected.";
+            Poll::Ready(Err(ControlFlow::Break(Error::new(message))))
+        }
     }
 }

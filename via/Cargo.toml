@@ -21,8 +21,8 @@ file = ["dep:httpdate", "tokio/fs"]
 native-tls = ["dep:native-tls", "dep:tokio-native-tls", "hyper/http2"]
 rustls-23 = ["dep:rustls", "dep:tokio-rustls", "hyper/http2"]
 
-tokio-tungstenite = ["dep:base64", "dep:loole", "dep:futures-sink", "dep:tungstenite", "dep:tokio-tungstenite"]
-tokio-websockets = ["dep:base64", "dep:loole", "dep:futures-sink", "dep:tokio-websockets"]
+tokio-tungstenite = ["dep:base64", "dep:futures-channel", "dep:futures-sink", "dep:tungstenite", "dep:tokio-tungstenite"]
+tokio-websockets = ["dep:base64", "dep:futures-channel", "dep:futures-sink", "dep:tokio-websockets"]
 
 # Internal
 
@@ -35,6 +35,7 @@ bitflags = "2"
 bytes = "1"
 cookie = { version = "0.18", features = ["percent-encode"] }
 delegate = "0.13"
+futures-channel = { version = "0.3", features = ["sink"], optional = true }
 futures-core = "0.3"
 futures-sink = { version = "0.3", optional = true }
 http = "1"

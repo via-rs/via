@@ -1,6 +1,6 @@
 use bytes::{Buf, Bytes};
-use http::{HeaderMap, StatusCode};
-use http_body::{Body, Frame};
+use http::HeaderMap;
+use http_body::{Body, Frame, SizeHint};
 use hyper::body::Incoming;
 use serde::de::DeserializeOwned;
 use std::future::Future;
@@ -11,8 +11,7 @@ use std::rc::Rc;
 use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 
-use crate::error::{Error, ResultExt};
-use crate::raise;
+use crate::error::Error;
 
 mod sealed {
     /// Prevents external implementations of Payload. Allowing us to make
@@ -182,6 +181,7 @@ pub struct Coalesce {
 
 #[derive(Debug)]
 pub struct RequestBody {
+    has_capacity: Option<bool>,
     remaining: usize,
     body: Incoming,
 }
@@ -189,10 +189,6 @@ pub struct RequestBody {
 struct RequestPayload {
     frames: Vec<Bytes>,
     trailers: Option<HeaderMap>,
-}
-
-fn already_read<T>() -> Result<T, Error> {
-    raise!(message = "a request body can only be read once.")
 }
 
 #[inline]
@@ -507,51 +503,51 @@ impl Coalesce {
     }
 }
 
+fn already_read() -> Error {
+    Error::new("a request body can only be read once.")
+}
+
+fn unknown_frame_type() -> Error {
+    Error::new("unknown frame type received while reading a request body.")
+}
+
 impl Future for Coalesce {
     type Output = Result<Aggregate, Error>;
 
-    fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        let Self { body, payload } = self.get_mut();
-        let mut body = Pin::new(body);
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        while let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) {
+            let payload = self.payload.as_mut().ok_or_else(already_read)?;
 
-        loop {
-            let Some(frame) = ready!(body.as_mut().poll_frame(context)?) else {
-                return Poll::Ready(match payload.take() {
-                    Some(payload) => Ok(Aggregate::new(payload)),
-                    None => already_read(),
-                });
-            };
-
-            let payload = payload.as_mut().map_or_else(already_read, Ok)?;
-            let trailers = match frame.into_data() {
-                Ok(data) => {
-                    payload.frames.push(data);
-                    continue;
-                }
+            match frame.into_data() {
+                Ok(data) => payload.frames.push(data),
                 Err(frame) => {
-                    let Ok(trailers) = frame.into_trailers() else {
-                        return Poll::Ready(Err(Error::new_with_status(
-                            "unexpected frame type received while reading the request body",
-                            StatusCode::BAD_REQUEST,
-                        )));
-                    };
+                    let trailers = frame.into_trailers().map_err(|_| unknown_frame_type())?;
 
-                    trailers
+                    if let Some(existing) = payload.trailers.as_mut() {
+                        existing.extend(trailers);
+                    } else {
+                        payload.trailers = Some(trailers);
+                    }
                 }
-            };
-
-            if let Some(existing) = payload.trailers.as_mut() {
-                existing.extend(trailers);
-            } else {
-                payload.trailers = Some(trailers);
             }
         }
+
+        Poll::Ready(
+            self.payload
+                .take()
+                .map(Aggregate::new)
+                .ok_or_else(already_read),
+        )
     }
 }
 
 impl RequestBody {
     pub(crate) fn new(body: Incoming, remaining: usize) -> Self {
-        Self { body, remaining }
+        Self {
+            has_capacity: None,
+            remaining,
+            body,
+        }
     }
 }
 
@@ -563,33 +559,73 @@ impl Body for RequestBody {
         mut self: Pin<&mut Self>,
         context: &mut Context,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        if self.remaining == 0 {
+        if self.has_capacity.is_none() {
+            self.has_capacity = Some(self.body.size_hint().exact().is_none_or(|upper| {
+                u64::try_from(self.remaining).is_ok_and(|remaining| remaining >= upper)
+            }));
+        }
+
+        if self.remaining == 0 || self.has_capacity.is_some_and(|has_capacity| !has_capacity) {
             return Poll::Ready(Some(Err(Error::payload_too_large())));
         }
 
-        let Poll::Ready(next) = Pin::new(&mut self.body).poll_frame(context) else {
-            return Poll::Pending;
+        let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) else {
+            return Poll::Ready(None);
         };
 
-        Poll::Ready(next.map(|result| {
-            result.or_bad_request().and_then(|frame| {
-                if let Some(data) = frame.data_ref() {
-                    if let Some(remaining) = self.remaining.checked_sub(data.len()) {
-                        self.remaining = remaining;
-                        Ok(frame)
-                    } else {
-                        self.remaining = 0;
-                        Err(Error::payload_too_large())
-                    }
-                } else {
-                    Ok(frame)
-                }
-            })
-        }))
+        if let Some(data) = frame.data_ref() {
+            self.remaining = self
+                .remaining
+                .checked_sub(data.remaining())
+                .ok_or_else(|| {
+                    self.remaining = 0;
+                    Error::payload_too_large()
+                })?;
+        }
+
+        Poll::Ready(Some(Ok(frame)))
     }
 
     fn is_end_stream(&self) -> bool {
-        self.body.is_end_stream()
+        self.remaining == 0
+            || self.has_capacity.is_some_and(|has_capacity| !has_capacity)
+            || self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        let Ok(remaining) = u64::try_from(self.remaining) else {
+            let mut hint = SizeHint::new();
+
+            hint.set_lower(self.body.size_hint().lower());
+
+            if cfg!(debug_assertions) {
+                use std::sync::Once;
+
+                static ONCE: Once = Once::new();
+
+                ONCE.call_once(|| {
+                    print!("warn: a lossy size hint must be used for RequestBody. ");
+                    println!("usize::MAX exceeds u64::MAX on this platform.");
+                });
+            }
+
+            return hint;
+        };
+
+        let mut hint = self.body.size_hint();
+
+        if remaining < hint.lower() {
+            hint.set_exact(remaining);
+        } else {
+            let upper = hint
+                .upper()
+                .map(|upper| upper.min(remaining))
+                .unwrap_or(remaining);
+
+            hint.set_upper(upper);
+        }
+
+        hint
     }
 }
 
@@ -603,11 +639,11 @@ impl RequestPayload {
 
     #[inline]
     fn frames(&self) -> &[Bytes] {
-        self.frames.as_slice()
+        &self.frames
     }
 
     #[inline]
     fn frames_mut(&mut self) -> &mut [Bytes] {
-        self.frames.as_mut_slice()
+        &mut self.frames
     }
 }

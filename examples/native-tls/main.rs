@@ -1,14 +1,14 @@
 use native_tls::Identity;
 use std::path::{Path, PathBuf};
 use std::{fs, process::ExitCode};
-use via::{Error, Next, Request, Response, Server};
+use via::{Error, Next, Request, Response, ResultExt, Server};
 
 const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 const TLS_PKCS_PASSWORD: &str = "TLS_PKCS_PASSWORD";
 
 async fn hello(request: Request, _: Next) -> via::Result {
     // Get a reference to the path parameter `name` from the request uri.
-    let name = request.param("name").percent_decode().ok_or_bad_request()?;
+    let name = request.param("name").percent_decode().into_result()?;
 
     // Send a plain text response with our greeting message.
     Response::build().text(format!("Hello, {}! (via TLS)", name))

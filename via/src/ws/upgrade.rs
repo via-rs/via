@@ -18,6 +18,7 @@ use super::error::{WebSocketError, try_rescue};
 use super::io::UpgradedIo;
 use super::sha1::sha1;
 use super::{Channel, Message, Request};
+use crate::ws::run::RunTask;
 use crate::{BoxFuture, Error, Middleware, Next, Response, raise};
 
 const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
@@ -139,7 +140,7 @@ async fn run<T, App, Await>(
 
                     Dispatch::In(result) => {
                         let message = result.map_err(try_rescue)?;
-                        rendezvous.send(message).await?;
+                        rendezvous.send(message).await;
                     }
                 };
             }
@@ -312,7 +313,7 @@ impl<T, App, Await> Middleware<App> for Ws<T>
 where
     T: Fn(Channel, Request<App>) -> Await + Send + Sync + 'static,
     App: Send + Sync + 'static,
-    Await: Future<Output = super::Result> + Send,
+    Await: Future<Output = super::Result> + Send + 'static,
 {
     fn call(&self, mut request: crate::Request<App>, next: Next<App>) -> BoxFuture {
         // Confirm that the request is for a websocket upgrade.
@@ -363,14 +364,8 @@ where
             let request = Request::new(request);
 
             tokio::spawn(async move {
-                match handshake(upgrade, config).await {
-                    Ok(stream) => {
-                        run(stream, listener, request).await;
-                    }
-                    Err(error) => {
-                        eprintln!("error(upgrade): {}", error);
-                    }
-                }
+                let stream = handshake(upgrade, config).await?;
+                RunTask::new(listener, request, stream).await
             });
 
             Response::build()

@@ -11,6 +11,7 @@ mod channel;
 mod error;
 mod io;
 mod request;
+mod run;
 mod upgrade;
 
 #[cfg(any(feature = "aws-lc-rs", feature = "ring"))]

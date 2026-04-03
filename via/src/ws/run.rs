@@ -198,17 +198,17 @@ where
         let this = unsafe { self.get_unchecked_mut() };
 
         let future = match this.facade.as_mut() {
-            Some(facade) => Pin::new(facade),
+            Some(facade) => facade,
             None => {
                 let facade = Facade::new(this);
                 this.facade = Some(facade);
 
                 // Safety: We just assigned a Some value to this.facade.
-                Pin::new(unsafe { this.facade.as_mut().unwrap_unchecked() })
+                unsafe { this.facade.as_mut().unwrap_unchecked() }
             }
         };
 
-        match ready!(future.poll(context)) {
+        match ready!(Pin::new(future).poll(context)) {
             Ok(_) => Poll::Ready(Ok(())),
             Err(Break(error)) => {
                 if cfg!(debug_assertions) {

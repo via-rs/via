@@ -94,6 +94,14 @@ impl Facade {
 
 unsafe impl Send for Facade {}
 
+impl Drop for Facade {
+    fn drop(&mut self) {
+        // Null out the raw pointer to prevent accidental use.
+        // The rest of the fields in self are dropped automatically.
+        self.stream = std::ptr::null_mut();
+    }
+}
+
 impl Future for Facade {
     type Output = super::Result;
 
@@ -177,6 +185,15 @@ where
             stream,
             facade: None,
             _pin: PhantomPinned,
+        }
+    }
+}
+
+impl<T, App> Drop for Run<T, App> {
+    fn drop(&mut self) {
+        if let Some(facade) = self.facade.take() {
+            // Safety: Explicitly dropping facade, invalidates the raw pointer.
+            drop(facade);
         }
     }
 }

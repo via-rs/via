@@ -11,6 +11,7 @@ mod channel;
 mod error;
 mod io;
 mod request;
+mod run;
 mod upgrade;
 
 #[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
@@ -22,6 +23,9 @@ pub use request::Request;
 pub use upgrade::Ws;
 
 /// Upgrade the connection to a web socket.
+///
+/// In order to uphold the invariants required by this ws implementation. A
+/// listener can only produce one message per every message that is received.
 ///
 /// # Example
 ///

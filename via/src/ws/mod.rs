@@ -24,6 +24,9 @@ pub use upgrade::Ws;
 
 /// Upgrade the connection to a web socket.
 ///
+/// In order to uphold the invariants required by this ws implementation. A
+/// listener can only produce one message per every message that is received.
+///
 /// # Example
 ///
 /// ```no_run

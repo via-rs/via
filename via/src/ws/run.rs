@@ -99,70 +99,66 @@ impl Future for Facade {
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         loop {
-            match self.state {
+            // Safety:
+            //
+            // stream is a mutable pointer to the stream field of the `Run<_, _>`
+            // struct. Run is structurally pinned in a `Pin<Box<_>>` as a field
+            // of `RunTask`. The only way to construct `Run<_, _>` is with the
+            // `RunTask::new` fn.
+            let stream = unsafe { &mut *self.stream };
+
+            match &mut self.state {
                 IoState::Listen => {
                     if self.listener.as_mut().poll(context)?.is_ready() {
                         return Poll::Ready(Ok(()));
                     }
 
                     self.state = match self.rendezvous.rx().try_recv() {
-                        Ok(message) => IoState::Send(message),
                         Err(TryRecvError::Empty) => IoState::Receive,
-                        Err(TryRecvError::Closed) => return Poll::Ready(Ok(())),
+                        Ok(message) => IoState::Send(message),
+                        Err(TryRecvError::Closed) => {
+                            return Poll::Ready(Ok(()));
+                        }
                     };
                 }
 
-                IoState::Send(_) => {
-                    let mut sink = Pin::new(unsafe { &mut *self.stream });
-
-                    if sink
-                        .as_mut()
-                        .poll_ready(context)
-                        .map_err(try_rescue)?
-                        .is_pending()
-                    {
+                state @ IoState::Send(_) => {
+                    let IoState::Send(message) = mem::replace(state, IoState::Flush) else {
+                        *state = IoState::Listen;
                         return Poll::Pending;
-                    }
+                    };
 
-                    if let IoState::Send(message) = mem::replace(&mut self.state, IoState::Flush)
-                        && let Err(error) = sink.as_mut().start_send(message)
-                    {
-                        self.state = IoState::Listen;
+                    let mut sink = Pin::new(stream);
+
+                    let Poll::Ready(result) = sink.as_mut().poll_ready(context) else {
+                        *state = IoState::Send(message);
+                        return Poll::Pending;
+                    };
+
+                    if let Err(error) = result.and_then(|_| sink.start_send(message)) {
+                        *state = IoState::Listen;
                         return Poll::Ready(Err(try_rescue(error)));
                     }
                 }
 
                 IoState::Receive => {
-                    let Poll::Ready(next) =
-                        Pin::new(unsafe { &mut *self.stream }).poll_next(context)
-                    else {
-                        return Poll::Pending;
-                    };
-
+                    let option = ready!(Pin::new(stream).poll_next(context));
                     self.state = IoState::Listen;
-                    let message = match next {
-                        Some(Ok(message)) => message,
-                        Some(Err(error)) => return Poll::Ready(Err(try_rescue(error))),
-                        None => continue,
-                    };
 
-                    if self.rendezvous.tx().try_send(message).is_err() {
-                        return Poll::Ready(Ok(()));
+                    if let Some(result) = option {
+                        let message = result.map_err(try_rescue)?;
+
+                        if self.rendezvous.tx().try_send(message).is_err() {
+                            return Poll::Ready(Ok(()));
+                        }
                     }
                 }
 
                 IoState::Flush => {
-                    let Poll::Ready(result) =
-                        Pin::new(unsafe { &mut *self.stream }).poll_flush(context)
-                    else {
-                        return Poll::Pending;
-                    };
-
+                    let result = ready!(Pin::new(stream).poll_flush(context));
                     self.state = IoState::Listen;
 
-                    if let Err(error) = result {
-                        return Poll::Ready(Err(try_rescue(error)));
-                    }
+                    result.map_err(try_rescue)?;
                 }
             }
         }

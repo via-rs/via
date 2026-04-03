@@ -33,9 +33,9 @@ enum IoState {
 }
 
 struct Facade {
-    stream: *mut WebSocketStream<UpgradedIo>,
     listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
     state: IoState,
+    stream: *mut WebSocketStream<UpgradedIo>,
     rendezvous: Channel,
 }
 

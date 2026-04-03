@@ -23,6 +23,12 @@ struct Send<'a> {
     message: Option<Message>,
 }
 
+fn disconnect_error() -> ControlFlow<Error, Error> {
+    ControlFlow::Break(Error::new(
+        "failed to send ws message. channel disconnected.",
+    ))
+}
+
 impl Channel {
     pub fn send(&mut self, message: impl Into<Message>) -> impl Future<Output = super::Result> {
         Send {
@@ -57,18 +63,19 @@ impl Future for Send<'_> {
     type Output = super::Result;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        if Pin::new(&mut self.tx).poll_ready(context).is_pending() {
-            return Poll::Pending;
+        if let Some(message) = self.message.take() {
+            let Poll::Ready(_) = Pin::new(&mut self.tx)
+                .poll_ready(context)
+                .map_err(|_| disconnect_error())?
+            else {
+                self.message = Some(message);
+                return Poll::Pending;
+            };
+
+            self.tx.try_send(message).map_err(|_| disconnect_error())?;
         }
 
-        if let Some(message) = self.message.take()
-            && self.tx.try_send(message).is_ok()
-        {
-            Poll::Ready(Ok(()))
-        } else {
-            let message = "failed to send ws message. channel disconnected.";
-            Poll::Ready(Err(ControlFlow::Break(Error::new(message))))
-        }
+        Poll::Ready(Ok(()))
     }
 }
 

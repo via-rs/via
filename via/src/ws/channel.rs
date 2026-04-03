@@ -1,4 +1,5 @@
 use futures_channel::mpsc::{self, Receiver, Sender};
+use futures_core::FusedFuture;
 use std::future::Future;
 use std::ops::ControlFlow;
 use std::pin::Pin;
@@ -52,7 +53,7 @@ impl Channel {
     }
 }
 
-impl<'a> Future for Send<'a> {
+impl Future for Send<'_> {
     type Output = super::Result;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
@@ -68,5 +69,11 @@ impl<'a> Future for Send<'a> {
             let message = "failed to send ws message. channel disconnected.";
             Poll::Ready(Err(ControlFlow::Break(Error::new(message))))
         }
+    }
+}
+
+impl FusedFuture for Send<'_> {
+    fn is_terminated(&self) -> bool {
+        self.message.is_none()
     }
 }

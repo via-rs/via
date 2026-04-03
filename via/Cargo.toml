@@ -1,6 +1,6 @@
 [package]
 name = "via"
-version = "2.0.0-gm.31"
+version = "2.0.0-gm.32"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -44,7 +44,6 @@ http-body-util = "0.1"
 httpdate = { version = "1", optional = true }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-loole = { version = "0.4", optional = true }
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"]  }
 serde_json = "1"

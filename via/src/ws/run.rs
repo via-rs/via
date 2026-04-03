@@ -150,7 +150,12 @@ impl Future for Facade {
                 }
 
                 IoState::Receive => {
+                    if self.rendezvous.tx().poll_ready(context).is_pending() {
+                        return Poll::Pending;
+                    }
+
                     let option = ready!(Pin::new(stream).poll_next(context));
+
                     self.state = IoState::Listen;
 
                     if let Some(result) = option {

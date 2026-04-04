@@ -6,6 +6,8 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [features]
+default = ["ring", "tokio-tungstenite"]
+
 fs = ["via/file"]
 
 aws-lc-rs = ["via/aws-lc-rs"]
@@ -16,6 +18,10 @@ rustls-23 = ["via/rustls-23"]
 
 tokio-tungstenite = ["via/tokio-tungstenite"]
 tokio-websockets = ["via/tokio-websockets"]
+
+[[example]]
+name = "chat"
+path = "./chat/src/main.rs"
 
 [[example]]
 name = "cookies"
@@ -48,11 +54,16 @@ path = "./rustls/main.rs"
 required-features = ["rustls-23"]
 
 [dev-dependencies]
+base64 = "0.22"
 cookie = { version = "0.18", features = ["percent-encode", "signed"] }
 dotenvy = "0.15"
+http = "1"
 mime_guess = "2"
 native-tls = { version = "0.2", features = ["alpn"] }
 tokio-rustls = { version = "0.26", default-features = false }
 serde = "1"
+serde_json = "1"
+time = { version = "0.3", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 via = { path = "../via" }

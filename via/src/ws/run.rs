@@ -106,12 +106,12 @@ impl Facade {
     fn error(&mut self, error: WebSocketError) -> Poll<super::Result> {
         self.state = IoState::Receive;
         self.did_poll_listener = false;
-        return Poll::Ready(Err(try_rescue(error)));
+        Poll::Ready(Err(try_rescue(error)))
     }
 
     fn park(&mut self) -> Poll<super::Result> {
         self.did_poll_listener = false;
-        return Poll::Pending;
+        Poll::Pending
     }
 }
 

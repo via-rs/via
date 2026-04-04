@@ -84,7 +84,7 @@ impl Facade {
         let (ours, theirs) = Channel::new();
 
         Self {
-            state: IoState::Listen,
+            state: IoState::Receive,
             stream: &mut run.stream as *mut _,
             listener: Box::pin((run.listener)(theirs, run.request.clone())),
             rendezvous: ours,

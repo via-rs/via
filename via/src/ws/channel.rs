@@ -44,8 +44,8 @@ impl Channel {
 
 impl Channel {
     pub(super) fn new() -> (Self, Self) {
-        let (tx1, rx2) = mpsc::channel(1);
-        let (tx2, rx1) = mpsc::channel(1);
+        let (tx1, rx2) = mpsc::channel(0);
+        let (tx2, rx1) = mpsc::channel(0);
 
         (Self { tx: tx1, rx: rx1 }, Self { tx: tx2, rx: rx2 })
     }

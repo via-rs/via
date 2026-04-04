@@ -15,11 +15,10 @@ use tokio_tungstenite::WebSocketStream;
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
-use crate::Error;
-
-use super::error::try_rescue;
+use super::error::{WebSocketError, try_rescue};
 use super::io::UpgradedIo;
 use super::{Channel, Message, Request};
+use crate::Error;
 
 pub struct RunTask<T, App> {
     run: Pin<Box<Run<T, App>>>,
@@ -35,6 +34,18 @@ enum IoState {
 struct Facade {
     listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
     state: IoState,
+
+    /// A flag used to determine whether or not the listener was polled.
+    ///
+    /// The listener should be polled regardless of the state that we are in
+    /// when we wake up. The only circumstance in which the listener is not
+    /// polled is when we are waiting on I/O.
+    ///
+    /// This behavior mirrors what happens when you work directly with a
+    /// `WebSocketStream` while obscuring the actual I/O behind our
+    /// rendezvous channel.
+    did_poll_listener: bool,
+
     stream: *mut WebSocketStream<UpgradedIo>,
     rendezvous: Channel,
 }
@@ -84,11 +95,23 @@ impl Facade {
         let (ours, theirs) = Channel::new();
 
         Self {
-            state: IoState::Listen,
-            stream: &mut run.stream as *mut _,
+            did_poll_listener: false,
             listener: Box::pin((run.listener)(theirs, run.request.clone())),
+            state: IoState::Receive,
+            stream: &mut run.stream as *mut _,
             rendezvous: ours,
         }
+    }
+
+    fn error(&mut self, error: WebSocketError) -> Poll<super::Result> {
+        self.state = IoState::Receive;
+        self.did_poll_listener = false;
+        Poll::Ready(Err(try_rescue(error)))
+    }
+
+    fn park(&mut self) -> Poll<super::Result> {
+        self.did_poll_listener = false;
+        Poll::Pending
     }
 }
 
@@ -96,6 +119,9 @@ unsafe impl Send for Facade {}
 
 impl Drop for Facade {
     fn drop(&mut self) {
+        // Set the bit at `did_poll_listener` to zero.
+        self.did_poll_listener = false;
+
         // Null out the raw pointer to prevent accidental use.
         // The rest of the fields in self are dropped automatically.
         self.stream = std::ptr::null_mut();
@@ -121,52 +147,68 @@ impl Future for Facade {
                         return Poll::Ready(Ok(()));
                     }
 
-                    self.state = match self.rendezvous.rx().try_recv() {
-                        Err(TryRecvError::Empty) => IoState::Receive,
-                        Ok(message) => IoState::Send(message),
+                    match self.rendezvous.rx().try_recv() {
+                        Ok(message) => {
+                            self.state = IoState::Send(message);
+                            self.did_poll_listener = true;
+                        }
+                        Err(TryRecvError::Empty) => {
+                            self.state = IoState::Receive;
+                            self.did_poll_listener = false;
+                        }
                         Err(TryRecvError::Closed) => {
                             return Poll::Ready(Ok(()));
                         }
-                    };
+                    }
                 }
 
                 state @ IoState::Send(_) => {
-                    let IoState::Send(message) = mem::replace(state, IoState::Flush) else {
-                        *state = IoState::Listen;
-                        return Poll::Pending;
-                    };
-
                     let mut sink = Pin::new(stream);
 
-                    let Poll::Ready(result) = sink.as_mut().poll_ready(context) else {
-                        *state = IoState::Send(message);
-                        return Poll::Pending;
+                    match sink.as_mut().poll_ready(context) {
+                        Poll::Pending => return self.park(),
+                        Poll::Ready(Ok(_)) => {}
+                        Poll::Ready(Err(error)) => return self.error(error),
+                    }
+
+                    let IoState::Send(message) = mem::replace(state, IoState::Flush) else {
+                        *state = IoState::Receive;
+                        return self.park();
                     };
 
-                    if let Err(error) = result.and_then(|_| sink.start_send(message)) {
-                        *state = IoState::Listen;
-                        return Poll::Ready(Err(try_rescue(error)));
+                    if let Err(error) = sink.start_send(message) {
+                        return self.error(error);
                     }
                 }
 
                 IoState::Receive => {
-                    let option = ready!(Pin::new(stream).poll_next(context));
+                    match self.rendezvous.tx().poll_ready(context) {
+                        Poll::Pending => return self.park(),
+                        Poll::Ready(Ok(_)) => {}
+                        Poll::Ready(Err(_)) => return Poll::Ready(Ok(())),
+                    }
+
+                    let message = match Pin::new(stream).poll_next(context) {
+                        Poll::Pending => return self.park(),
+                        Poll::Ready(Some(Ok(next))) => next,
+                        Poll::Ready(Some(Err(error))) => return self.error(error),
+                        Poll::Ready(None) => return Poll::Ready(Ok(())),
+                    };
+
+                    let _ = self.rendezvous.tx().try_send(message);
                     self.state = IoState::Listen;
 
-                    if let Some(result) = option {
-                        let message = result.map_err(try_rescue)?;
-
-                        if self.rendezvous.tx().try_send(message).is_err() {
-                            return Poll::Ready(Ok(()));
-                        }
+                    if self.did_poll_listener {
+                        return self.park();
                     }
                 }
 
                 IoState::Flush => {
-                    let result = ready!(Pin::new(stream).poll_flush(context));
-                    self.state = IoState::Listen;
-
-                    result.map_err(try_rescue)?;
+                    match Pin::new(stream).poll_flush(context) {
+                        Poll::Ready(Err(error)) => return self.error(error),
+                        Poll::Ready(Ok(_)) => self.state = IoState::Receive,
+                        Poll::Pending => return self.park(),
+                    };
                 }
             }
         }

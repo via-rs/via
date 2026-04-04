@@ -32,6 +32,9 @@ enum IoState {
 }
 
 struct Facade {
+    listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
+    state: IoState,
+
     /// A flag used to determine whether or not the listener was polled.
     ///
     /// The listener should be polled regardless of the state that we are in
@@ -43,8 +46,6 @@ struct Facade {
     /// rendezvous channel.
     did_poll_listener: bool,
 
-    listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
-    state: IoState,
     stream: *mut WebSocketStream<UpgradedIo>,
     rendezvous: Channel,
 }

@@ -127,6 +127,7 @@ impl Future for Facade {
                         }
                         Err(TryRecvError::Empty) => {
                             self.state = IoState::Receive;
+                            return Poll::Pending;
                         }
                         Err(TryRecvError::Closed) => {
                             return Poll::Ready(Ok(()));

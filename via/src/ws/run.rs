@@ -84,7 +84,7 @@ impl Facade {
         let (ours, theirs) = Channel::new();
 
         Self {
-            state: IoState::Listen,
+            state: IoState::Receive,
             stream: &mut run.stream as *mut _,
             listener: Box::pin((run.listener)(theirs, run.request.clone())),
             rendezvous: ours,
@@ -121,18 +121,22 @@ impl Future for Facade {
                         return Poll::Ready(Ok(()));
                     }
 
-                    self.state = match self.rendezvous.rx().try_recv() {
-                        Err(TryRecvError::Empty) => IoState::Receive,
-                        Ok(message) => IoState::Send(message),
+                    match self.rendezvous.rx().try_recv() {
+                        Ok(message) => {
+                            self.state = IoState::Send(message);
+                        }
+                        Err(TryRecvError::Empty) => {
+                            self.state = IoState::Receive;
+                        }
                         Err(TryRecvError::Closed) => {
                             return Poll::Ready(Ok(()));
                         }
-                    };
+                    }
                 }
 
                 state @ IoState::Send(_) => {
                     let IoState::Send(message) = mem::replace(state, IoState::Flush) else {
-                        *state = IoState::Listen;
+                        *state = IoState::Receive;
                         return Poll::Pending;
                     };
 
@@ -144,7 +148,7 @@ impl Future for Facade {
                     };
 
                     if let Err(error) = result.and_then(|_| sink.start_send(message)) {
-                        *state = IoState::Listen;
+                        *state = IoState::Receive;
                         return Poll::Ready(Err(try_rescue(error)));
                     }
                 }
@@ -155,7 +159,6 @@ impl Future for Facade {
                     }
 
                     let option = ready!(Pin::new(stream).poll_next(context));
-
                     self.state = IoState::Listen;
 
                     if let Some(result) = option {
@@ -169,7 +172,7 @@ impl Future for Facade {
 
                 IoState::Flush => {
                     let result = ready!(Pin::new(stream).poll_flush(context));
-                    self.state = IoState::Listen;
+                    self.state = IoState::Receive;
 
                     result.map_err(try_rescue)?;
                 }

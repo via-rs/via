@@ -15,7 +15,7 @@ use tokio_tungstenite::WebSocketStream;
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
-use super::error::{WebSocketError, try_rescue};
+use super::error::{already_closed, rescue};
 use super::io::UpgradedIo;
 use super::{Channel, Message, Request};
 use crate::Error;
@@ -25,27 +25,14 @@ pub struct RunTask<T, App> {
 }
 
 enum IoState {
-    Listen,
+    Receive,
     Send(Message),
     Flush,
-    Receive,
 }
 
 struct Facade {
     listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
     state: IoState,
-
-    /// A flag used to determine whether or not the listener was polled.
-    ///
-    /// The listener should be polled regardless of the state that we are in
-    /// when we wake up. The only circumstance in which the listener is not
-    /// polled is when we are waiting on I/O.
-    ///
-    /// This behavior mirrors what happens when you work directly with a
-    /// `WebSocketStream` while obscuring the actual I/O behind our
-    /// rendezvous channel.
-    did_poll_listener: bool,
-
     stream: *mut WebSocketStream<UpgradedIo>,
     rendezvous: Channel,
 }
@@ -95,7 +82,6 @@ impl Facade {
         let (ours, theirs) = Channel::new();
 
         Self {
-            did_poll_listener: false,
             listener: Box::pin((run.listener)(theirs, run.request.clone())),
             state: IoState::Receive,
             stream: &mut run.stream as *mut _,
@@ -103,15 +89,12 @@ impl Facade {
         }
     }
 
-    fn error(&mut self, error: WebSocketError) -> Poll<super::Result> {
-        self.state = IoState::Receive;
-        self.did_poll_listener = false;
-        Poll::Ready(Err(try_rescue(error)))
-    }
-
-    fn park(&mut self) -> Poll<super::Result> {
-        self.did_poll_listener = false;
-        Poll::Pending
+    fn try_recv(&mut self) -> super::Result<Option<Message>> {
+        match self.rendezvous.rx().try_recv() {
+            Ok(outbound) => Ok(Some(outbound)),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Closed) => Err(already_closed()),
+        }
     }
 }
 
@@ -119,9 +102,6 @@ unsafe impl Send for Facade {}
 
 impl Drop for Facade {
     fn drop(&mut self) {
-        // Set the bit at `did_poll_listener` to zero.
-        self.did_poll_listener = false;
-
         // Null out the raw pointer to prevent accidental use.
         // The rest of the fields in self are dropped automatically.
         self.stream = std::ptr::null_mut();
@@ -131,7 +111,7 @@ impl Drop for Facade {
 impl Future for Facade {
     type Output = super::Result;
 
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             // Safety:
             //
@@ -142,73 +122,76 @@ impl Future for Facade {
             let stream = unsafe { &mut *self.stream };
 
             match &mut self.state {
-                IoState::Listen => {
-                    if self.listener.as_mut().poll(context)?.is_ready() {
+                IoState::Receive => {
+                    if cfg!(debug_assertions) {
+                        println!("info(via::ws): state = Receive");
+                    }
+
+                    let Poll::Ready(result) = self.rendezvous.tx().poll_ready(cx) else {
+                        if self.listener.as_mut().poll(cx)?.is_ready() {
+                            return Poll::Ready(Ok(()));
+                        }
+
+                        if let Some(outbound) = self.try_recv()? {
+                            self.state = IoState::Send(outbound);
+                        };
+
+                        return Poll::Pending;
+                    };
+
+                    result.map_err(|_| already_closed())?;
+
+                    if let Poll::Ready(next) = Pin::new(stream).poll_next(cx) {
+                        let Some(result) = next else {
+                            return Poll::Ready(Ok(()));
+                        };
+
+                        let inbound = result.map_err(rescue)?;
+
+                        let Ok(_) = self.rendezvous.tx().try_send(inbound) else {
+                            return Poll::Ready(Err(already_closed()));
+                        };
+                    }
+
+                    if self.listener.as_mut().poll(cx)?.is_ready() {
                         return Poll::Ready(Ok(()));
                     }
 
-                    match self.rendezvous.rx().try_recv() {
-                        Ok(message) => {
-                            self.state = IoState::Send(message);
-                            self.did_poll_listener = true;
-                        }
-                        Err(TryRecvError::Empty) => {
-                            self.state = IoState::Receive;
-                            self.did_poll_listener = false;
-                        }
-                        Err(TryRecvError::Closed) => {
-                            return Poll::Ready(Ok(()));
-                        }
-                    }
+                    let Some(outbound) = self.try_recv()? else {
+                        return Poll::Pending;
+                    };
+
+                    self.state = IoState::Send(outbound);
                 }
 
                 state @ IoState::Send(_) => {
+                    if cfg!(debug_assertions) {
+                        println!("info(via::ws): state = Send");
+                    }
+
                     let mut sink = Pin::new(stream);
 
-                    match sink.as_mut().poll_ready(context) {
-                        Poll::Pending => return self.park(),
-                        Poll::Ready(Ok(_)) => {}
-                        Poll::Ready(Err(error)) => return self.error(error),
+                    if sink.as_mut().poll_ready(cx).map_err(rescue)?.is_pending() {
+                        return Poll::Pending;
                     }
 
-                    let IoState::Send(message) = mem::replace(state, IoState::Flush) else {
-                        *state = IoState::Receive;
-                        return self.park();
-                    };
-
-                    if let Err(error) = sink.start_send(message) {
-                        return self.error(error);
-                    }
-                }
-
-                IoState::Receive => {
-                    match self.rendezvous.tx().poll_ready(context) {
-                        Poll::Pending => return self.park(),
-                        Poll::Ready(Ok(_)) => {}
-                        Poll::Ready(Err(_)) => return Poll::Ready(Ok(())),
-                    }
-
-                    let message = match Pin::new(stream).poll_next(context) {
-                        Poll::Pending => return self.park(),
-                        Poll::Ready(Some(Ok(next))) => next,
-                        Poll::Ready(Some(Err(error))) => return self.error(error),
-                        Poll::Ready(None) => return Poll::Ready(Ok(())),
-                    };
-
-                    let _ = self.rendezvous.tx().try_send(message);
-                    self.state = IoState::Listen;
-
-                    if self.did_poll_listener {
-                        return self.park();
+                    if let IoState::Send(outbound) = mem::replace(state, IoState::Flush) {
+                        sink.as_mut().start_send(outbound).map_err(rescue)?;
+                    } else {
+                        return Poll::Ready(Ok(()));
                     }
                 }
 
                 IoState::Flush => {
-                    match Pin::new(stream).poll_flush(context) {
-                        Poll::Ready(Err(error)) => return self.error(error),
-                        Poll::Ready(Ok(_)) => self.state = IoState::Receive,
-                        Poll::Pending => return self.park(),
-                    };
+                    if cfg!(debug_assertions) {
+                        println!("info(via::ws): state = Flush");
+                    }
+
+                    if Pin::new(stream).poll_flush(cx).map_err(rescue)?.is_ready() {
+                        self.state = IoState::Receive;
+                    } else {
+                        return Poll::Pending;
+                    }
                 }
             }
         }

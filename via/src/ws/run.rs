@@ -112,6 +112,16 @@ impl Future for Facade {
     type Output = super::Result;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        // Determines if we should continue after flush in order to guarantee
+        // listener progress.
+        //
+        // If we are not waiting for I/O, then the listener must be waiting for
+        // some future to complete.
+        //
+        // When true, we can safely assume that the listener future scheduled a
+        // wake and yield to the runtime.
+        let mut did_poll_listener = false;
+
         loop {
             // Safety:
             //
@@ -132,9 +142,16 @@ impl Future for Facade {
                             return Poll::Ready(Ok(()));
                         }
 
+                        did_poll_listener = true;
+
                         if let Some(outbound) = self.try_recv()? {
                             self.state = IoState::Send(outbound);
-                        };
+                            continue;
+                        }
+
+                        if cfg!(debug_assertions) {
+                            println!("  info(via::ws): tx pending but write did not occur.");
+                        }
 
                         return Poll::Pending;
                     };
@@ -156,6 +173,8 @@ impl Future for Facade {
                     if self.listener.as_mut().poll(cx)?.is_ready() {
                         return Poll::Ready(Ok(()));
                     }
+
+                    did_poll_listener = true;
 
                     let Some(outbound) = self.try_recv()? else {
                         return Poll::Pending;
@@ -189,9 +208,16 @@ impl Future for Facade {
 
                     if Pin::new(stream).poll_flush(cx).map_err(rescue)?.is_ready() {
                         self.state = IoState::Receive;
-                    } else {
-                        return Poll::Pending;
+                        if !did_poll_listener {
+                            continue;
+                        }
                     }
+
+                    if cfg!(debug_assertions) {
+                        println!("  info(via::ws): yielding to runtime. listener already polled.");
+                    }
+
+                    return Poll::Pending;
                 }
             }
         }

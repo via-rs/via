@@ -73,23 +73,6 @@ where
     }
 }
 
-impl Facade {
-    fn new<T, App, Await>(run: &mut Run<T, App>) -> Self
-    where
-        T: Fn(Channel, Request<App>) -> Await + Send,
-        Await: Future<Output = super::Result> + Send + 'static,
-    {
-        let (ours, theirs) = Channel::new();
-
-        Self {
-            listener: Box::pin((run.listener)(theirs, run.request.clone())),
-            state: IoState::Receive,
-            stream: &mut run.stream as *mut _,
-            rendezvous: ours,
-        }
-    }
-}
-
 unsafe impl Send for Facade {}
 
 impl Drop for Facade {
@@ -236,7 +219,15 @@ where
 
     #[inline(always)]
     fn reconnect(&mut self) -> &mut Facade {
-        let facade = Facade::new(self);
+        let (ours, theirs) = Channel::new();
+        let request = self.request.clone();
+        let facade = Facade {
+            listener: Box::pin((self.listener)(theirs, request)),
+            state: IoState::Receive,
+            stream: &mut self.stream as *mut _,
+            rendezvous: ours,
+        };
+
         self.facade = Some(facade);
 
         // Safety:

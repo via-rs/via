@@ -1,4 +1,4 @@
-use std::ops::ControlFlow::{self, Break, Continue};
+use std::ops::ControlFlow;
 
 use crate::error::Error;
 
@@ -13,8 +13,8 @@ pub type Result<T = ()> = std::result::Result<T, ControlFlow<Error, Error>>;
 pub trait ResultExt {
     type Output;
 
-    fn or_break(self) -> Result<Self::Output>;
-    fn or_continue(self) -> Result<Self::Output>;
+    fn or_close(self) -> Result<Self::Output>;
+    fn or_reconnect(self) -> Result<Self::Output>;
 }
 
 pub fn already_closed() -> ControlFlow<Error, Error> {
@@ -27,9 +27,9 @@ pub fn rescue(error: WebSocketError) -> ControlFlow<Error, Error> {
     if let WebSocketError::Io(io) = &error
         && let ErrorKind::Interrupted | ErrorKind::TimedOut = io.kind()
     {
-        Continue(error.into())
+        ControlFlow::Continue(error.into())
     } else {
-        Break(error.into())
+        ControlFlow::Break(error.into())
     }
 }
 
@@ -40,12 +40,12 @@ where
     type Output = T;
 
     #[inline]
-    fn or_break(self) -> Result<Self::Output> {
-        self.map_err(|error| Break(error.into()))
+    fn or_close(self) -> Result<Self::Output> {
+        self.map_err(|error| ControlFlow::Break(error.into()))
     }
 
     #[inline]
-    fn or_continue(self) -> Result<Self::Output> {
-        self.map_err(|error| Continue(error.into()))
+    fn or_reconnect(self) -> Result<Self::Output> {
+        self.map_err(|error| ControlFlow::Continue(error.into()))
     }
 }

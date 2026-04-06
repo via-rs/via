@@ -1,17 +1,15 @@
-use futures_channel::mpsc::{self, Receiver, Sender};
-use futures_core::FusedFuture;
-use std::future::Future;
-use std::ops::ControlFlow;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use crate::error::Error;
-
 #[cfg(feature = "tokio-tungstenite")]
 pub use tungstenite::protocol::{CloseFrame, Message, frame::Utf8Bytes};
 
 #[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
 pub use tokio_websockets::{CloseCode, Message};
+
+use futures_channel::mpsc::{self, Receiver, Sender};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use super::error::already_closed;
 
 pub struct Channel {
     tx: Sender<Message>,
@@ -21,12 +19,6 @@ pub struct Channel {
 struct Send<'a> {
     tx: &'a mut Sender<Message>,
     message: Option<Message>,
-}
-
-fn disconnect_error() -> ControlFlow<Error, Error> {
-    ControlFlow::Break(Error::new(
-        "failed to send ws message. channel disconnected.",
-    ))
 }
 
 impl Channel {
@@ -63,24 +55,18 @@ impl Future for Send<'_> {
     type Output = super::Result;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        if let Some(message) = self.message.take() {
-            let Poll::Ready(_) = Pin::new(&mut self.tx)
-                .poll_ready(context)
-                .map_err(|_| disconnect_error())?
-            else {
-                self.message = Some(message);
-                return Poll::Pending;
+        if Pin::new(&mut self.tx)
+            .poll_ready(context)
+            .map_err(|_| already_closed())?
+            .is_ready()
+        {
+            let Some(message) = self.message.take() else {
+                return Poll::Ready(Ok(()));
             };
 
-            self.tx.try_send(message).map_err(|_| disconnect_error())?;
+            self.tx.try_send(message).map_err(|_| already_closed())?;
         }
 
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl FusedFuture for Send<'_> {
-    fn is_terminated(&self) -> bool {
-        self.message.is_none()
+        Poll::Pending
     }
 }

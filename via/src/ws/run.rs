@@ -4,10 +4,10 @@ use futures_sink::Sink;
 use std::future::Future;
 use std::marker::PhantomPinned;
 use std::mem;
-use std::ops::ControlFlow::{Break, Continue};
+use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, ready};
+use std::task::{Context, Poll};
 
 #[cfg(feature = "tokio-tungstenite")]
 use tokio_tungstenite::WebSocketStream;
@@ -284,21 +284,24 @@ where
             None => this.reconnect(),
         };
 
-        match ready!(Pin::new(future).poll(context)) {
-            Ok(_) => Poll::Ready(Ok(())),
-            Err(Break(error)) => {
+        match Pin::new(future).poll(context) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(ControlFlow::Break(error))) => {
                 if cfg!(debug_assertions) {
-                    eprintln!("error(ws): {}", &error);
+                    eprintln!("error(via::ws): {}", &error);
                 }
 
                 Poll::Ready(Err(error))
             }
-            Err(Continue(error)) => {
+            Poll::Ready(Err(ControlFlow::Continue(error))) => {
                 if cfg!(debug_assertions) {
-                    eprintln!("warn(ws): {}", &error);
+                    eprintln!("warn(via::ws): {}", &error);
                 }
 
                 this.reconnect();
+                context.waker().wake_by_ref();
+
                 Poll::Pending
             }
         }

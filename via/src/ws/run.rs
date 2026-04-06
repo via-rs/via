@@ -48,7 +48,7 @@ struct Run<T, App> {
 impl<T, App, Await> RunTask<T, App>
 where
     T: Fn(Channel, Request<App>) -> Await + Send,
-    Await: Future<Output = super::Result> + Send,
+    Await: Future<Output = super::Result> + Send + 'static,
 {
     pub(super) fn new(
         listener: Arc<T>,
@@ -201,7 +201,7 @@ impl Future for Facade {
 impl<T, App, Await> Run<T, App>
 where
     T: Fn(Channel, Request<App>) -> Await + Send,
-    Await: Future<Output = super::Result> + Send,
+    Await: Future<Output = super::Result> + Send + 'static,
 {
     fn new(listener: Arc<T>, request: Request<App>, stream: WebSocketStream<UpgradedIo>) -> Self {
         Self {
@@ -211,6 +211,20 @@ where
             facade: None,
             _pin: PhantomPinned,
         }
+    }
+
+    #[inline(always)]
+    fn reconnect(&mut self) -> &mut Facade {
+        let facade = Facade::new(self);
+        self.facade = Some(facade);
+
+        // Safety:
+        //
+        // We just assigned a `Some` value to self.facade.
+        //
+        // Implementing this any other way introduces an unlikely yet
+        // recognizable re-entrancy pattern.
+        unsafe { self.facade.as_mut().unwrap_unchecked() }
     }
 }
 
@@ -241,13 +255,7 @@ where
 
         let future = match this.facade.as_mut() {
             Some(facade) => facade,
-            None => {
-                let facade = Facade::new(this);
-                this.facade = Some(facade);
-
-                // Safety: We just assigned a Some value to this.facade.
-                unsafe { this.facade.as_mut().unwrap_unchecked() }
-            }
+            None => this.reconnect(),
         };
 
         match ready!(Pin::new(future).poll(context)) {
@@ -264,7 +272,7 @@ where
                     eprintln!("warn(ws): {}", &error);
                 }
 
-                this.facade = None;
+                this.reconnect();
                 Poll::Pending
             }
         }

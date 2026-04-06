@@ -146,13 +146,14 @@ impl Future for Facade {
                         match self.rendezvous.rx().try_recv() {
                             Ok(outbound) => {
                                 self.state = IoState::Send(outbound);
-                                continue;
                             }
                             Err(TryRecvError::Empty) => {}
                             Err(TryRecvError::Closed) => {
                                 return Poll::Ready(Err(already_closed()));
                             }
                         }
+
+                        continue;
                     }
 
                     return Poll::Pending;

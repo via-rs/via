@@ -1,15 +1,15 @@
-use futures_channel::mpsc::{self, Receiver, Sender};
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use crate::ws::error::already_closed;
-
 #[cfg(feature = "tokio-tungstenite")]
 pub use tungstenite::protocol::{CloseFrame, Message, frame::Utf8Bytes};
 
 #[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
 pub use tokio_websockets::{CloseCode, Message};
+
+use futures_channel::mpsc::{self, Receiver, Sender};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use super::error::already_closed;
 
 pub struct Channel {
     tx: Sender<Message>,

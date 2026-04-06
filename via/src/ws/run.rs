@@ -4,10 +4,10 @@ use futures_sink::Sink;
 use std::future::Future;
 use std::marker::PhantomPinned;
 use std::mem;
-use std::ops::ControlFlow::{Break, Continue};
+use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, ready};
+use std::task::{Context, Poll};
 
 #[cfg(feature = "tokio-tungstenite")]
 use tokio_tungstenite::WebSocketStream;
@@ -48,7 +48,7 @@ struct Run<T, App> {
 impl<T, App, Await> RunTask<T, App>
 where
     T: Fn(Channel, Request<App>) -> Await + Send,
-    Await: Future<Output = super::Result> + Send,
+    Await: Future<Output = super::Result> + Send + 'static,
 {
     pub(super) fn new(
         listener: Arc<T>,
@@ -227,7 +227,7 @@ impl Future for Facade {
 impl<T, App, Await> Run<T, App>
 where
     T: Fn(Channel, Request<App>) -> Await + Send,
-    Await: Future<Output = super::Result> + Send,
+    Await: Future<Output = super::Result> + Send + 'static,
 {
     fn new(listener: Arc<T>, request: Request<App>, stream: WebSocketStream<UpgradedIo>) -> Self {
         Self {
@@ -237,6 +237,20 @@ where
             facade: None,
             _pin: PhantomPinned,
         }
+    }
+
+    #[inline(always)]
+    fn reconnect(&mut self) -> &mut Facade {
+        let facade = Facade::new(self);
+        self.facade = Some(facade);
+
+        // Safety:
+        //
+        // We just assigned a `Some` value to self.facade.
+        //
+        // Implementing this any other way introduces an unlikely yet
+        // recognizable re-entrancy pattern.
+        unsafe { self.facade.as_mut().unwrap_unchecked() }
     }
 }
 
@@ -267,30 +281,27 @@ where
 
         let future = match this.facade.as_mut() {
             Some(facade) => facade,
-            None => {
-                let facade = Facade::new(this);
-                this.facade = Some(facade);
-
-                // Safety: We just assigned a Some value to this.facade.
-                unsafe { this.facade.as_mut().unwrap_unchecked() }
-            }
+            None => this.reconnect(),
         };
 
-        match ready!(Pin::new(future).poll(context)) {
-            Ok(_) => Poll::Ready(Ok(())),
-            Err(Break(error)) => {
+        match Pin::new(future).poll(context) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(ControlFlow::Break(error))) => {
                 if cfg!(debug_assertions) {
-                    eprintln!("error(ws): {}", &error);
+                    eprintln!("error(via::ws): {}", &error);
                 }
 
                 Poll::Ready(Err(error))
             }
-            Err(Continue(error)) => {
+            Poll::Ready(Err(ControlFlow::Continue(error))) => {
                 if cfg!(debug_assertions) {
-                    eprintln!("warn(ws): {}", &error);
+                    eprintln!("warn(via::ws): {}", &error);
                 }
 
-                this.facade = None;
+                this.reconnect();
+                context.waker().wake_by_ref();
+
                 Poll::Pending
             }
         }

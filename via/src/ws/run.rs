@@ -88,14 +88,6 @@ impl Facade {
             rendezvous: ours,
         }
     }
-
-    fn try_recv(&mut self) -> super::Result<Option<Message>> {
-        match self.rendezvous.rx().try_recv() {
-            Ok(outbound) => Ok(Some(outbound)),
-            Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Closed) => Err(already_closed()),
-        }
-    }
 }
 
 unsafe impl Send for Facade {}
@@ -137,50 +129,50 @@ impl Future for Facade {
                         println!("info(via::ws): state = Receive");
                     }
 
-                    let Poll::Ready(result) = self.rendezvous.tx().poll_ready(cx) else {
+                    match self.rendezvous.tx().poll_ready(cx) {
+                        Poll::Ready(result) => result.map_err(|_| already_closed())?,
+                        Poll::Pending => {
+                            if cfg!(debug_assertions) {
+                                println!("  info(via::ws): tx is waiting for listener progress.");
+                            }
+
+                            if self.listener.as_mut().poll(cx)?.is_ready() {
+                                return Poll::Ready(Ok(()));
+                            }
+
+                            return Poll::Pending;
+                        }
+                    }
+
+                    if let Poll::Ready(next) = Pin::new(stream).poll_next(cx).map_err(rescue)? {
+                        let Some(inbound) = next else {
+                            return Poll::Ready(Ok(()));
+                        };
+
+                        self.rendezvous
+                            .tx()
+                            .try_send(inbound)
+                            .map_err(|_| already_closed())?;
+
                         if self.listener.as_mut().poll(cx)?.is_ready() {
                             return Poll::Ready(Ok(()));
                         }
 
                         did_poll_listener = true;
 
-                        if let Some(outbound) = self.try_recv()? {
-                            self.state = IoState::Send(outbound);
-                            continue;
+                        match self.rendezvous.rx().try_recv() {
+                            Ok(outbound) => {
+                                self.state = IoState::Send(outbound);
+                                continue;
+                            }
+                            Err(TryRecvError::Empty) => {}
+                            Err(TryRecvError::Closed) => {
+                                return Poll::Ready(Err(already_closed()));
+                            }
                         }
-
-                        if cfg!(debug_assertions) {
-                            println!("  info(via::ws): tx pending but write did not occur.");
-                        }
-
-                        return Poll::Pending;
-                    };
-
-                    result.map_err(|_| already_closed())?;
-
-                    if let Poll::Ready(next) = Pin::new(stream).poll_next(cx) {
-                        let Some(result) = next else {
-                            return Poll::Ready(Ok(()));
-                        };
-
-                        let inbound = result.map_err(rescue)?;
-
-                        let Ok(_) = self.rendezvous.tx().try_send(inbound) else {
-                            return Poll::Ready(Err(already_closed()));
-                        };
                     }
 
-                    if self.listener.as_mut().poll(cx)?.is_ready() {
-                        return Poll::Ready(Ok(()));
-                    }
-
-                    did_poll_listener = true;
-
-                    let Some(outbound) = self.try_recv()? else {
-                        return Poll::Pending;
-                    };
-
-                    self.state = IoState::Send(outbound);
+                    return Poll::Pending;
                 }
 
                 state @ IoState::Send(_) => {
@@ -208,9 +200,12 @@ impl Future for Facade {
 
                     if Pin::new(stream).poll_flush(cx).map_err(rescue)?.is_ready() {
                         self.state = IoState::Receive;
+
                         if !did_poll_listener {
                             continue;
                         }
+
+                        cx.waker().wake_by_ref();
                     }
 
                     if cfg!(debug_assertions) {

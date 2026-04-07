@@ -129,36 +129,22 @@ impl Future for Facade {
                             self.rendezvous.try_send(received)?;
                             log!(info(4), "message received.");
                         }
-
-                        // The listener will probably register an additional wake.
-                        if self.listener.as_mut().poll(cx)?.is_ready() {
-                            // The listener future is ready and did not error.
-                            return Poll::Ready(Ok(()));
-                        }
-
-                        if let Some(sent) = self.rendezvous.try_recv()? {
-                            log!(info(4), "listener sent a message");
-                            self.state = IoState::Send(sent);
-                        } else {
-                            log!(info(4), "wake for the next message or listener progress.");
-                            return Poll::Pending;
-                        }
                     } else {
                         log!(info(2), "listener has not received the previous message.");
+                    }
 
-                        // The listener will probably register an additional wake.
-                        if self.listener.as_mut().poll(cx)?.is_ready() {
-                            // The listener future is ready and did not error.
-                            return Poll::Ready(Ok(()));
-                        }
+                    // The listener will probably register an additional wake.
+                    if self.listener.as_mut().poll(cx)?.is_ready() {
+                        // The listener future is ready and did not error.
+                        return Poll::Ready(Ok(()));
+                    }
 
-                        if let Some(sent) = self.rendezvous.try_recv()? {
-                            log!(info(4), "listener sent a message.");
-                            self.state = IoState::Send(sent);
-                        } else {
-                            log!(info(4), "waiting for listener progress.");
-                            return Poll::Pending;
-                        }
+                    if let Some(sent) = self.rendezvous.try_recv()? {
+                        log!(info(4), "listener sent a message");
+                        self.state = IoState::Send(sent);
+                    } else {
+                        log!(info(4), "wake for the next message or listener progress.");
+                        return Poll::Pending;
                     }
                 }
 

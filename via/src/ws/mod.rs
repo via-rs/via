@@ -22,6 +22,11 @@ pub use upgrade::Ws;
 
 /// Upgrade the connection to a web socket.
 ///
+/// *Note:*
+///
+/// In order to guarantee progress of the receive loop of your web socket
+/// listener, you must await at least one future in the body of the loop.
+///
 /// # Example
 ///
 /// ```no_run

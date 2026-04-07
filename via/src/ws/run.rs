@@ -55,7 +55,13 @@ where
         stream: WebSocketStream<UpgradedIo>,
     ) -> Self {
         Self {
-            run: Box::pin(Run::new(listener, request, stream)),
+            run: Box::pin(Run {
+                listener,
+                request,
+                stream,
+                facade: None,
+                _pin: PhantomPinned,
+            }),
         }
     }
 }
@@ -190,16 +196,6 @@ where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send + 'static,
 {
-    fn new(listener: Arc<T>, request: Request<App>, stream: WebSocketStream<UpgradedIo>) -> Self {
-        Self {
-            listener,
-            request,
-            stream,
-            facade: None,
-            _pin: PhantomPinned,
-        }
-    }
-
     #[inline(always)]
     fn reconnect(&mut self) -> &mut Facade {
         let (ours, theirs) = Channel::new();

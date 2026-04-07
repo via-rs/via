@@ -13,9 +13,7 @@ mod io;
 mod request;
 mod run;
 mod upgrade;
-
-#[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
-mod sha1;
+mod util;
 
 pub use channel::*;
 pub use error::{Result, ResultExt};

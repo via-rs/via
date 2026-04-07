@@ -76,8 +76,6 @@ unsafe impl Send for Facade {}
 
 impl Drop for Facade {
     fn drop(&mut self) {
-        // self.did_poll_listener = false;
-
         // Null out the raw pointer to prevent accidental use.
         // The rest of the fields in self are dropped automatically.
         self.stream = std::ptr::null_mut();

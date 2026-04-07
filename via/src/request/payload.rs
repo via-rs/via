@@ -181,7 +181,6 @@ pub struct Coalesce {
 
 #[derive(Debug)]
 pub struct RequestBody {
-    has_capacity: Option<bool>,
     remaining: usize,
     body: Incoming,
 }
@@ -543,11 +542,13 @@ impl Future for Coalesce {
 
 impl RequestBody {
     pub(crate) fn new(body: Incoming, remaining: usize) -> Self {
-        Self {
-            has_capacity: None,
-            remaining,
-            body,
-        }
+        Self { remaining, body }
+    }
+
+    fn has_capacity(&self) -> bool {
+        self.body.size_hint().exact().is_none_or(|upper| {
+            u64::try_from(self.remaining).is_ok_and(|remaining| remaining >= upper)
+        })
     }
 }
 
@@ -559,13 +560,7 @@ impl Body for RequestBody {
         mut self: Pin<&mut Self>,
         context: &mut Context,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        if self.has_capacity.is_none() {
-            self.has_capacity = Some(self.body.size_hint().exact().is_none_or(|upper| {
-                u64::try_from(self.remaining).is_ok_and(|remaining| remaining >= upper)
-            }));
-        }
-
-        if self.remaining == 0 || self.has_capacity.is_some_and(|has_capacity| !has_capacity) {
+        if self.remaining == 0 || !self.has_capacity() {
             return Poll::Ready(Some(Err(Error::payload_too_large())));
         }
 
@@ -587,9 +582,7 @@ impl Body for RequestBody {
     }
 
     fn is_end_stream(&self) -> bool {
-        self.remaining == 0
-            || self.has_capacity.is_some_and(|has_capacity| !has_capacity)
-            || self.body.is_end_stream()
+        self.remaining == 0 || !self.has_capacity() || self.body.is_end_stream()
     }
 
     fn size_hint(&self) -> SizeHint {

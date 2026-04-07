@@ -610,11 +610,7 @@ impl Body for RequestBody {
         if remaining < hint.lower() {
             hint.set_exact(remaining);
         } else {
-            let upper = hint
-                .upper()
-                .map(|upper| upper.min(remaining))
-                .unwrap_or(remaining);
-
+            let upper = hint.upper().map_or(remaining, |upper| upper.min(remaining));
             hint.set_upper(upper);
         }
 

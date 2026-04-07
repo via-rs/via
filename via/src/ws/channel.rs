@@ -113,7 +113,7 @@ impl Future for Send<'_> {
         //
         // If the sender is blocked because the receiver has not yet received
         // the previous message, return pending.
-        if poll_ready(&mut self.sender, cx)?.is_pending() {
+        if poll_ready(self.sender, cx)?.is_pending() {
             return Poll::Pending;
         }
 

@@ -1,5 +1,4 @@
 use futures_task::noop_waker;
-
 use std::task::{Context, Poll};
 
 /// Call the provided closure with a `&mut Context` that uses a noop waker.

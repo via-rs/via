@@ -10,9 +10,9 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_websockets::WebSocketStream;
 
 use super::io::UpgradedIo;
-use super::sha1::sha1;
+use super::run::RunTask;
+use super::util::sha1;
 use super::{Channel, Request};
-use crate::ws::run::RunTask;
 use crate::{BoxFuture, Error, Middleware, Next, Response, raise};
 
 const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB

@@ -13,9 +13,7 @@ mod io;
 mod request;
 mod run;
 mod upgrade;
-
-#[cfg(any(feature = "aws-lc-rs", feature = "ring"))]
-mod sha1;
+mod util;
 
 pub use channel::*;
 pub use error::{Result, ResultExt};
@@ -23,6 +21,11 @@ pub use request::Request;
 pub use upgrade::Ws;
 
 /// Upgrade the connection to a web socket.
+///
+/// *Note:*
+///
+/// In order to guarantee progress of the receive loop of your web socket
+/// listener, you must await at least one future in the body of the loop.
 ///
 /// # Example
 ///

@@ -1,4 +1,3 @@
-use futures_channel::mpsc::TryRecvError;
 use futures_core::Stream;
 use futures_sink::Sink;
 use std::future::Future;
@@ -15,7 +14,7 @@ use tokio_tungstenite::WebSocketStream;
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
-use super::error::{already_closed, rescue};
+use super::error::rescue;
 use super::io::UpgradedIo;
 use super::{Channel, Message, Request};
 use crate::Error;
@@ -83,20 +82,25 @@ impl Drop for Facade {
     }
 }
 
+macro_rules! log {
+    ($level:tt($indent:literal), $fmt:literal $($arg:tt)*) => {
+        log!(
+            concat!("{}", stringify!($level),"(via::ws): ", $fmt),
+            " ".repeat($indent)
+            $($arg)*
+        )
+    };
+    ($($args:tt)+) => {
+        if cfg!(debug_assertions) {
+            eprintln!($($args)*);
+        }
+    };
+}
+
 impl Future for Facade {
     type Output = super::Result;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        // Determines if we should continue after flush in order to guarantee
-        // listener progress.
-        //
-        // If we are not waiting for I/O, then the listener must be waiting for
-        // some future to complete.
-        //
-        // When true, we can safely assume that the listener future scheduled a
-        // wake and yield to the runtime.
-        let mut did_poll_listener = false;
-
         loop {
             // Safety:
             //
@@ -108,94 +112,73 @@ impl Future for Facade {
 
             match &mut self.state {
                 IoState::Receive => {
-                    if cfg!(debug_assertions) {
-                        println!("info(via::ws): state = Receive");
-                    }
+                    log!(info(0), "state = receive");
 
-                    match self.rendezvous.tx().poll_ready(cx) {
-                        Poll::Ready(result) => result.map_err(|_| already_closed())?,
-                        Poll::Pending => {
-                            if cfg!(debug_assertions) {
-                                println!("  info(via::ws): tx is waiting for listener progress.");
-                            }
+                    // Confirm that the listener can receive the next message.
+                    if self.rendezvous.has_capacity()? {
+                        log!(info(2), "listener is ready for the next message.");
 
-                            if self.listener.as_mut().poll(cx)?.is_ready() {
+                        // Attempt to pull the next message out of the stream.
+                        if let Poll::Ready(next) = Pin::new(stream).poll_next(cx).map_err(rescue)? {
+                            let Some(received) = next else {
+                                // The stream has ended. The web socket is closed.
                                 return Poll::Ready(Ok(()));
-                            }
+                            };
 
-                            return Poll::Pending;
+                            // If send fails, the channel is disconnected.
+                            self.rendezvous.try_send(received)?;
+                            log!(info(4), "message received.");
                         }
+                    } else {
+                        log!(info(2), "listener has not received the previous message.");
                     }
 
-                    if let Poll::Ready(next) = Pin::new(stream).poll_next(cx).map_err(rescue)? {
-                        let Some(inbound) = next else {
-                            return Poll::Ready(Ok(()));
-                        };
-
-                        self.rendezvous
-                            .tx()
-                            .try_send(inbound)
-                            .map_err(|_| already_closed())?;
-
-                        if self.listener.as_mut().poll(cx)?.is_ready() {
-                            return Poll::Ready(Ok(()));
-                        }
-
-                        did_poll_listener = true;
-
-                        match self.rendezvous.rx().try_recv() {
-                            Ok(outbound) => {
-                                self.state = IoState::Send(outbound);
-                                continue;
-                            }
-                            Err(TryRecvError::Empty) => {}
-                            Err(TryRecvError::Closed) => {
-                                return Poll::Ready(Err(already_closed()));
-                            }
-                        }
+                    // The listener will probably register an additional wake.
+                    if self.listener.as_mut().poll(cx)?.is_ready() {
+                        // The listener future is ready and did not error.
+                        return Poll::Ready(Ok(()));
                     }
 
-                    return Poll::Pending;
+                    if let Some(sent) = self.rendezvous.try_recv()? {
+                        log!(info(4), "listener sent a message");
+                        self.state = IoState::Send(sent);
+                    } else {
+                        log!(info(4), "wake for the next message or listener progress.");
+                        return Poll::Pending;
+                    }
                 }
 
                 state @ IoState::Send(_) => {
-                    if cfg!(debug_assertions) {
-                        println!("info(via::ws): state = Send");
-                    }
+                    log!(info(0), "state = send");
 
                     let mut sink = Pin::new(stream);
 
                     if sink.as_mut().poll_ready(cx).map_err(rescue)?.is_pending() {
+                        log!(info(2), "waiting for i/o to become available for write.");
                         return Poll::Pending;
                     }
 
-                    if let IoState::Send(outbound) = mem::replace(state, IoState::Flush) {
-                        sink.as_mut().start_send(outbound).map_err(rescue)?;
+                    if let IoState::Send(message) = mem::replace(state, IoState::Flush) {
+                        sink.as_mut().start_send(message).map_err(rescue)?;
+                        log!(info(2), "write successful. transitiion to flush.");
                     } else {
+                        // We are in an invalid state. This can be interpreted
+                        // as a signal that the risk of re-entrance is elevated
+                        // and we should close the socket.
                         return Poll::Ready(Ok(()));
                     }
                 }
 
                 IoState::Flush => {
-                    if cfg!(debug_assertions) {
-                        println!("info(via::ws): state = Flush");
-                    }
+                    log!(info(0), "state = flush");
 
                     if Pin::new(stream).poll_flush(cx).map_err(rescue)?.is_ready() {
+                        log!(info(2), "flush complete. transition to receive.");
                         self.state = IoState::Receive;
-
-                        if !did_poll_listener {
-                            continue;
-                        }
-
-                        cx.waker().wake_by_ref();
+                    } else {
+                        log!(info(2), "waiting for flush to complete.");
+                        return Poll::Pending;
                     }
-
-                    if cfg!(debug_assertions) {
-                        println!("  info(via::ws): yielding to runtime. listener already polled.");
-                    }
-
-                    return Poll::Pending;
                 }
             }
         }
@@ -274,16 +257,11 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
             Poll::Ready(Err(ControlFlow::Break(error))) => {
-                if cfg!(debug_assertions) {
-                    eprintln!("error(via::ws): {}", &error);
-                }
-
+                log!(error(2), "{}", &error);
                 Poll::Ready(Err(error))
             }
             Poll::Ready(Err(ControlFlow::Continue(error))) => {
-                if cfg!(debug_assertions) {
-                    eprintln!("warn(via::ws): {}", &error);
-                }
+                log!(warn(2), "{}", &error);
 
                 this.reconnect();
                 context.waker().wake_by_ref();

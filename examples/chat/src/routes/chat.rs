@@ -28,9 +28,9 @@ pub async fn chat(mut channel: Channel, _request: Request) -> ws::Result {
             //                                   ^^^^^^^^^^^^
             // If an error occurs while deserializing the message due to
             // malformed user input, restart the session rather than ending it.
-            println!("  info(examples/chat): {}", &message.body);
+            println!("      info(examples/chat): {}", &message.body);
         } else if cfg!(debug_assertions) {
-            eprintln!("  warn(examples/chat): ignoring message {:?}", next);
+            eprintln!("      warn(examples/chat): ignoring message {:?}", next);
         }
 
         // Yield to the runtime to uphold the web socket reactor contract.
@@ -45,7 +45,7 @@ pub async fn chat(mut channel: Channel, _request: Request) -> ws::Result {
     }
 
     if cfg!(debug_assertions) {
-        eprintln!("  info(examples/chat): ws session ended.");
+        eprintln!("      info(examples/chat): ws session ended.");
     }
 
     Ok(())

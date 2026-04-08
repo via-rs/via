@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [features]
-default = ["ring", "tokio-tungstenite"]
+default = []
 
 fs = ["via/file"]
 

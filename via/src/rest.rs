@@ -1,28 +1,22 @@
 #[macro_export]
-macro_rules! rest {
-    ($mod:path) => {
-        (
-            $crate::rest!($mod as collection),
-            $crate::rest!($mod as member),
-        )
-    };
-    ($mod:path as collection) => {{
+macro_rules! collection {
+    ($mod:path) => {{
         use $mod::{create, index};
         $crate::post(create).get(index)
     }};
-    ($mod:path as member) => {{
+}
+
+#[macro_export]
+macro_rules! member {
+    ($mod:path) => {{
         use $mod::{destroy, show, update};
         $crate::delete(destroy).patch(update).get(show)
     }};
-    ($mod:path as $other:ident) => {{
-        compile_error!(concat!(
-            "incorrect rest! modifier \"",
-            stringify!($other),
-            "\"",
-        ));
-    }};
+}
 
-    ($mod:ident, $param:literal) => {{
+#[macro_export]
+macro_rules! rest {
+    ($mod:path, $param:literal) => {{
         assert!(
             $param.starts_with(|start| start == ':' || start == '*'),
             "parameter names must start with either : or *."
@@ -36,7 +30,7 @@ macro_rules! rest {
         )
     }};
 
-    ($mod:ident, $param:literal, $name:literal) => {{
+    ($mod:path, $param:literal, $name:literal) => {{
         assert!(
             $param.starts_with(|start| start == ':' || start == '*'),
             "parameter names must start with either : or *."
@@ -50,8 +44,8 @@ macro_rules! rest {
         )
     }};
 
-    (#[resource] $mod:ident, $collection:expr, $member:expr) => {
-        $crate::router::ResourceBuilder::collection($collection, $crate::rest!($mod as collection))
-            .member($member, $crate::rest!($mod as member))
+    (#[resource] $mod:path, $collection:expr, $member:expr) => {
+        $crate::router::ResourceBuilder::collection($collection, $crate::collection!($mod))
+            .member($member, $crate::member!($mod))
     };
 }

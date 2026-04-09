@@ -5,7 +5,7 @@ mod util;
 use cookie::Key;
 use std::process::ExitCode;
 use via::error::{Error, rescue};
-use via::{Server, collection, cookies, guard, member, rest, ws};
+use via::{Server, collection, cookies, guard, member, rest};
 
 use database::Database;
 use routes::auth::{login, logout, me};
@@ -62,11 +62,12 @@ async fn main() -> Result<ExitCode, Error> {
     auth.route("me").to(via::get(me));
 
     // The /api/chat route.
-    let mut chat = api.route("chat");
-
-    // Opening a web socket requires an authenticated user.
-    chat.middleware(guard(unauthorized, is_authenticated));
-    chat.to(via::get(ws(routes::chat)));
+    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+    api.route("chat").scope(|chat| {
+        // Opening a web socket requires an authenticated user.
+        chat.middleware(guard(unauthorized, is_authenticated));
+        chat.index().to(via::get(via::ws(routes::chat)));
+    });
 
     // The /api/users resource.
     let mut users = api.route("users").to(via::post(users::create));

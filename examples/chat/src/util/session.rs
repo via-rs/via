@@ -9,17 +9,17 @@ use crate::database::Id;
 use crate::database::models::User;
 use crate::{Next, Request};
 
+pub const COOKIE: &str = "via-chat-session";
+
 const EXPIRES_AT: usize = 8;
 const TOKEN_LEN: usize = 16;
-
-pub const COOKIE: &str = "via-chat-session";
 
 pub trait Authenticate {
     fn authenticate(&mut self, secret: &Key, user: Option<Identity>);
 }
 
 pub trait Session {
-    fn session(&self) -> via::Result<&Identity>;
+    fn session(&self) -> Option<&Identity>;
     async fn user(&self) -> via::Result<User>;
 }
 
@@ -29,6 +29,14 @@ pub struct Identity([u8; 16]);
 #[derive(Clone)]
 struct ProtectFromForgery {
     identity: Identity,
+}
+
+pub fn is_authenticated(request: &Request) -> bool {
+    request.session().is_some()
+}
+
+pub fn unauthorized<T>() -> via::Result<T> {
+    raise!(401, message = "unauthorized.");
 }
 
 pub async fn restore(mut request: Request, next: Next) -> via::Result {
@@ -50,7 +58,7 @@ pub async fn restore(mut request: Request, next: Next) -> via::Result {
                 .find_user(identity.user_id()?)
                 .await?
             else {
-                raise!(401, message = "unauthorized.");
+                return unauthorized();
             };
 
             identity.refresh();
@@ -100,7 +108,7 @@ impl Identity {
         };
 
         let Ok(id) = Id::new(u64::from_be_bytes(bytes)) else {
-            raise!(401, message = "unauthorized.");
+            return unauthorized();
         };
 
         Ok(id)
@@ -133,18 +141,20 @@ impl FromStr for Identity {
 }
 
 impl Session for Request {
-    fn session(&self) -> via::Result<&Identity> {
-        let Some(session) = self.extensions().get::<ProtectFromForgery>() else {
-            raise!(401);
-        };
-
-        Ok(&session.identity)
+    fn session(&self) -> Option<&Identity> {
+        self.extensions()
+            .get::<ProtectFromForgery>()
+            .map(|session| &session.identity)
     }
 
     async fn user(&self) -> via::Result<User> {
-        let id = self.session().and_then(Identity::user_id)?;
+        let id = self
+            .session()
+            .ok_or_else(|| unauthorized::<()>().unwrap_err())
+            .and_then(Identity::user_id)?;
+
         let Some(user) = self.app().database().find_user(id).await? else {
-            raise!(401);
+            return unauthorized();
         };
 
         Ok(user)

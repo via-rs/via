@@ -4,11 +4,13 @@ mod util;
 
 use cookie::Key;
 use std::process::ExitCode;
-use via::{Error, Server, raise, rest};
+use via::error::{Error, rescue};
+use via::{Server, collection, cookies, guard, member, rest, ws};
 
 use database::Database;
-use routes::{auth, channels, reactions, threads, users};
-use util::session::{self, Session};
+use routes::auth::{login, logout, me};
+use routes::{channels, reactions, threads, users};
+use util::session::{self, is_authenticated, unauthorized};
 
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
@@ -41,75 +43,70 @@ async fn main() -> Result<ExitCode, Error> {
         //     .expect("unexpected end of input while parsing VIA_SECRET_KEY"),
     });
 
-    let mut api = app.route("/api");
+    // The /api namespace.
+    let mut api = app.route("api");
 
-    api.middleware(via::rescue(|sanitizer| sanitizer.use_json()));
-    api.middleware(via::cookies([session::COOKIE]));
+    // If an error occurs, respond with JSON.
+    api.middleware(rescue(|sanitizer| sanitizer.use_json()));
+
+    // Parse and track changes that are made to the session cookie.
+    api.middleware(cookies([session::COOKIE]));
+
+    // Restore the user's session if it exists.
     api.middleware(session::restore);
 
-    api.route("/auth").scope(|auth| {
-        auth.index().to(via::delete(auth::logout).post(auth::login));
-        auth.route("/_me").to(via::get(auth::me));
-    });
+    // The /api/auth namespace.
+    let mut auth = api.route("auth");
 
-    api.route("/channels").scope(|channels| {
-        let (collection, member) = rest!(channels);
+    auth.index().to(via::delete(logout).post(login));
+    auth.route("me").to(via::get(me));
 
-        // Define create and index on /api/channels.
+    // The /api/chat route.
+    let mut chat = api.route("chat");
+
+    // Opening a web socket requires an authenticated user.
+    chat.middleware(guard(unauthorized, is_authenticated));
+    chat.to(via::get(ws(routes::chat)));
+
+    // The /api/users resource.
+    let mut users = api.route("users").to(via::post(users::create));
+    //                                    ^^^^^^^^^^^^^^^^^^^^^^^^
+    // Creating an account does not require authentication.
+    // However, subsquenet request to users resource must be authenticated.
+    users.middleware(guard(unauthorized, is_authenticated));
+
+    users.index().to(via::get(users::index));
+    users.route(":user-id").to(member!(users));
+
+    // The /api/channels resource.
+    let mut channels = api.route("channels");
+
+    // All requests to the channels resource must be authenticated.
+    channels.middleware(guard(unauthorized, is_authenticated));
+
+    channels.index().to(collection!(channels));
+    channels.route(":channel-id").scope(|channel| {
+        // If a user tries to perform an action on a channel or one of it's
+        // dependencies, they must be the owner of the resource or have
+        // sufficent permission to perform the requested action.
         //
-        // These are commonly referred to as "collection" routes because they
-        // operate on a collection of a resource.
-        channels.index().to(collection);
+        // Including this middleware before anything else in the channel
+        // module enforces that the `Ability` and `Subscriber` extension
+        // traits are valid as long as they are visible in the type system.
+        //
+        // This is where seperation of concerns intersects with the uri path
+        // and the API contract defined in `channels::authorization`.
+        channel.middleware(channels::authorization);
 
-        channels.route("/:channel-id").scope(|channel| {
-            let threads = rest!(threads, ":thread-id");
-            let replies = rest!(threads, ":reply-id", "replies");
+        channel.index().to(member!(channels));
 
-            // If a user tries to perform an action on a channel or one of it's
-            // dependencies, they must be the owner of the resource or have
-            // sufficent permission to perform the requested action.
-            //
-            // Including this middleware before anything else in the channel
-            // module enforces that the `Ability` and `Subscriber` extension
-            // traits are valid as long as they are visible in the type system.
-            //
-            // This is where seperation of concerns intersects with the uri path
-            // and the API contract defined in `channels::authorization`.
-            channel.middleware(channels::authorization);
+        // Continue defining the dependencies of a channel.
 
-            // Route /api/:org-id/channels/:channel-id to the member actions in
-            // the `routes::channels` module. These include destroy, show, and
-            // update.
-            channel.index().to(member);
+        let mut thread = channel.resource(rest!(threads, ":thread-id"));
+        let mut reply = thread.resource(rest!(threads, ":reply-id", "replies"));
 
-            // Continue defining the dependencies of a channel.
-
-            channel.resource(threads).scope(|thread| {
-                thread.resource(rest!(reactions, ":reaction-id"));
-                thread.resource(replies).scope(|reply| {
-                    reply.resource(rest!(reactions, ":reaction-id"));
-                });
-            });
-        });
-    });
-
-    api.route("/chat").scope(|chat| {
-        // Any request to subequently defined routes must be authenticated.
-        chat.middleware(via::guard(
-            || raise!(401, message = "unauthorized"),
-            |request: &Request| request.session().is_ok(),
-        ));
-
-        // Upgrade to a websocket and start chatting.
-        chat.index().to(via::ws(routes::chat));
-    });
-
-    api.route("/users").scope(|users| {
-        // Creating an account does not require authentication.
-        users.index().to(via::post(users::create));
-
-        users.index().to(via::get(users::index));
-        users.route("/:user-id").to(rest!(users as member));
+        reply.resource(rest!(reactions, ":reaction-id"));
+        thread.resource(rest!(reactions, ":reaction-id"));
     });
 
     // Start listening at http://localhost:8080 for incoming requests.

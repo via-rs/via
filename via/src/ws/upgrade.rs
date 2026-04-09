@@ -1,4 +1,4 @@
-use http::{HeaderValue, Method, StatusCode, header};
+use http::{HeaderValue, StatusCode, header};
 use hyper::upgrade::OnUpgrade;
 use std::future::Future;
 use std::sync::Arc;
@@ -131,14 +131,13 @@ where
 {
     fn call(&self, mut request: crate::Request<App>, next: Next<App>) -> BoxFuture {
         // Confirm that the request is for a websocket upgrade.
-        if request.method() != Method::GET
-            || !request
-                .headers()
-                .get(header::CONNECTION)
-                .zip(request.headers().get(header::UPGRADE))
-                .is_some_and(|(connection, upgrade)| {
-                    has_token(connection, "upgrade") && has_token(upgrade, "websocket")
-                })
+        if !request
+            .headers()
+            .get(header::CONNECTION)
+            .zip(request.headers().get(header::UPGRADE))
+            .is_some_and(|(connection, upgrade)| {
+                has_token(connection, "upgrade") && has_token(upgrade, "websocket")
+            })
         {
             return next.call(request);
         }

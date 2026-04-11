@@ -98,6 +98,9 @@ impl<App> Service<http::Request<Incoming>> for ViaService<App> {
         // Preallocate enough space to store at least 6 path params.
         let mut params = Vec::with_capacity(6);
 
+        // Preallocate enough space to store 9 frames of request body data.
+        let frames = Vec::with_capacity(9);
+
         // Populate the middleware stack with the resolved routes.
         for (route, param) in self.via.router().traverse(path) {
             // Extend deque with the route's middleware stack.
@@ -120,7 +123,7 @@ impl<App> Service<http::Request<Incoming>> for ViaService<App> {
             let envelope = Envelope::new(parts, params);
 
             // Limit request body sizes to the configured maximum.
-            let body = RequestBody::new(body, self.config.max_request_size());
+            let body = RequestBody::new(self.config.max_request_size(), body, frames);
 
             Request::new(envelope, body, app)
         };

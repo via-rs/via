@@ -176,13 +176,14 @@ pub struct Aggregate {
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Coalesce {
     body: RequestBody,
-    payload: Option<RequestPayload>,
+    trailers: Option<HeaderMap>,
 }
 
 #[derive(Debug)]
 pub struct RequestBody {
     remaining: usize,
     body: Incoming,
+    frames: Option<Vec<Bytes>>,
 }
 
 struct RequestPayload {
@@ -497,7 +498,7 @@ impl Coalesce {
     pub(super) fn new(body: RequestBody) -> Self {
         Self {
             body,
-            payload: Some(RequestPayload::new()),
+            trailers: None,
         }
     }
 }
@@ -515,40 +516,50 @@ impl Future for Coalesce {
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         while let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) {
-            let payload = self.payload.as_mut().ok_or_else(already_read)?;
-
             match frame.into_data() {
-                Ok(data) => payload.frames.push(data),
+                Ok(data) => {
+                    self.body.frames_mut()?.push(data);
+                }
                 Err(frame) => {
                     let trailers = frame.into_trailers().map_err(|_| unknown_frame_type())?;
 
-                    if let Some(existing) = payload.trailers.as_mut() {
+                    if let Some(existing) = self.trailers.as_mut() {
                         existing.extend(trailers);
                     } else {
-                        payload.trailers = Some(trailers);
+                        self.trailers = Some(trailers);
                     }
                 }
             }
         }
 
-        Poll::Ready(
-            self.payload
-                .take()
-                .map(Aggregate::new)
-                .ok_or_else(already_read),
-        )
+        Poll::Ready(Ok(Aggregate::new(RequestPayload {
+            frames: self.body.end()?,
+            trailers: self.trailers.take(),
+        })))
     }
 }
 
 impl RequestBody {
-    pub(crate) fn new(body: Incoming, remaining: usize) -> Self {
-        Self { remaining, body }
+    pub(crate) fn new(remaining: usize, body: Incoming, frames: Vec<Bytes>) -> Self {
+        Self {
+            remaining,
+            body,
+            frames: Some(frames),
+        }
     }
 
     fn has_capacity(&self) -> bool {
         self.body.size_hint().exact().is_none_or(|upper| {
             u64::try_from(self.remaining).is_ok_and(|remaining| remaining >= upper)
         })
+    }
+
+    fn frames_mut(&mut self) -> Result<&mut Vec<Bytes>, Error> {
+        self.frames.as_mut().ok_or_else(already_read)
+    }
+
+    fn end(&mut self) -> Result<Vec<Bytes>, Error> {
+        self.frames.take().ok_or_else(already_read)
     }
 }
 
@@ -619,13 +630,6 @@ impl Body for RequestBody {
 }
 
 impl RequestPayload {
-    fn new() -> Self {
-        Self {
-            frames: Vec::with_capacity(9),
-            trailers: None,
-        }
-    }
-
     #[inline]
     fn frames(&self) -> &[Bytes] {
         &self.frames

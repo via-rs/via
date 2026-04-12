@@ -58,6 +58,21 @@ struct Errors<'a> {
     errors: ErrorList<'a>,
 }
 
+pub fn error<S, M>(status: S, message: M) -> Error
+where
+    S: TryInto<StatusCode>,
+    S::Error: std::error::Error + Send + Sync + 'static,
+    M: Into<String>,
+{
+    status.try_into().map_or_else(
+        |error| Error::from_source(Box::new(error)),
+        |status| Error {
+            source: ErrorSource::Message(message.into()),
+            status,
+        },
+    )
+}
+
 fn serialize_status_code<S>(status: &StatusCode, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,

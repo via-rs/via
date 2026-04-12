@@ -1,0 +1,37 @@
+use super::{Deny, Predicate};
+
+macro_rules! cmp_bytes {
+    ($($vis:vis fn $ctor:ident($self:ident: &$ty:ident, $rhs:ident: &[u8]) -> bool {
+        $matcher:expr
+    })+) => {
+        $(struct $ty(Box<[u8]>);)+
+
+        $($vis fn $ctor($rhs: &[u8]) -> impl Predicate<[u8]> {
+            $ty($rhs.to_owned().into_boxed_slice())
+        })+
+
+        $(impl Predicate<[u8]> for $ty {
+            fn matches(&$self, $rhs: &[u8]) -> Result<(), Deny> {
+                if $matcher { Ok(()) } else { Err(Deny::Match) }
+            }
+        })+
+    }
+}
+
+cmp_bytes! {
+    pub fn eq(self: &StrictEq, value: &[u8]) -> bool {
+        &*self.0 == value
+    }
+
+    pub fn eq_no_case(self: &EqNoCase, value: &[u8]) -> bool {
+        (*self.0).eq_ignore_ascii_case(value)
+    }
+
+    pub fn starts_with(self: &StartsWith, prefix: &[u8]) -> bool {
+        (*self.0).starts_with(prefix)
+    }
+
+    pub fn ends_with(self: &EndsWith, suffix: &[u8]) -> bool {
+        (*self.0).ends_with(suffix)
+    }
+}

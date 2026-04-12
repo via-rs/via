@@ -1,5 +1,7 @@
+use http::header::{ACCEPT, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
+use via::guard::{Deny, and, header, opt, or};
 use via::{Error, Next, Payload, Request, Response, Server};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -32,12 +34,31 @@ async fn hello(request: Request, _: Next) -> via::Result {
     })
 }
 
+fn content_negotiation_denied(reason: Deny) -> Error {
+    match reason {
+        Deny::Header(ACCEPT) => via::error(406, "unsupported response format."),
+        _ => via::error(415, "unsupported media type."),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(());
 
     // Errors that occur further down the stack generate a JSON response.
     app.middleware(via::rescue(|error| error.use_json()));
+
+    // Content negotiation
+    app.middleware(via::guard(
+        content_negotiation_denied,
+        and((
+            opt(header(CONTENT_TYPE, header::application_json())),
+            opt(header(
+                ACCEPT,
+                or((header::application_json(), header::all_media())),
+            )),
+        )),
+    ));
 
     // Define a route that responds to POST /hello.
     app.route("/hello").to(via::post(hello).or_deny());

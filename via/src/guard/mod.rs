@@ -1,8 +1,18 @@
-use crate::{BoxFuture, Middleware, Next, Request};
+pub mod header;
+pub mod predicate;
 
-pub trait Predicate<App> {
-    fn matches(&self, request: &Request<App>) -> bool;
-}
+mod bytes;
+mod error;
+mod method;
+
+pub use bytes::*;
+pub use error::Deny;
+pub use header::header;
+pub use method::is_safe;
+pub use predicate::{Predicate, and, not, opt, or, when};
+
+use crate::request::{Envelope, Request};
+use crate::{BoxFuture, Error, Middleware, Next};
 
 /// Stop processing the request and respond if the provided precondition fails.
 ///
@@ -73,25 +83,16 @@ pub fn guard<E, T>(or_else: E, predicate: T) -> Guard<E, T> {
 
 impl<E, T, App> Middleware<App> for Guard<E, T>
 where
-    E: Fn() -> crate::Result + Send + Sync,
-    T: Predicate<App> + Send + Sync,
+    E: Fn(Deny) -> Error + Copy + Send + Sync,
+    T: Predicate<Envelope> + Send + Sync,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        if self.predicate.matches(&request) {
-            next.call(request)
-        } else {
-            let result = (self.or_else)();
-            Box::pin(async { result })
+        match self.predicate.matches(request.envelope()) {
+            Ok(_) => next.call(request),
+            Err(kind) => {
+                let error = (self.or_else)(kind);
+                Box::pin(async { Err(error) })
+            }
         }
-    }
-}
-
-impl<T, App> Predicate<App> for T
-where
-    T: Fn(&Request<App>) -> bool + Send + Sync,
-{
-    #[inline]
-    fn matches(&self, request: &Request<App>) -> bool {
-        (self)(request)
     }
 }

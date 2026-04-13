@@ -28,10 +28,10 @@ cmp_bytes! {
     }
 
     pub fn starts_with(self: &StartsWith, prefix: &[u8]) -> bool {
-        (*self.0).starts_with(prefix)
+        prefix.starts_with(&self.0)
     }
 
     pub fn ends_with(self: &EndsWith, suffix: &[u8]) -> bool {
-        (*self.0).ends_with(suffix)
+        suffix.ends_with(&self.0)
     }
 }

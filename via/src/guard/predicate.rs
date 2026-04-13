@@ -11,7 +11,21 @@ pub struct Opt<T>(pub(super) T);
 pub struct When<T, U>(T, U);
 
 pub trait Predicate<Input: ?Sized> {
-    fn matches(&self, input: &Input) -> Result<(), Deny>;
+    fn cmp(&self, input: &Input) -> Result<(), Deny>;
+
+    fn not(self) -> Not<Self>
+    where
+        Self: Sized,
+    {
+        Not(self)
+    }
+
+    fn optional(self) -> Opt<Self>
+    where
+        Self: Sized,
+    {
+        Opt(self)
+    }
 }
 
 // Macros adapted for our use case from the nom crate:
@@ -51,10 +65,10 @@ macro_rules! impl_and_predicate {
         where
             $($id: Predicate<Input>),+
         {
-            fn matches(&self, input: &Input) -> Result<(), Deny> {
+            fn cmp(&self, input: &Input) -> Result<(), Deny> {
                 #[allow(non_snake_case)]
                 let ($($id),+) = &self.0;
-                $($id.matches(input)?;)+
+                $($id.cmp(input)?;)+
                 Ok(())
             }
         }
@@ -68,11 +82,11 @@ macro_rules! impl_or_predicate {
             Input: ?Sized,
             $($id: Predicate<Input>),+
         {
-            fn matches(&self, input: &Input) -> Result<(), Deny> {
+            fn cmp(&self, input: &Input) -> Result<(), Deny> {
                 #[allow(non_snake_case)]
                 let ($($id),+) = &self.0;
                 Err(Deny::Match)
-                    $(.or_else(|_| $id.matches(input)))+
+                    $(.or_else(|_| $id.cmp(input)))+
             }
         }
     };
@@ -84,14 +98,6 @@ pub fn and<T>(list: T) -> And<T> {
 
 pub fn or<T>(list: T) -> Or<T> {
     Or(list)
-}
-
-pub fn not<T>(predicate: T) -> Not<T> {
-    Not(predicate)
-}
-
-pub fn opt<T>(predicate: T) -> Opt<T> {
-    Opt(predicate)
 }
 
 pub fn when<T, U>(precondition: T, predicate: U) -> When<T, U> {
@@ -114,8 +120,8 @@ impl<Input, T> Predicate<Input> for Not<T>
 where
     T: Predicate<Input>,
 {
-    fn matches(&self, value: &Input) -> Result<(), Deny> {
-        if self.0.matches(value).is_err() {
+    fn cmp(&self, value: &Input) -> Result<(), Deny> {
+        if self.0.cmp(value).is_err() {
             Ok(())
         } else {
             Err(Deny::Not)
@@ -128,11 +134,11 @@ where
     T: Predicate<Input>,
     U: Predicate<Input>,
 {
-    fn matches(&self, input: &Input) -> Result<(), Deny> {
-        let result = self.0.matches(input);
-        println!("{:?}", result);
-        if result.is_ok() {
-            self.1.matches(input)
+    fn cmp(&self, input: &Input) -> Result<(), Deny> {
+        let Self(precondition, predicate) = self;
+
+        if precondition.cmp(input).is_ok() {
+            predicate.cmp(input)
         } else {
             Ok(())
         }

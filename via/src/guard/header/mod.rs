@@ -1,4 +1,7 @@
-use http::header::HeaderName;
+pub mod accept;
+pub mod media;
+
+use http::header::{HeaderName, HeaderValue};
 use std::fmt::Debug;
 
 use super::error::Deny;
@@ -33,20 +36,23 @@ where
     }
 }
 
+fn is_match<T>(predicate: &T, value: &HeaderValue) -> bool
+where
+    T: Predicate<[u8]>,
+{
+    predicate.cmp(value.as_bytes()).is_ok()
+}
+
 impl<T> Predicate<Envelope> for Header<T>
 where
     T: Predicate<[u8]>,
 {
-    fn matches(&self, envelope: &Envelope) -> Result<(), Deny> {
-        if envelope
-            .headers()
-            .get(&self.key)
-            .map(|value| value.as_ref())
-            .is_some_and(|bytes| self.value.matches(bytes).is_ok())
-        {
-            Ok(())
-        } else {
-            Err(Deny::Header(self.key.clone()))
+    fn cmp(&self, envelope: &Envelope) -> Result<(), Deny> {
+        let headers = envelope.headers();
+
+        match headers.get(&self.key) {
+            Some(value) if is_match(&self.value, value) => Ok(()),
+            _ => Err(Deny::Header(self.key.clone())),
         }
     }
 }
@@ -55,14 +61,13 @@ impl<T> Predicate<Envelope> for Opt<Header<T>>
 where
     T: Predicate<[u8]>,
 {
-    fn matches(&self, envelope: &Envelope) -> Result<(), Deny> {
-        let expr = envelope
-            .headers()
-            .get(&self.0.key)
-            .map(|value| value.as_ref())
-            .is_none_or(|bytes| self.0.value.matches(bytes).is_ok());
+    fn cmp(&self, envelope: &Envelope) -> Result<(), Deny> {
+        let headers = envelope.headers();
 
-        if expr {
+        if headers
+            .get(&self.0.key)
+            .is_none_or(|value| is_match(&self.0.value, value))
+        {
             Ok(())
         } else {
             Err(Deny::Header(self.0.key.clone()))

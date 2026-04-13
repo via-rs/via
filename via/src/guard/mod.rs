@@ -1,15 +1,14 @@
+pub mod bytes;
 pub mod header;
+pub mod method;
 pub mod predicate;
 
-mod bytes;
 mod error;
-mod method;
 
-pub use bytes::*;
+pub use bytes::{ends_with, eq, eq_no_case, starts_with};
 pub use error::Deny;
 pub use header::header;
-pub use method::is_safe;
-pub use predicate::{Predicate, and, not, opt, or, when};
+pub use predicate::{Predicate, and, or, when};
 
 use crate::request::{Envelope, Request};
 use crate::{BoxFuture, Error, Middleware, Next};
@@ -87,7 +86,7 @@ where
     T: Predicate<Envelope> + Send + Sync,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        match self.predicate.matches(request.envelope()) {
+        match self.predicate.cmp(request.envelope()) {
             Ok(_) => next.call(request),
             Err(kind) => {
                 let error = (self.or_else)(kind);

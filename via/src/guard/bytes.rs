@@ -4,14 +4,14 @@ macro_rules! cmp_bytes {
     ($($vis:vis fn $ctor:ident($self:ident: &$ty:ident, $rhs:ident: &[u8]) -> bool {
         $matcher:expr
     })+) => {
-        $(struct $ty(Box<[u8]>);)+
+        $($vis struct $ty(Box<[u8]>);)+
 
-        $($vis fn $ctor($rhs: &[u8]) -> impl Predicate<[u8]> {
+        $($vis fn $ctor($rhs: &[u8]) -> $ty {
             $ty($rhs.to_owned().into_boxed_slice())
         })+
 
         $(impl Predicate<[u8]> for $ty {
-            fn matches(&$self, $rhs: &[u8]) -> Result<(), Deny> {
+            fn cmp(&$self, $rhs: &[u8]) -> Result<(), Deny> {
                 if $matcher { Ok(()) } else { Err(Deny::Match) }
             }
         })+

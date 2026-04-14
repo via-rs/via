@@ -1,9 +1,8 @@
 use http::header::ACCEPT;
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
-use via::guard::header::{accept, media};
-use via::guard::{self, Deny, Predicate, method};
-use via::{Error, Next, Payload, Request, Response, Server};
+use via::guard::{header, method};
+use via::{Error, Next, Payload, Request, Response, Server, deny, guard, rescue};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Document<T> {
@@ -35,22 +34,27 @@ async fn hello(request: Request, _: Next) -> via::Result {
     })
 }
 
+fn content_negotiation_failed(error: guard::ErrorKind) -> Error {
+    if let guard::ErrorKind::Header(ACCEPT) = error {
+        deny(406, "unsupported response format.")
+    } else {
+        deny(415, "unsupported media type.")
+    }
+}
+
 #[tokio::main]
-async fn main() -> Result<ExitCode, Error> {
+async fn main() -> via::Result<ExitCode> {
     let mut app = via::app(());
 
     // Errors that occur further down the stack generate a JSON response.
-    app.middleware(via::rescue(|error| error.use_json()));
+    app.middleware(rescue(|error| error.use_json()));
 
     // Content negotiation
-    app.middleware(via::guard(
-        |reason| match reason {
-            Deny::Header(ACCEPT) => via::error(406, "unsupported response format."),
-            _ => via::error(415, "unsupported media type."),
-        },
+    app.middleware(guard(
+        content_negotiation_failed,
         guard::and((
-            accept::json().optional(),
-            guard::when(method::is_mutation(), media::json()),
+            header::accept::json().optional(),
+            guard::when(method::is_mutation(), header::content_type::json()),
         )),
     ));
 

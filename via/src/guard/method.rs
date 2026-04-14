@@ -1,23 +1,23 @@
-use super::error::Deny;
-use super::predicate::Predicate;
-use crate::request::Envelope;
+use super::error::ErrorKind;
+use super::predicate::{Not, Predicate, not};
+use crate::request::Request;
 
 pub struct IsSafe;
 
-pub fn is_mutation() -> impl Predicate<Envelope> {
-    is_safe().not()
+pub fn is_mutation() -> Not<IsSafe> {
+    not(is_safe())
 }
 
-pub fn is_safe() -> impl Predicate<Envelope> {
+pub fn is_safe() -> IsSafe {
     IsSafe
 }
 
-impl Predicate<Envelope> for IsSafe {
-    fn cmp(&self, envelope: &Envelope) -> Result<(), Deny> {
-        if envelope.method().is_safe() {
+impl<App> Predicate<Request<App>> for IsSafe {
+    fn cmp(&self, request: &Request<App>) -> Result<(), ErrorKind> {
+        if request.method().is_safe() {
             Ok(())
         } else {
-            Err(Deny::Method)
+            Err(ErrorKind::Method)
         }
     }
 }

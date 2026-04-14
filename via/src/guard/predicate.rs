@@ -1,4 +1,4 @@
-use super::Deny;
+use super::ErrorKind;
 
 pub struct And<T>(T);
 
@@ -6,26 +6,13 @@ pub struct Or<T>(T);
 
 pub struct Not<T>(T);
 
-pub struct Opt<T>(pub(super) T);
-
-pub struct When<T, U>(T, U);
+pub struct When<T, U> {
+    condition: T,
+    predicate: U,
+}
 
 pub trait Predicate<Input: ?Sized> {
-    fn cmp(&self, input: &Input) -> Result<(), Deny>;
-
-    fn not(self) -> Not<Self>
-    where
-        Self: Sized,
-    {
-        Not(self)
-    }
-
-    fn optional(self) -> Opt<Self>
-    where
-        Self: Sized,
-    {
-        Opt(self)
-    }
+    fn cmp(&self, input: &Input) -> Result<(), ErrorKind>;
 }
 
 // Macros adapted for our use case from the nom crate:
@@ -60,32 +47,34 @@ macro_rules! or_impls(
 );
 
 macro_rules! impl_and_predicate {
-    ($($id:ident)+) => {
-        impl<Input, $($id),+> Predicate<Input> for And<($($id),+)>
+    ($first:ident $($id:ident)+) => {
+        impl<Input, $first, $($id),+> Predicate<Input> for And<($first, $($id),+)>
         where
+            $first: Predicate<Input>,
             $($id: Predicate<Input>),+
         {
-            fn cmp(&self, input: &Input) -> Result<(), Deny> {
+            fn cmp(&self, input: &Input) -> Result<(), ErrorKind> {
                 #[allow(non_snake_case)]
-                let ($($id),+) = &self.0;
-                $($id.cmp(input)?;)+
-                Ok(())
+                let ($first, $($id),+) = &self.0;
+                $first.cmp(input)
+                    $(.and_then(|_| $id.cmp(input)))+
             }
         }
     };
 }
 
 macro_rules! impl_or_predicate {
-    ($($id:ident)+) => {
-        impl<Input, $($id),+> Predicate<Input> for Or<($($id),+)>
+    ($first:ident $($id:ident)+) => {
+        impl<Input, $first, $($id),+> Predicate<Input> for Or<($first, $($id),+)>
         where
             Input: ?Sized,
+            $first: Predicate<Input>,
             $($id: Predicate<Input>),+
         {
-            fn cmp(&self, input: &Input) -> Result<(), Deny> {
+            fn cmp(&self, input: &Input) -> Result<(), ErrorKind> {
                 #[allow(non_snake_case)]
-                let ($($id),+) = &self.0;
-                Err(Deny::Match)
+                let ($first, $($id),+) = &self.0;
+                $first.cmp(input)
                     $(.or_else(|_| $id.cmp(input)))+
             }
         }
@@ -96,35 +85,36 @@ pub fn and<T>(list: T) -> And<T> {
     And(list)
 }
 
+pub fn not<T>(predicate: T) -> Not<T> {
+    Not(predicate)
+}
+
 pub fn or<T>(list: T) -> Or<T> {
     Or(list)
 }
 
-pub fn when<T, U>(precondition: T, predicate: U) -> When<T, U> {
-    When(precondition, predicate)
+pub fn when<T, U>(condition: T, predicate: U) -> When<T, U> {
+    When {
+        condition,
+        predicate,
+    }
 }
 
 // The maximum length of a tuple is 20.
 // This is the worst case cyclomatic complexity.
 
-and_impls!(A B C D E F G H I J K L M N O P Q R S T U);
-or_impls!(A B C D E F G H I J K L M N O P Q R S T U);
-
-impl<T> And<T> {
-    pub fn predicate(&self) -> &T {
-        &self.0
-    }
-}
+and_impls!(A B C D E F G H I J K L M N O P Q R S T);
+or_impls!(A B C D E F G H I J K L M N O P Q R S T);
 
 impl<Input, T> Predicate<Input> for Not<T>
 where
     T: Predicate<Input>,
 {
-    fn cmp(&self, value: &Input) -> Result<(), Deny> {
+    fn cmp(&self, value: &Input) -> Result<(), ErrorKind> {
         if self.0.cmp(value).is_err() {
             Ok(())
         } else {
-            Err(Deny::Not)
+            Err(ErrorKind::Not)
         }
     }
 }
@@ -134,11 +124,9 @@ where
     T: Predicate<Input>,
     U: Predicate<Input>,
 {
-    fn cmp(&self, input: &Input) -> Result<(), Deny> {
-        let Self(precondition, predicate) = self;
-
-        if precondition.cmp(input).is_ok() {
-            predicate.cmp(input)
+    fn cmp(&self, input: &Input) -> Result<(), ErrorKind> {
+        if self.condition.cmp(input).is_ok() {
+            self.predicate.cmp(input)
         } else {
             Ok(())
         }

@@ -1,16 +1,15 @@
-pub mod bytes;
 pub mod header;
 pub mod method;
-pub mod predicate;
 
 mod error;
+mod predicate;
 
-pub use bytes::{ends_with, eq, eq_no_case, starts_with};
-pub use error::Deny;
+pub use error::ErrorKind;
 pub use header::header;
-pub use predicate::{Predicate, and, or, when};
+pub use method::{is_mutation, is_safe};
+pub use predicate::*;
 
-use crate::request::{Envelope, Request};
+use crate::request::Request;
 use crate::{BoxFuture, Error, Middleware, Next};
 
 /// Stop processing the request and respond if the provided precondition fails.
@@ -82,11 +81,11 @@ pub fn guard<E, T>(or_else: E, predicate: T) -> Guard<E, T> {
 
 impl<E, T, App> Middleware<App> for Guard<E, T>
 where
-    E: Fn(Deny) -> Error + Copy + Send + Sync,
-    T: Predicate<Envelope> + Send + Sync,
+    E: Fn(ErrorKind) -> Error + Copy + Send + Sync,
+    T: Predicate<Request<App>> + Send + Sync,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        match self.predicate.cmp(request.envelope()) {
+        match self.predicate.cmp(&request) {
             Ok(_) => next.call(request),
             Err(kind) => {
                 let error = (self.or_else)(kind);

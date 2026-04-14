@@ -1,28 +1,20 @@
-pub mod accept;
-pub mod media;
+mod tag;
 
-use http::header::{HeaderName, HeaderValue};
+pub mod accept;
+pub mod content_type;
+
+pub use tag::*;
+
+use http::header::HeaderName;
 use std::fmt::Debug;
 
-use super::error::Deny;
-use super::predicate::{Opt, Predicate};
-use crate::request::Envelope;
+use super::{ErrorKind, Predicate};
+use crate::Request;
 
 pub struct Header<T> {
+    optional: bool,
     value: T,
     key: HeaderName,
-}
-
-pub fn all_media() -> impl Predicate<[u8]> {
-    super::starts_with(b"*/*")
-}
-
-pub fn application_json() -> impl Predicate<[u8]> {
-    super::starts_with(b"application/json")
-}
-
-pub fn application_json_utf8() -> impl Predicate<[u8]> {
-    super::eq(b"application/json; charset=utf-8")
 }
 
 pub fn header<K, V>(key: K, value: V) -> Header<V>
@@ -31,46 +23,28 @@ where
     K::Error: Debug,
 {
     Header {
+        optional: false,
         value,
         key: key.try_into().expect("invalid header name."),
     }
 }
 
-fn is_match<T>(predicate: &T, value: &HeaderValue) -> bool
-where
-    T: Predicate<[u8]>,
-{
-    predicate.cmp(value.as_bytes()).is_ok()
-}
-
-impl<T> Predicate<Envelope> for Header<T>
-where
-    T: Predicate<[u8]>,
-{
-    fn cmp(&self, envelope: &Envelope) -> Result<(), Deny> {
-        let headers = envelope.headers();
-
-        match headers.get(&self.key) {
-            Some(value) if is_match(&self.value, value) => Ok(()),
-            _ => Err(Deny::Header(self.key.clone())),
-        }
+impl<T> Header<T> {
+    pub fn optional(mut self) -> Self {
+        self.optional = true;
+        self
     }
 }
 
-impl<T> Predicate<Envelope> for Opt<Header<T>>
+impl<T, App> Predicate<Request<App>> for Header<T>
 where
     T: Predicate<[u8]>,
 {
-    fn cmp(&self, envelope: &Envelope) -> Result<(), Deny> {
-        let headers = envelope.headers();
-
-        if headers
-            .get(&self.0.key)
-            .is_none_or(|value| is_match(&self.0.value, value))
-        {
-            Ok(())
-        } else {
-            Err(Deny::Header(self.0.key.clone()))
+    fn cmp(&self, request: &Request<App>) -> Result<(), ErrorKind> {
+        match request.headers().get(&self.key) {
+            Some(value) if self.value.cmp(value.as_bytes()).is_ok() => Ok(()),
+            None if self.optional => Ok(()),
+            _ => Err(ErrorKind::Header(self.key.clone())),
         }
     }
 }

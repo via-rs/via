@@ -1,4 +1,5 @@
-use super::{Deny, Predicate};
+use super::Predicate;
+use crate::guard::{ErrorKind, Or, or};
 
 macro_rules! cmp_bytes {
     ($($vis:vis fn $ctor:ident($self:ident: &$ty:ident, $rhs:ident: &[u8]) -> bool {
@@ -11,22 +12,14 @@ macro_rules! cmp_bytes {
         })+
 
         $(impl Predicate<[u8]> for $ty {
-            fn cmp(&$self, $rhs: &[u8]) -> Result<(), Deny> {
-                if $matcher { Ok(()) } else { Err(Deny::Match) }
+            fn cmp(&$self, $rhs: &[u8]) -> Result<(), ErrorKind> {
+                if $matcher { Ok(()) } else { Err(ErrorKind::Match) }
             }
         })+
     }
 }
 
 cmp_bytes! {
-    pub fn eq(self: &StrictEq, value: &[u8]) -> bool {
-        &*self.0 == value
-    }
-
-    pub fn eq_no_case(self: &EqNoCase, value: &[u8]) -> bool {
-        (*self.0).eq_ignore_ascii_case(value)
-    }
-
     pub fn starts_with(self: &StartsWith, prefix: &[u8]) -> bool {
         prefix.starts_with(&self.0)
     }
@@ -34,4 +27,20 @@ cmp_bytes! {
     pub fn ends_with(self: &EndsWith, suffix: &[u8]) -> bool {
         suffix.ends_with(&self.0)
     }
+
+    pub fn tag(self: &Tag, value: &[u8]) -> bool {
+        (*self.0).eq_ignore_ascii_case(value)
+    }
+
+    pub fn tag_no_case(self: &TagNoCase, value: &[u8]) -> bool {
+        &*self.0 == value
+    }
+}
+
+pub(super) fn json() -> Or<(Tag, Tag, Tag)> {
+    or((
+        tag(b"application/json"),
+        tag(b"application/json; charset=utf-8"),
+        tag(b"application/json;charset=utf-8"),
+    ))
 }

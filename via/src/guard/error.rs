@@ -1,12 +1,12 @@
 use http::HeaderName;
 
-use crate::error::BoxError;
+use crate::Error;
 
 #[derive(Debug)]
-pub enum Deny {
+pub enum ErrorKind {
     Header(HeaderName),
     Match,
     Method,
     Not,
-    Other(BoxError),
+    Other(Error),
 }

@@ -1,8 +1,12 @@
 use http::header::CONTENT_TYPE;
 
-use super::{Header, Tag, header, tag};
-use crate::guard::Or;
+use super::tag::{ApplicationJson, application_json};
+use super::{Header, header};
 
-pub fn json() -> Header<Or<(Tag, Tag, Tag)>> {
-    header(CONTENT_TYPE, tag::json())
+pub fn content_type<T>(predicate: T) -> Header<T> {
+    header(CONTENT_TYPE, predicate)
+}
+
+pub fn json() -> Header<ApplicationJson> {
+    content_type(application_json())
 }

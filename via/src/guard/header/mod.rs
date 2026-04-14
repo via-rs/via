@@ -1,11 +1,15 @@
+mod sequence;
 mod tag;
 
 pub mod accept;
 pub mod content_type;
 
+pub use accept::accept;
+pub use content_type::content_type;
+pub use sequence::*;
 pub use tag::*;
 
-use http::header::HeaderName;
+use http::{HeaderMap, header::HeaderName};
 use std::fmt::Debug;
 
 use super::{ErrorKind, Predicate};
@@ -33,6 +37,19 @@ impl<T> Header<T> {
     pub fn optional(mut self) -> Self {
         self.optional = true;
         self
+    }
+}
+
+impl<T> Predicate<HeaderMap> for Header<T>
+where
+    T: Predicate<[u8]>,
+{
+    fn cmp(&self, headers: &HeaderMap) -> Result<(), ErrorKind> {
+        match headers.get(&self.key) {
+            Some(value) if self.value.cmp(value.as_bytes()).is_ok() => Ok(()),
+            None if self.optional => Ok(()),
+            _ => Err(ErrorKind::Header(self.key.clone())),
+        }
     }
 }
 

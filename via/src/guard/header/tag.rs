@@ -1,6 +1,8 @@
 use super::Predicate;
 use crate::guard::{ErrorKind, Or, or};
 
+pub type ApplicationJson = Or<(Tag, Tag, Tag)>;
+
 macro_rules! cmp_bytes {
     ($($vis:vis fn $ctor:ident($self:ident: &$ty:ident, $rhs:ident: &[u8]) -> bool {
         $matcher:expr
@@ -20,6 +22,10 @@ macro_rules! cmp_bytes {
 }
 
 cmp_bytes! {
+    pub fn case_sensitive(self: &CaseSensitive, value: &[u8]) -> bool {
+        &*self.0 == value
+    }
+
     pub fn starts_with(self: &StartsWith, prefix: &[u8]) -> bool {
         prefix.starts_with(&self.0)
     }
@@ -31,13 +37,9 @@ cmp_bytes! {
     pub fn tag(self: &Tag, value: &[u8]) -> bool {
         (*self.0).eq_ignore_ascii_case(value)
     }
-
-    pub fn tag_no_case(self: &TagNoCase, value: &[u8]) -> bool {
-        &*self.0 == value
-    }
 }
 
-pub(super) fn json() -> Or<(Tag, Tag, Tag)> {
+pub(super) fn application_json() -> ApplicationJson {
     or((
         tag(b"application/json"),
         tag(b"application/json; charset=utf-8"),

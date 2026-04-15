@@ -124,7 +124,7 @@ impl From<HeaderError<'_>> for Error {
                 deny!(415, "request format not supported.")
             }
             HeaderError::Match(name) => {
-                deny!(406, "invalid value for header: {}.", name)
+                deny!(400, "invalid value for header: {}.", name)
             }
             HeaderError::None(name) => {
                 deny!(400, "missing required header: {}.", name)

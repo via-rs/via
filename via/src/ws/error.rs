@@ -2,7 +2,7 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::ControlFlow;
 
 use crate::error::Error;
-use crate::guard;
+use crate::guard::GuardError;
 
 use http::header::{CONNECTION, UPGRADE};
 #[cfg(feature = "tokio-tungstenite")]
@@ -77,11 +77,11 @@ impl Display for UpgradeError {
     }
 }
 
-impl From<guard::ErrorKind> for UpgradeError {
-    fn from(error: guard::ErrorKind) -> Self {
+impl From<GuardError<'_>> for UpgradeError {
+    fn from(error: GuardError<'_>) -> Self {
         match error {
-            guard::ErrorKind::Header(CONNECTION) => UpgradeError::InvalidConnectionHeader,
-            guard::ErrorKind::Header(UPGRADE) => UpgradeError::InvalidUpgradeHeader,
+            GuardError::Header(&CONNECTION) => UpgradeError::InvalidConnectionHeader,
+            GuardError::Header(&UPGRADE) => UpgradeError::InvalidUpgradeHeader,
             _ => UpgradeError::UnknownVersion,
         }
     }

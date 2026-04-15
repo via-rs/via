@@ -1,7 +1,7 @@
 use http::header::ACCEPT;
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
-use via::guard::{header, method};
+use via::guard::{GuardError, header, method};
 use via::{Error, Next, Payload, Request, Response, Server, deny, guard, rescue};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -34,8 +34,8 @@ async fn hello(request: Request, _: Next) -> via::Result {
     })
 }
 
-fn content_negotiation_failed(error: guard::ErrorKind) -> Error {
-    if let guard::ErrorKind::Header(ACCEPT) = error {
+fn content_negotiation_failed(error: guard::GuardError) -> Error {
+    if let GuardError::Header(&ACCEPT) = error {
         deny(406, "unsupported response format.")
     } else {
         deny(415, "unsupported media type.")

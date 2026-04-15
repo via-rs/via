@@ -12,8 +12,9 @@ pub use tag::*;
 use http::{HeaderMap, header::HeaderName};
 use std::fmt::Debug;
 
-use super::{ErrorKind, Predicate};
 use crate::Request;
+
+use super::{GuardError, Predicate};
 
 pub struct Header<T> {
     optional: bool,
@@ -44,11 +45,11 @@ impl<T> Predicate<HeaderMap> for Header<T>
 where
     T: Predicate<[u8]>,
 {
-    fn cmp(&self, headers: &HeaderMap) -> Result<(), ErrorKind> {
-        match headers.get(&self.key) {
-            Some(value) if self.value.cmp(value.as_bytes()).is_ok() => Ok(()),
+    fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), GuardError<'a>> {
+        match headers.get(&self.key).map(AsRef::as_ref) {
+            Some(bytes) if self.value.cmp(bytes).is_ok() => Ok(()),
             None if self.optional => Ok(()),
-            _ => Err(ErrorKind::Header(self.key.clone())),
+            _ => Err(GuardError::Header(&self.key)),
         }
     }
 }
@@ -57,11 +58,7 @@ impl<T, App> Predicate<Request<App>> for Header<T>
 where
     T: Predicate<[u8]>,
 {
-    fn cmp(&self, request: &Request<App>) -> Result<(), ErrorKind> {
-        match request.headers().get(&self.key) {
-            Some(value) if self.value.cmp(value.as_bytes()).is_ok() => Ok(()),
-            None if self.optional => Ok(()),
-            _ => Err(ErrorKind::Header(self.key.clone())),
-        }
+    fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), GuardError<'a>> {
+        self.cmp(request.headers())
     }
 }

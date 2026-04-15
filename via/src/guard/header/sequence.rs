@@ -1,4 +1,4 @@
-use crate::guard::{ErrorKind, Predicate};
+use crate::guard::{GuardError, Predicate};
 
 pub struct Contains<T>(Has<Comma, T>);
 
@@ -18,11 +18,11 @@ pub fn contains<T>(predicate: T) -> Contains<T> {
 }
 
 impl Predicate<u8> for Comma {
-    fn cmp(&self, byte: &u8) -> Result<(), ErrorKind> {
+    fn cmp<'a>(&'a self, byte: &u8) -> Result<(), GuardError<'a>> {
         if *byte == b',' {
             Ok(())
         } else {
-            Err(ErrorKind::Match)
+            Err(GuardError::Match)
         }
     }
 }
@@ -31,7 +31,7 @@ impl<T> Predicate<[u8]> for Contains<T>
 where
     T: Predicate<[u8]>,
 {
-    fn cmp(&self, value: &[u8]) -> Result<(), ErrorKind> {
+    fn cmp<'a>(&'a self, value: &[u8]) -> Result<(), GuardError<'a>> {
         self.0.cmp(value)
     }
 }
@@ -41,14 +41,14 @@ where
     T: Predicate<u8>,
     U: Predicate<[u8]>,
 {
-    fn cmp(&self, value: &[u8]) -> Result<(), ErrorKind> {
+    fn cmp<'a>(&'a self, value: &[u8]) -> Result<(), GuardError<'a>> {
         if value
             .split(|byte| self.separator.cmp(byte).is_ok())
             .any(|item| self.predicate.cmp(item.trim_ascii()).is_ok())
         {
             Ok(())
         } else {
-            Err(ErrorKind::Match)
+            Err(GuardError::Match)
         }
     }
 }

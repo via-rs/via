@@ -1,5 +1,5 @@
 use super::Predicate;
-use crate::guard::{ErrorKind, Or, or};
+use crate::guard::{GuardError, Or, or};
 
 pub type ApplicationJson = Or<(Tag, Tag, Tag)>;
 
@@ -14,8 +14,8 @@ macro_rules! cmp_bytes {
         })+
 
         $(impl Predicate<[u8]> for $ty {
-            fn cmp(&$self, $rhs: &[u8]) -> Result<(), ErrorKind> {
-                if $matcher { Ok(()) } else { Err(ErrorKind::Match) }
+            fn cmp<'a>(&'a $self, $rhs: &[u8]) -> Result<(), GuardError<'a>> {
+                if $matcher { Ok(()) } else { Err(GuardError::Match) }
             }
         })+
     }

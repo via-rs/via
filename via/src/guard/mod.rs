@@ -4,7 +4,7 @@ pub mod method;
 mod error;
 mod predicate;
 
-pub use error::ErrorKind;
+pub use error::GuardError;
 pub use header::header;
 pub use method::{is_mutation, is_safe};
 pub use predicate::*;
@@ -81,7 +81,7 @@ pub fn guard<E, T>(or_else: E, predicate: T) -> Guard<E, T> {
 
 impl<E, T, App> Middleware<App> for Guard<E, T>
 where
-    E: Fn(ErrorKind) -> Error + Copy + Send + Sync,
+    E: Fn(GuardError) -> Error + Copy + Send + Sync,
     T: Predicate<Request<App>> + Send + Sync,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {

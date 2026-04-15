@@ -1,18 +1,23 @@
-use super::ErrorKind;
+use super::GuardError;
 
 pub struct And<T>(T);
 
-pub struct Or<T>(T);
-
 pub struct Not<T>(T);
 
+pub struct Or<T>(T);
+
+pub struct On<T, U> {
+    on: T,
+    pred: U,
+}
+
 pub struct When<T, U> {
-    condition: T,
-    predicate: U,
+    cond: T,
+    pred: U,
 }
 
 pub trait Predicate<Input: ?Sized> {
-    fn cmp(&self, input: &Input) -> Result<(), ErrorKind>;
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>>;
 }
 
 // Macros adapted for our use case from the nom crate:
@@ -53,7 +58,7 @@ macro_rules! impl_and_predicate {
             $first: Predicate<Input>,
             $($id: Predicate<Input>),+
         {
-            fn cmp(&self, input: &Input) -> Result<(), ErrorKind> {
+            fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
                 #[allow(non_snake_case)]
                 let ($first, $($id),+) = &self.0;
                 $first.cmp(input)
@@ -71,7 +76,7 @@ macro_rules! impl_or_predicate {
             $first: Predicate<Input>,
             $($id: Predicate<Input>),+
         {
-            fn cmp(&self, input: &Input) -> Result<(), ErrorKind> {
+            fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
                 #[allow(non_snake_case)]
                 let ($first, $($id),+) = &self.0;
                 $first.cmp(input)
@@ -81,23 +86,24 @@ macro_rules! impl_or_predicate {
     };
 }
 
-pub fn and<T>(list: T) -> And<T> {
-    And(list)
+pub fn and<T>(tuple: T) -> And<T> {
+    And(tuple)
 }
 
-pub fn not<T>(predicate: T) -> Not<T> {
-    Not(predicate)
+pub fn not<T>(pred: T) -> Not<T> {
+    Not(pred)
 }
 
-pub fn or<T>(list: T) -> Or<T> {
-    Or(list)
+pub fn on<T, U>(on: T, pred: U) -> On<T, U> {
+    On { on, pred }
 }
 
-pub fn when<T, U>(condition: T, predicate: U) -> When<T, U> {
-    When {
-        condition,
-        predicate,
-    }
+pub fn or<T>(tuple: T) -> Or<T> {
+    Or(tuple)
+}
+
+pub fn when<T, U>(cond: T, pred: U) -> When<T, U> {
+    When { cond, pred }
 }
 
 // The maximum length of a tuple is 20.
@@ -110,12 +116,23 @@ impl<Input, T> Predicate<Input> for Not<T>
 where
     T: Predicate<Input>,
 {
-    fn cmp(&self, value: &Input) -> Result<(), ErrorKind> {
-        if self.0.cmp(value).is_err() {
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
+        if self.0.cmp(input).is_err() {
             Ok(())
         } else {
-            Err(ErrorKind::Not)
+            Err(GuardError::Not)
         }
+    }
+}
+
+impl<Input, Project, T, U> Predicate<Input> for On<T, U>
+where
+    T: Fn(&Input) -> &Project + Copy,
+    U: Predicate<Project>,
+{
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
+        let projection = (self.on)(input);
+        self.pred.cmp(projection)
     }
 }
 
@@ -124,20 +141,9 @@ where
     T: Predicate<Input>,
     U: Predicate<Input>,
 {
-    fn cmp(&self, input: &Input) -> Result<(), ErrorKind> {
-        if self.condition.cmp(input).is_ok() {
-            self.predicate.cmp(input)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl<Input, T> Predicate<Input> for T
-where
-    T: Fn(&Input) -> Result<(), ErrorKind> + Copy,
-{
-    fn cmp(&self, input: &Input) -> Result<(), ErrorKind> {
-        self(input)
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
+        self.cond
+            .cmp(input)
+            .map_or(Ok(()), |_| self.pred.cmp(input))
     }
 }

@@ -13,10 +13,6 @@ pub struct When<T, U> {
 
 pub trait Predicate<Input: ?Sized> {
     fn cmp(&self, input: &Input) -> Result<(), ErrorKind>;
-
-    fn matches(&self, input: &Input) -> bool {
-        self.cmp(input).is_ok()
-    }
 }
 
 // Macros adapted for our use case from the nom crate:

@@ -1,12 +1,8 @@
-use crate::guard::{ErrorKind, Not, Predicate, not};
+use crate::guard::{ErrorKind, Predicate};
 
 pub struct Contains<T>(Has<Comma, T>);
 
-pub struct Token<T>(Has<Not<Tchar>, T>);
-
 struct Comma;
-
-struct Tchar;
 
 struct Has<T, U> {
     separator: T,
@@ -21,39 +17,12 @@ pub fn contains<T>(predicate: T) -> Contains<T> {
     })
 }
 
-/// Succeeds if `predicate` matches one of the tokens in the header value.
-pub fn token<T>(predicate: T) -> Token<T> {
-    Token(Has {
-        separator: not(Tchar),
-        predicate,
-    })
-}
-
 impl Predicate<u8> for Comma {
     fn cmp(&self, byte: &u8) -> Result<(), ErrorKind> {
         if *byte == b',' {
             Ok(())
         } else {
             Err(ErrorKind::Match)
-        }
-    }
-}
-
-impl Predicate<u8> for Tchar {
-    fn cmp(&self, byte: &u8) -> Result<(), ErrorKind> {
-        match byte {
-            0x21
-            | 0x23..=0x27
-            | 0x2A
-            | 0x2B
-            | 0x2D
-            | 0x2E
-            | 0x30..=0x39
-            | 0x41..=0x5A
-            | 0x5E..=0x7A
-            | 0x7C
-            | 0x7E => Ok(()),
-            _ => Err(ErrorKind::Match),
         }
     }
 }
@@ -74,8 +43,8 @@ where
 {
     fn cmp(&self, value: &[u8]) -> Result<(), ErrorKind> {
         if value
-            .split(|byte| self.separator.matches(byte))
-            .any(|item| self.predicate.matches(item.trim_ascii()))
+            .split(|byte| self.separator.cmp(byte).is_ok())
+            .any(|item| self.predicate.cmp(item.trim_ascii()).is_ok())
         {
             Ok(())
         } else {

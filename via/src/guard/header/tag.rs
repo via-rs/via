@@ -1,4 +1,8 @@
-use super::{GuardError, Predicate};
+use super::Predicate;
+
+pub struct OneOf {
+    values: Box<[Box<[u8]>]>,
+}
 
 macro_rules! cmp_bytes {
     ($($vis:vis fn $ctor:ident($self:ident: &$ty:ident, $rhs:ident: &[u8]) -> bool {
@@ -11,8 +15,9 @@ macro_rules! cmp_bytes {
         })+
 
         $(impl Predicate<[u8]> for $ty {
-            fn cmp<'a>(&'a $self, $rhs: &[u8]) -> Result<(), GuardError<'a>> {
-                if $matcher { Ok(()) } else { Err(GuardError::Match) }
+            type Error<'a> = ();
+            fn cmp<'a>(&'a $self, $rhs: &[u8]) -> Result<(), Self::Error<'a>> {
+                if $matcher { Ok(()) } else { Err(()) }
             }
         })+
     }
@@ -24,14 +29,43 @@ cmp_bytes! {
     }
 
     pub fn starts_with(self: &StartsWith, prefix: &[u8]) -> bool {
-        prefix.starts_with(&self.0)
+        prefix.starts_with(&*self.0)
     }
 
     pub fn ends_with(self: &EndsWith, suffix: &[u8]) -> bool {
-        suffix.ends_with(&self.0)
+        suffix.ends_with(&*self.0)
     }
 
     pub fn tag(self: &Tag, value: &[u8]) -> bool {
         (*self.0).eq_ignore_ascii_case(value)
+    }
+}
+
+pub fn one_of<I>(values: I) -> OneOf
+where
+    I: IntoIterator,
+    I::Item: AsRef<[u8]>,
+{
+    OneOf {
+        values: values
+            .into_iter()
+            .map(|value| value.as_ref().to_owned().into_boxed_slice())
+            .collect(),
+    }
+}
+
+impl Predicate<[u8]> for OneOf {
+    type Error<'a> = ();
+
+    fn cmp<'a>(&'a self, input: &[u8]) -> Result<(), Self::Error<'a>> {
+        if self
+            .values
+            .iter()
+            .any(|value| (**value).eq_ignore_ascii_case(input))
+        {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }

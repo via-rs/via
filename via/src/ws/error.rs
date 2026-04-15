@@ -2,7 +2,7 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::ControlFlow;
 
 use crate::error::Error;
-use crate::guard::GuardError;
+use crate::guard::HeaderError;
 
 use http::header::{CONNECTION, SEC_WEBSOCKET_VERSION, UPGRADE};
 #[cfg(feature = "tokio-tungstenite")]
@@ -69,25 +69,13 @@ impl Display for UpgradeError {
     }
 }
 
-impl From<GuardError<'_>> for UpgradeError {
-    fn from(error: GuardError<'_>) -> Self {
-        match error {
-            GuardError::Header(header) if header.name() == &SEC_WEBSOCKET_VERSION => {
-                UpgradeError::SecWebsocketVersion
-            }
-            GuardError::Header(header) if header.name() == &CONNECTION => {
-                UpgradeError::UpgradeRequired
-            }
-            GuardError::Header(header) if header.name() == &UPGRADE => {
-                UpgradeError::UnknownUpgradeType
-            }
-            _ => {
-                if cfg!(debug_assertions) {
-                    eprintln!("warn(via::ws): upgrade guard produced an unknown error type.");
-                }
-
-                UpgradeError::Other
-            }
+impl<'a> From<HeaderError<'a>> for UpgradeError {
+    fn from(error: HeaderError<'a>) -> Self {
+        match error.name() {
+            &SEC_WEBSOCKET_VERSION => UpgradeError::SecWebsocketVersion,
+            &CONNECTION => UpgradeError::UpgradeRequired,
+            &UPGRADE => UpgradeError::UnknownUpgradeType,
+            _ => UpgradeError::Other,
         }
     }
 }

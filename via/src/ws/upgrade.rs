@@ -14,7 +14,7 @@ use super::io::UpgradedIo;
 use super::run::RunTask;
 use super::util::{Base64EncodedDigest, sha1};
 use crate::guard::header::{self as h, CaseSensitive, Contains, Header, Tag};
-use crate::guard::{self, And, Predicate};
+use crate::guard::{self, Predicate};
 use crate::ws::error::UpgradeError;
 use crate::{BoxFuture, Error, Middleware, Next, Request, Response, ResultExt, deny};
 
@@ -22,11 +22,11 @@ const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 
 pub struct Ws<T> {
     listener: Arc<Listener<T>>,
-    guard: And<(
+    guard: (
         Header<CaseSensitive>,
         Header<Contains<Tag>>,
         Header<Contains<Tag>>,
-    )>,
+    ),
 }
 
 pub(super) struct Listener<T> {
@@ -102,11 +102,11 @@ impl<T> Ws<T> {
                 handle: listener,
                 config: WsConfig::default(),
             }),
-            guard: guard::and((
+            guard: (
                 guard::header(header::SEC_WEBSOCKET_VERSION, h::case_sensitive(b"13")),
                 guard::header(header::CONNECTION, h::contains(h::tag(b"upgrade"))),
                 guard::header(header::UPGRADE, h::contains(h::tag(b"websocket"))),
-            )),
+            ),
         }
     }
 

@@ -1,8 +1,8 @@
-use http::header::{ACCEPT, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
-use via::guard::{GuardError, header, is_mutation};
-use via::{Error, Next, Payload, Request, Response, Server, deny, guard, rescue};
+use via::guard::header::media;
+use via::guard::{header, is_mutation, when};
+use via::{Next, Payload, Request, Response, Server, guard, rescue};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Document<T> {
@@ -34,15 +34,6 @@ async fn hello(request: Request, _: Next) -> via::Result {
     })
 }
 
-fn content_negotiation_failed(error: GuardError) -> Error {
-    match error {
-        GuardError::Header(header) if header.name() == &ACCEPT => {
-            deny(406, "unsupported response format.")
-        }
-        _ => deny(415, "unsupported media type."),
-    }
-}
-
 #[tokio::main]
 async fn main() -> via::Result<ExitCode> {
     let mut app = via::app(());
@@ -51,13 +42,10 @@ async fn main() -> via::Result<ExitCode> {
     app.middleware(rescue(|error| error.use_json()));
 
     // Content negotiation
-    app.middleware(guard(
-        content_negotiation_failed,
-        guard::and((
-            header::accept(header::media::json()).optional(),
-            guard::when(is_mutation(), header(CONTENT_TYPE, header::media::json())),
-        )),
-    ));
+    app.middleware(guard((
+        header::accept(media::json()),
+        when(is_mutation(), header::content_type(media::json())),
+    )));
 
     // Define a route that responds to POST /hello.
     app.route("/hello").to(via::post(hello).or_deny());

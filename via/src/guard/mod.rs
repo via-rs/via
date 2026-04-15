@@ -1,11 +1,9 @@
 pub mod header;
 pub mod method;
 
-mod error;
 mod predicate;
 
-pub use error::GuardError;
-pub use header::header;
+pub use header::{HeaderError, header};
 pub use method::*;
 pub use predicate::*;
 
@@ -44,8 +42,7 @@ use crate::{BoxFuture, Error, Middleware, Next};
 ///     // Define the /api/users resource.
 /// });
 /// ```
-pub struct Guard<E, T> {
-    or_else: E,
+pub struct Guard<T> {
     predicate: T,
 }
 
@@ -75,20 +72,20 @@ pub struct Guard<E, T> {
 /// });
 /// ```
 ///
-pub fn guard<E, T>(or_else: E, predicate: T) -> Guard<E, T> {
-    Guard { or_else, predicate }
+pub fn guard<T>(predicate: T) -> Guard<T> {
+    Guard { predicate }
 }
 
-impl<E, T, App> Middleware<App> for Guard<E, T>
+impl<T, App> Middleware<App> for Guard<T>
 where
-    E: Fn(GuardError) -> Error + Copy + Send + Sync,
-    T: Predicate<Request<App>> + Send + Sync,
+    for<'a> T: Predicate<Request<App>> + Send + Sync + 'a,
+    for<'a> T::Error<'a>: Into<Error> + 'a,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
         match self.predicate.cmp(&request) {
             Ok(_) => next.call(request),
-            Err(kind) => {
-                let error = (self.or_else)(kind);
+            Err(error) => {
+                let error = error.into();
                 Box::pin(async { Err(error) })
             }
         }

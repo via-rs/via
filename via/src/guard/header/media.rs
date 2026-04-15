@@ -1,10 +1,9 @@
-use super::{Tag, tag};
-use crate::guard::{GuardError, Predicate};
+use super::{OneOf, Predicate, Tag, one_of, tag};
 
-pub struct Media(Tag, Option<Tag>);
+pub struct Media(OneOf, Option<Tag>);
 
 pub fn all() -> Media {
-    media(b"*/*", None)
+    Media(one_of(Some(b"*/*")), None)
 }
 
 pub fn html() -> Media {
@@ -16,7 +15,7 @@ pub fn json() -> Media {
 }
 
 pub fn media(essence: &[u8], charset: Option<&[u8]>) -> Media {
-    Media(tag(essence), charset.map(tag))
+    Media(one_of([b"*/*", essence]), charset.map(tag))
 }
 
 #[cfg(feature = "mime")]
@@ -40,11 +39,13 @@ fn charset(input: &[u8]) -> Option<&[u8]> {
 }
 
 impl Predicate<[u8]> for Media {
-    fn cmp<'a>(&'a self, input: &[u8]) -> Result<(), GuardError<'a>> {
+    type Error<'a> = ();
+
+    fn cmp<'a>(&'a self, input: &[u8]) -> Result<(), Self::Error<'a>> {
         let mut iter = input.split(|b| *b == b';');
 
         iter.next()
-            .ok_or(GuardError::Match)
+            .ok_or(())
             .and_then(|essence| self.0.cmp(essence))?;
 
         self.1

@@ -1,4 +1,3 @@
-use super::error::GuardError;
 use super::predicate::{Not, Predicate, not};
 use crate::request::Request;
 
@@ -13,11 +12,13 @@ pub fn is_safe() -> IsSafe {
 }
 
 impl<App> Predicate<Request<App>> for IsSafe {
-    fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), GuardError<'a>> {
+    type Error<'a> = ();
+
+    fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
         if request.method().is_safe() {
             Ok(())
         } else {
-            Err(GuardError::Method)
+            Err(())
         }
     }
 }

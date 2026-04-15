@@ -1,5 +1,3 @@
-use super::GuardError;
-
 pub struct And<T>(T);
 
 pub struct Not<T>(T);
@@ -17,7 +15,11 @@ pub struct When<T, U> {
 }
 
 pub trait Predicate<Input: ?Sized> {
-    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>>;
+    type Error<'a>
+    where
+        Self: 'a;
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>>;
 }
 
 // Macros adapted for our use case from the nom crate:
@@ -53,14 +55,16 @@ macro_rules! or_impls(
 
 macro_rules! impl_and_predicate {
     ($first:ident $($id:ident)+) => {
-        impl<Input, $first, $($id),+> Predicate<Input> for And<($first, $($id),+)>
+        impl<Input, $first, $($id),+> Predicate<Input> for ($first, $($id),+)
         where
-            $first: Predicate<Input>,
-            $($id: Predicate<Input>),+
+            for<'a> $first: Predicate<Input> + 'a,
+            $(for<'a> $id: Predicate<Input, Error<'a> = $first::Error<'a>> + 'a),+
         {
-            fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
+            type Error<'a> = $first::Error<'a>;
+
+            fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
                 #[allow(non_snake_case)]
-                let ($first, $($id),+) = &self.0;
+                let ($first, $($id),+) = self;
                 $first.cmp(input)
                     $(.and_then(|_| $id.cmp(input)))+
             }
@@ -72,11 +76,12 @@ macro_rules! impl_or_predicate {
     ($first:ident $($id:ident)+) => {
         impl<Input, $first, $($id),+> Predicate<Input> for Or<($first, $($id),+)>
         where
-            Input: ?Sized,
-            $first: Predicate<Input>,
-            $($id: Predicate<Input>),+
+            for<'a> $first: Predicate<Input> + 'a,
+            $(for<'a> $id: Predicate<Input, Error<'a> = $first::Error<'a>> + 'a),+
         {
-            fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
+            type Error<'a> = $first::Error<'a>;
+
+            fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
                 #[allow(non_snake_case)]
                 let ($first, $($id),+) = &self.0;
                 $first.cmp(input)
@@ -84,10 +89,6 @@ macro_rules! impl_or_predicate {
             }
         }
     };
-}
-
-pub fn and<T>(tuple: T) -> And<T> {
-    And(tuple)
 }
 
 pub fn not<T>(pred: T) -> Not<T> {
@@ -114,23 +115,27 @@ or_impls!(A B C D E F G H I J K L M N O P Q R S T);
 
 impl<Input, T> Predicate<Input> for Not<T>
 where
-    T: Predicate<Input>,
+    for<'a> T: Predicate<Input> + 'a,
 {
-    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
+    type Error<'a> = ();
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
         if self.0.cmp(input).is_err() {
             Ok(())
         } else {
-            Err(GuardError::Not)
+            Err(())
         }
     }
 }
 
 impl<Input, Project, T, U> Predicate<Input> for On<T, U>
 where
-    T: Fn(&Input) -> &Project + Copy,
-    U: Predicate<Project>,
+    for<'a> T: Fn(&Input) -> &Project + Copy + 'a,
+    for<'a> U: Predicate<Project> + 'a,
 {
-    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
+    type Error<'a> = U::Error<'a>;
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
         let projection = (self.on)(input);
         self.pred.cmp(projection)
     }
@@ -138,10 +143,12 @@ where
 
 impl<Input, T, U> Predicate<Input> for When<T, U>
 where
-    T: Predicate<Input>,
-    U: Predicate<Input>,
+    for<'a> T: Predicate<Input> + 'a,
+    for<'a> U: Predicate<Input> + 'a,
 {
-    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
+    type Error<'a> = U::Error<'a>;
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
         self.cond
             .cmp(input)
             .map_or(Ok(()), |_| self.pred.cmp(input))

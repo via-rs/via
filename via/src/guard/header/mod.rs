@@ -7,13 +7,11 @@ pub use media::Media;
 pub use sequence::*;
 pub use tag::*;
 
-use http::header::{HeaderMap, HeaderName};
+use http::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName};
 use std::fmt::Debug;
 
-use super::{GuardError, Or, Predicate, or};
-use crate::request::Request;
-
-pub type Accept<T> = Contains<Or<(Media, T)>>;
+use super::predicate::Predicate;
+use crate::{Error, Request, deny};
 
 pub struct Optional<T>(T);
 
@@ -39,11 +37,12 @@ where
     }
 }
 
-pub fn accept<T>(predicate: T) -> Header<Accept<T>> {
-    header(
-        http::header::ACCEPT,
-        contains(or((media::all(), predicate))),
-    )
+pub fn accept(media: Media) -> Header<Contains<Media>> {
+    header(http::header::ACCEPT, contains(media))
+}
+
+pub fn content_type<T>(predicate: T) -> Header<T> {
+    header(http::header::CONTENT_TYPE, predicate)
 }
 
 impl<T> Header<T> {
@@ -54,46 +53,82 @@ impl<T> Header<T> {
 
 impl<T> Predicate<HeaderMap> for Header<T>
 where
-    T: Predicate<[u8]>,
+    for<'a> T: Predicate<[u8], Error<'a> = ()> + 'a,
 {
-    fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), GuardError<'a>> {
+    type Error<'a> = HeaderError<'a>;
+
+    fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), Self::Error<'a>> {
         let key = &self.key;
 
         if let Some(value) = headers.get(key) {
             self.value
                 .cmp(value.as_bytes().trim_ascii())
-                .map_err(|_| GuardError::Header(HeaderError::Match(key)))
+                .map_err(|_| HeaderError::Match(key))
         } else {
-            Err(GuardError::Header(HeaderError::None(key)))
+            Err(HeaderError::None(key))
         }
     }
 }
 
 impl<T, App> Predicate<Request<App>> for Header<T>
 where
-    T: Predicate<[u8]>,
+    for<'a> T: Predicate<[u8], Error<'a> = ()> + 'a,
 {
-    fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), GuardError<'a>> {
+    type Error<'a> = HeaderError<'a>;
+
+    fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
         self.cmp(request.headers())
     }
 }
 
-impl<T, Input> Predicate<Input> for Optional<T>
+impl<T> Predicate<HeaderMap> for Optional<Header<T>>
 where
-    T: Predicate<Input>,
+    for<'a> T: Predicate<[u8], Error<'a> = ()> + 'a,
 {
-    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
-        self.0.cmp(input).or_else(|error| match error {
-            GuardError::Header(HeaderError::None(_)) => Ok(()),
+    type Error<'a> = HeaderError<'a>;
+
+    fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), Self::Error<'a>> {
+        self.0.cmp(headers).or_else(|error| match error {
+            HeaderError::None(_) => Ok(()),
             error => Err(error),
         })
     }
 }
 
-impl HeaderError<'_> {
-    pub fn name(&self) -> &HeaderName {
+impl<T, App> Predicate<Request<App>> for Optional<Header<T>>
+where
+    for<'a> T: Predicate<[u8], Error<'a> = ()> + 'a,
+{
+    type Error<'a> = HeaderError<'a>;
+
+    fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
+        self.cmp(request.headers())
+    }
+}
+
+impl<'a> HeaderError<'a> {
+    pub fn name(&self) -> &'a HeaderName {
         match *self {
             Self::Match(name) | Self::None(name) => name,
+        }
+    }
+}
+
+impl From<HeaderError<'_>> for Error {
+    fn from(error: HeaderError<'_>) -> Self {
+        match error {
+            HeaderError::Match(&ACCEPT) => {
+                deny!(406, "response format not supported.")
+            }
+            HeaderError::Match(&CONTENT_TYPE) => {
+                deny!(415, "request format not supported.")
+            }
+            HeaderError::Match(name) => {
+                deny!(406, "invalid value for header: {}.", name)
+            }
+            HeaderError::None(name) => {
+                deny!(400, "missing required header: {}.", name)
+            }
         }
     }
 }

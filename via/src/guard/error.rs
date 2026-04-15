@@ -1,10 +1,9 @@
-use http::HeaderName;
-
-use crate::Error;
+use super::header::HeaderError;
+use crate::error::Error;
 
 #[derive(Debug)]
 pub enum GuardError<'a> {
-    Header(&'a HeaderName),
+    Header(HeaderError<'a>),
     Match,
     Method,
     Not,

@@ -13,21 +13,18 @@ const WS_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 pub struct Base64EncodedDigest([u8; 28]);
 
 pub fn sha1(input: &[u8]) -> Result<Base64EncodedDigest, UpgradeError> {
-    if !input.is_ascii() {
-        return Err(UpgradeError::InvalidAcceptEncoding);
-    }
-
     let mut hasher = Context::new(&SHA1_FOR_LEGACY_USE_ONLY);
     let mut buf = [0; 28];
 
-    hasher.update(input);
-    hasher.update(WS_ACCEPT_GUID);
-
-    if base64.encode_slice(hasher.finish(), &mut buf).is_ok() {
-        Ok(Base64EncodedDigest(buf))
-    } else {
-        Err(UpgradeError::EncoderError)
+    if input.is_ascii() {
+        hasher.update(input);
+        hasher.update(WS_ACCEPT_GUID);
+        if base64.encode_slice(hasher.finish(), &mut buf).is_ok() {
+            return Ok(Base64EncodedDigest(buf));
+        }
     }
+
+    Err(UpgradeError::Other)
 }
 
 impl Base64EncodedDigest {

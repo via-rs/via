@@ -1,23 +1,29 @@
+pub mod media;
+
 mod sequence;
 mod tag;
 
-pub mod accept;
-pub mod content_type;
-
-pub use accept::accept;
-pub use content_type::content_type;
+pub use media::Media;
 pub use sequence::*;
 pub use tag::*;
 
-use http::{HeaderMap, header::HeaderName};
+use http::header::{HeaderMap, HeaderName};
 use std::fmt::Debug;
 
-use crate::Request;
+use super::{GuardError, Or, Predicate, or};
+use crate::request::Request;
 
-use super::{GuardError, Predicate};
+pub type Accept<T> = Contains<Or<(Media, T)>>;
+
+pub struct Optional<T>(T);
+
+#[derive(Debug)]
+pub enum HeaderError<'a> {
+    Match(&'a HeaderName),
+    None(&'a HeaderName),
+}
 
 pub struct Header<T> {
-    optional: bool,
     value: T,
     key: HeaderName,
 }
@@ -28,16 +34,21 @@ where
     K::Error: Debug,
 {
     Header {
-        optional: false,
         value,
         key: key.try_into().expect("invalid header name."),
     }
 }
 
+pub fn accept<T>(predicate: T) -> Header<Accept<T>> {
+    header(
+        http::header::ACCEPT,
+        contains(or((media::all(), predicate))),
+    )
+}
+
 impl<T> Header<T> {
-    pub fn optional(mut self) -> Self {
-        self.optional = true;
-        self
+    pub fn optional(self) -> Optional<Self> {
+        Optional(self)
     }
 }
 
@@ -46,10 +57,14 @@ where
     T: Predicate<[u8]>,
 {
     fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), GuardError<'a>> {
-        match headers.get(&self.key).map(AsRef::as_ref) {
-            Some(bytes) if self.value.cmp(bytes).is_ok() => Ok(()),
-            None if self.optional => Ok(()),
-            _ => Err(GuardError::Header(&self.key)),
+        let key = &self.key;
+
+        if let Some(value) = headers.get(key) {
+            self.value
+                .cmp(value.as_bytes().trim_ascii())
+                .map_err(|_| GuardError::Header(HeaderError::Match(key)))
+        } else {
+            Err(GuardError::Header(HeaderError::None(key)))
         }
     }
 }
@@ -60,5 +75,25 @@ where
 {
     fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), GuardError<'a>> {
         self.cmp(request.headers())
+    }
+}
+
+impl<T, Input> Predicate<Input> for Optional<T>
+where
+    T: Predicate<Input>,
+{
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), GuardError<'a>> {
+        self.0.cmp(input).or_else(|error| match error {
+            GuardError::Header(HeaderError::None(_)) => Ok(()),
+            error => Err(error),
+        })
+    }
+}
+
+impl HeaderError<'_> {
+    pub fn name(&self) -> &HeaderName {
+        match *self {
+            Self::Match(name) | Self::None(name) => name,
+        }
     }
 }

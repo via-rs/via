@@ -1,7 +1,7 @@
-use http::header::ACCEPT;
+use http::header::{ACCEPT, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
-use via::guard::{GuardError, header, method};
+use via::guard::{GuardError, header, is_mutation};
 use via::{Error, Next, Payload, Request, Response, Server, deny, guard, rescue};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -34,11 +34,12 @@ async fn hello(request: Request, _: Next) -> via::Result {
     })
 }
 
-fn content_negotiation_failed(error: guard::GuardError) -> Error {
-    if let GuardError::Header(&ACCEPT) = error {
-        deny(406, "unsupported response format.")
-    } else {
-        deny(415, "unsupported media type.")
+fn content_negotiation_failed(error: GuardError) -> Error {
+    match error {
+        GuardError::Header(header) if header.name() == &ACCEPT => {
+            deny(406, "unsupported response format.")
+        }
+        _ => deny(415, "unsupported media type."),
     }
 }
 
@@ -53,8 +54,8 @@ async fn main() -> via::Result<ExitCode> {
     app.middleware(guard(
         content_negotiation_failed,
         guard::and((
-            header::accept::json().optional(),
-            guard::when(method::is_mutation(), header::content_type::json()),
+            header::accept(header::media::json()).optional(),
+            guard::when(is_mutation(), header(CONTENT_TYPE, header::media::json())),
         )),
     ));
 

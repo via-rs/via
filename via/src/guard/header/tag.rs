@@ -1,7 +1,4 @@
-use super::Predicate;
-use crate::guard::{GuardError, Or, or};
-
-pub type ApplicationJson = Or<(Tag, Tag, Tag)>;
+use super::{GuardError, Predicate};
 
 macro_rules! cmp_bytes {
     ($($vis:vis fn $ctor:ident($self:ident: &$ty:ident, $rhs:ident: &[u8]) -> bool {
@@ -37,12 +34,4 @@ cmp_bytes! {
     pub fn tag(self: &Tag, value: &[u8]) -> bool {
         (*self.0).eq_ignore_ascii_case(value)
     }
-}
-
-pub(super) fn application_json() -> ApplicationJson {
-    or((
-        tag(b"application/json"),
-        tag(b"application/json; charset=utf-8"),
-        tag(b"application/json;charset=utf-8"),
-    ))
 }

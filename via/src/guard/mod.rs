@@ -6,7 +6,7 @@ mod predicate;
 
 pub use error::GuardError;
 pub use header::header;
-pub use method::{is_mutation, is_safe};
+pub use method::*;
 pub use predicate::*;
 
 use crate::request::Request;

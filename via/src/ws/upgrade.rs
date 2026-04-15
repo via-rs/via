@@ -142,14 +142,13 @@ impl<T> Ws<T> {
 
 impl<T> Ws<T> {
     fn verify(&self, headers: &HeaderMap) -> Result<Base64EncodedDigest, UpgradeError> {
-        self.guard.cmp(headers)?;
-
-        let key = headers
-            .get(header::SEC_WEBSOCKET_KEY)
-            .ok_or(UpgradeError::MissingAcceptKey)?
-            .as_bytes();
-
-        sha1(key)
+        self.guard
+            .cmp(headers)
+            .map_err(|error| error.into())
+            .and_then(|_| match headers.get(header::SEC_WEBSOCKET_KEY) {
+                Some(value) => sha1(value.as_bytes()),
+                None => Err(UpgradeError::SecWebsocketKey),
+            })
     }
 }
 
@@ -163,7 +162,7 @@ where
         let listener = Arc::clone(&self.listener);
 
         let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
-            return Box::pin(async { deny!(500, UpgradeError::Unsupported) });
+            return Box::pin(async { deny!(500, UpgradeError::Other) });
         };
 
         let accept = match self.verify(request.headers()).or_bad_request() {

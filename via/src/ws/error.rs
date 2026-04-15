@@ -4,7 +4,7 @@ use std::ops::ControlFlow;
 use crate::error::Error;
 use crate::guard::GuardError;
 
-use http::header::{CONNECTION, UPGRADE};
+use http::header::{CONNECTION, SEC_WEBSOCKET_VERSION, UPGRADE};
 #[cfg(feature = "tokio-tungstenite")]
 pub use tungstenite::error::Error as WebSocketError;
 
@@ -22,13 +22,11 @@ pub trait ResultExt {
 
 #[derive(Debug)]
 pub enum UpgradeError {
-    InvalidAcceptEncoding,
-    InvalidConnectionHeader,
-    InvalidUpgradeHeader,
-    EncoderError,
-    MissingAcceptKey,
-    UnknownVersion,
-    Unsupported,
+    SecWebsocketKey,
+    SecWebsocketVersion,
+    UnknownUpgradeType,
+    UpgradeRequired,
+    Other,
 }
 
 pub fn already_closed() -> ControlFlow<Error, Error> {
@@ -52,26 +50,20 @@ impl std::error::Error for UpgradeError {}
 impl Display for UpgradeError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            UpgradeError::InvalidAcceptEncoding => {
-                write!(f, "header \"sec-websocket-key\" must be base64 encoded.")
-            }
-            UpgradeError::InvalidConnectionHeader => {
-                write!(f, "\"connection\" header must contain token: \"upgrade\".")
-            }
-            UpgradeError::InvalidUpgradeHeader => {
+            UpgradeError::UnknownUpgradeType => {
                 write!(f, "\"upgrade\" header must contain token: \"websocket\".")
             }
-            UpgradeError::EncoderError => {
-                write!(f, "failed to encode \"sec-websocket-accept\".")
+            UpgradeError::UpgradeRequired => {
+                write!(f, "\"connection\" header must contain token: \"upgrade\".")
             }
-            UpgradeError::MissingAcceptKey => {
+            UpgradeError::SecWebsocketKey => {
                 write!(f, "missing required header: \"sec-websocket-key\".")
             }
-            UpgradeError::UnknownVersion => {
+            UpgradeError::SecWebsocketVersion => {
                 write!(f, "\"sec-websocket-version\" must be \"13\".")
             }
-            UpgradeError::Unsupported => {
-                write!(f, "connection does not support websocket upgrades.")
+            UpgradeError::Other => {
+                write!(f, "an unknown error occured during the upgrade handshake.")
             }
         }
     }
@@ -80,9 +72,22 @@ impl Display for UpgradeError {
 impl From<GuardError<'_>> for UpgradeError {
     fn from(error: GuardError<'_>) -> Self {
         match error {
-            GuardError::Header(&CONNECTION) => UpgradeError::InvalidConnectionHeader,
-            GuardError::Header(&UPGRADE) => UpgradeError::InvalidUpgradeHeader,
-            _ => UpgradeError::UnknownVersion,
+            GuardError::Header(header) if header.name() == &SEC_WEBSOCKET_VERSION => {
+                UpgradeError::SecWebsocketVersion
+            }
+            GuardError::Header(header) if header.name() == &CONNECTION => {
+                UpgradeError::UpgradeRequired
+            }
+            GuardError::Header(header) if header.name() == &UPGRADE => {
+                UpgradeError::UnknownUpgradeType
+            }
+            _ => {
+                if cfg!(debug_assertions) {
+                    eprintln!("warn(via::ws): upgrade guard produced an unknown error type.");
+                }
+
+                UpgradeError::Other
+            }
         }
     }
 }

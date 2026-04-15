@@ -78,7 +78,7 @@ pub fn guard<T>(predicate: T) -> Guard<T> {
 
 impl<T, App> Middleware<App> for Guard<T>
 where
-    for<'a> T: Predicate<Request<App>> + Send + Sync + 'a,
+    T: Predicate<Request<App>> + Send + Sync,
     for<'a> T::Error<'a>: Into<Error> + 'a,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {

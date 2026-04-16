@@ -59,14 +59,13 @@ where
 
     fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), Self::Error<'a>> {
         let key = &self.key;
+        let Some(value) = headers.get(key) else {
+            return Err(HeaderError::None(key));
+        };
 
-        if let Some(value) = headers.get(key) {
-            self.value
-                .cmp(value.as_bytes().trim_ascii())
-                .map_err(|_| HeaderError::Match(key))
-        } else {
-            Err(HeaderError::None(key))
-        }
+        self.value
+            .cmp(value.as_bytes().trim_ascii())
+            .map_err(|_| HeaderError::Match(key))
     }
 }
 
@@ -81,28 +80,17 @@ where
     }
 }
 
-impl<T> Predicate<HeaderMap> for Optional<Header<T>>
+impl<T, Input> Predicate<Input> for Optional<T>
 where
-    for<'a> T: Predicate<[u8], Error<'a> = ()> + 'a,
+    for<'a> T: Predicate<Input, Error<'a> = HeaderError<'a>> + 'a,
 {
     type Error<'a> = HeaderError<'a>;
 
-    fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), Self::Error<'a>> {
-        self.0.cmp(headers).or_else(|error| match error {
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
+        self.0.cmp(input).or_else(|error| match error {
             HeaderError::None(_) => Ok(()),
             error => Err(error),
         })
-    }
-}
-
-impl<T, App> Predicate<Request<App>> for Optional<Header<T>>
-where
-    for<'a> T: Predicate<[u8], Error<'a> = ()> + 'a,
-{
-    type Error<'a> = HeaderError<'a>;
-
-    fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
-        self.cmp(request.headers())
     }
 }
 

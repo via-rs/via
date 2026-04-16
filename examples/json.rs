@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
 use via::guard::header::media;
-use via::guard::{header, is_mutation, when};
+use via::guard::{header, method, when};
 use via::{Next, Payload, Request, Response, Server, guard, rescue};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -44,7 +44,7 @@ async fn main() -> via::Result<ExitCode> {
     // Content negotiation
     app.middleware(guard((
         header::accept(media::json()),
-        when(is_mutation(), header::content_type(media::json())),
+        when(method::is_mutation(), header::content_type(media::json())),
     )));
 
     // Define a route that responds to POST /hello.

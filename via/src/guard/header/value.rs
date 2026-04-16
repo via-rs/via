@@ -1,7 +1,9 @@
 use super::Predicate;
 
+pub struct Contains<T>(T);
+
 pub struct OneOf {
-    values: Vec<Vec<u8>>,
+    choice: Vec<Vec<u8>>,
 }
 
 macro_rules! cmp_bytes {
@@ -37,16 +39,39 @@ cmp_bytes! {
     }
 }
 
+/// Succeeds if `predicate` matches a comma separated value in the header.
+pub fn contains<T>(predicate: T) -> Contains<T> {
+    Contains(predicate)
+}
+
 pub fn one_of<I>(values: I) -> OneOf
 where
     I: IntoIterator,
     I::Item: AsRef<[u8]>,
 {
-    OneOf {
-        values: values
-            .into_iter()
-            .map(|value| value.as_ref().to_owned())
-            .collect(),
+    let choice = values
+        .into_iter()
+        .map(|value| value.as_ref().to_owned())
+        .collect();
+
+    OneOf { choice }
+}
+
+impl<T> Predicate<[u8]> for Contains<T>
+where
+    for<'a> T: Predicate<[u8]> + 'a,
+{
+    type Error<'a> = ();
+
+    fn cmp<'a>(&'a self, value: &[u8]) -> Result<(), Self::Error<'a>> {
+        if value
+            .split(|b| *b == b',')
+            .any(|item| self.0.cmp(item.trim_ascii()).is_ok())
+        {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -55,7 +80,7 @@ impl Predicate<[u8]> for OneOf {
 
     fn cmp<'a>(&'a self, input: &[u8]) -> Result<(), Self::Error<'a>> {
         if self
-            .values
+            .choice
             .iter()
             .any(|value| value.as_slice().eq_ignore_ascii_case(input))
         {

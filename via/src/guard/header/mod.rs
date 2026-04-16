@@ -1,11 +1,9 @@
 pub mod media;
 
-mod sequence;
-mod tag;
+mod value;
 
 pub use media::Media;
-pub use sequence::*;
-pub use tag::*;
+pub use value::*;
 
 use http::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName};
 use std::fmt::Debug;

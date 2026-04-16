@@ -22,20 +22,20 @@ macro_rules! cmp_bytes {
 }
 
 cmp_bytes! {
-    pub fn case_sensitive(self: &CaseSensitive, value: &[u8]) -> bool {
-        self.0.as_slice() == value
+    pub fn ends_with(self: &EndsWith, suffix: &[u8]) -> bool {
+        suffix.ends_with(self.0.as_slice())
     }
 
     pub fn starts_with(self: &StartsWith, prefix: &[u8]) -> bool {
         prefix.starts_with(self.0.as_slice())
     }
 
-    pub fn ends_with(self: &EndsWith, suffix: &[u8]) -> bool {
-        suffix.ends_with(self.0.as_slice())
+    pub fn tag_no_case(self: &TagNoCase, value: &[u8]) -> bool {
+        self.0.as_slice().eq_ignore_ascii_case(value)
     }
 
     pub fn tag(self: &Tag, value: &[u8]) -> bool {
-        self.0.as_slice().eq_ignore_ascii_case(value)
+        self.0.as_slice() == value
     }
 }
 

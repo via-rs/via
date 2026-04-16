@@ -1,6 +1,6 @@
-use super::{OneOf, Predicate, Tag, one_of, tag};
+use super::{OneOf, Predicate, TagNoCase, one_of, tag_no_case};
 
-pub struct Media(OneOf, Option<Tag>);
+pub struct Media(OneOf, Option<TagNoCase>);
 
 pub fn all() -> Media {
     Media(one_of(Some(b"*/*")), None)
@@ -19,7 +19,7 @@ pub fn text() -> Media {
 }
 
 pub fn media(essence: &[u8], charset: Option<&[u8]>) -> Media {
-    Media(one_of([b"*/*", essence]), charset.map(tag))
+    Media(one_of([b"*/*", essence]), charset.map(tag_no_case))
 }
 
 #[cfg(feature = "mime")]

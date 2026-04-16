@@ -4,15 +4,9 @@ pub struct Not<T>(T);
 
 pub struct Or<T>(T);
 
-pub struct On<T, U> {
-    on: T,
-    pred: U,
-}
+pub struct On<T, U>(T, U);
 
-pub struct When<T, U> {
-    cond: T,
-    pred: U,
-}
+pub struct When<T, U>(T, U);
 
 pub trait Predicate<Input: ?Sized> {
     type Error<'a>
@@ -91,20 +85,20 @@ macro_rules! impl_or_predicate {
     };
 }
 
-pub fn not<T>(pred: T) -> Not<T> {
-    Not(pred)
+pub fn not<T>(predicate: T) -> Not<T> {
+    Not(predicate)
 }
 
-pub fn on<T, U>(on: T, pred: U) -> On<T, U> {
-    On { on, pred }
+pub fn on<T, U>(project: T, predicate: U) -> On<T, U> {
+    On(project, predicate)
 }
 
 pub fn or<T>(tuple: T) -> Or<T> {
     Or(tuple)
 }
 
-pub fn when<T, U>(cond: T, pred: U) -> When<T, U> {
-    When { cond, pred }
+pub fn when<T, U>(condition: T, predicate: U) -> When<T, U> {
+    When(condition, predicate)
 }
 
 // The maximum length of a tuple is 20.
@@ -136,8 +130,7 @@ where
     type Error<'a> = U::Error<'a>;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        let projection = (self.on)(input);
-        self.pred.cmp(projection)
+        self.1.cmp((self.0)(input))
     }
 }
 
@@ -149,8 +142,6 @@ where
     type Error<'a> = U::Error<'a>;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        self.cond
-            .cmp(input)
-            .map_or(Ok(()), |_| self.pred.cmp(input))
+        self.0.cmp(input).map_or(Ok(()), |_| self.1.cmp(input))
     }
 }

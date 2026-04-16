@@ -14,6 +14,10 @@ pub fn json() -> Media {
     media(b"application/json", Some(b"utf-8"))
 }
 
+pub fn text() -> Media {
+    media(b"text/plain", Some(b"utf-8"))
+}
+
 pub fn media(essence: &[u8], charset: Option<&[u8]>) -> Media {
     Media(one_of([b"*/*", essence]), charset.map(tag))
 }

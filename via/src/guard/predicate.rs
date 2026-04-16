@@ -1,5 +1,7 @@
 pub struct And<T>(T);
 
+pub struct MapErr<F, T>(F, T);
+
 pub struct Not<T>(T);
 
 pub struct Or<T>(T);
@@ -85,6 +87,10 @@ macro_rules! impl_or_predicate {
     };
 }
 
+pub fn map_err<F, T>(f: F, predicate: T) -> MapErr<F, T> {
+    MapErr(f, predicate)
+}
+
 pub fn not<T>(predicate: T) -> Not<T> {
     Not(predicate)
 }
@@ -106,6 +112,18 @@ pub fn when<T, U>(condition: T, predicate: U) -> When<T, U> {
 
 and_impls!(A B C D E F G H I J K L M N O P Q R S T);
 or_impls!(A B C D E F G H I J K L M N O P Q R S T);
+
+impl<Input, Error, F, T> Predicate<Input> for MapErr<F, T>
+where
+    for<'a> F: Fn(T::Error<'_>) -> Error + Copy + 'a,
+    for<'a> T: Predicate<Input> + 'a,
+{
+    type Error<'a> = Error;
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
+        self.1.cmp(input).map_err(|error| (self.0)(error))
+    }
+}
 
 impl<Input, T> Predicate<Input> for Not<T>
 where

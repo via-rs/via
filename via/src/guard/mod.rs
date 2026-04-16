@@ -3,7 +3,7 @@ pub mod method;
 
 mod predicate;
 
-pub use header::{HeaderError, header};
+pub use header::{DenyHeader, header};
 pub use predicate::*;
 
 use crate::request::Request;

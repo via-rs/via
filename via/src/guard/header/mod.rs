@@ -15,8 +15,8 @@ pub struct Optional<T>(T);
 
 #[derive(Debug)]
 pub enum DenyHeader<'a> {
-    Match(&'a HeaderName),
-    None(&'a HeaderName),
+    Predicate(&'a HeaderName),
+    Missing(&'a HeaderName),
 }
 
 pub struct Header<T> {
@@ -58,12 +58,12 @@ where
     fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), Self::Error<'a>> {
         let key = &self.key;
         let Some(value) = headers.get(key) else {
-            return Err(DenyHeader::None(key));
+            return Err(DenyHeader::Missing(key));
         };
 
         self.value
             .cmp(value.as_bytes().trim_ascii())
-            .map_err(|_| DenyHeader::Match(key))
+            .map_err(|_| DenyHeader::Predicate(key))
     }
 }
 
@@ -86,7 +86,7 @@ where
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
         self.0.cmp(input).or_else(|error| match error {
-            DenyHeader::None(_) => Ok(()),
+            DenyHeader::Missing(_) => Ok(()),
             error => Err(error),
         })
     }
@@ -95,7 +95,7 @@ where
 impl<'a> DenyHeader<'a> {
     pub fn name(&self) -> &'a HeaderName {
         match *self {
-            Self::Match(name) | Self::None(name) => name,
+            Self::Predicate(name) | Self::Missing(name) => name,
         }
     }
 }
@@ -103,28 +103,28 @@ impl<'a> DenyHeader<'a> {
 impl From<DenyHeader<'_>> for Error {
     fn from(error: DenyHeader<'_>) -> Self {
         match error {
-            DenyHeader::Match(n) if n == &h::ACCEPT => {
+            DenyHeader::Predicate(n) if n == &h::ACCEPT => {
                 deny!(406, "response media type not supported.")
             }
-            DenyHeader::Match(n) if n == &h::CONTENT_TYPE => {
+            DenyHeader::Predicate(n) if n == &h::CONTENT_TYPE => {
                 deny!(415, "request media type not supported.")
             }
-            DenyHeader::Match(n) if n == &h::RANGE => {
+            DenyHeader::Predicate(n) if n == &h::RANGE => {
                 deny!(416, "unsatisfiable range request.")
             }
-            DenyHeader::Match(n) if n == &h::UPGRADE => {
+            DenyHeader::Predicate(n) if n == &h::UPGRADE => {
                 deny!(426, "protocol upgrade is not supported.")
             }
-            DenyHeader::Match(n) | DenyHeader::None(n) if n == &h::AUTHORIZATION => {
+            DenyHeader::Predicate(n) | DenyHeader::Missing(n) if n == &h::AUTHORIZATION => {
                 deny!(401, "unauthorized.")
             }
-            DenyHeader::Match(n) => {
+            DenyHeader::Predicate(n) => {
                 deny!(400, "invalid value for header: {}.", n)
             }
-            DenyHeader::None(n) if n == &h::CONTENT_LENGTH => {
+            DenyHeader::Missing(n) if n == &h::CONTENT_LENGTH => {
                 deny!(411, "length required.")
             }
-            DenyHeader::None(n)
+            DenyHeader::Missing(n)
                 if n == &h::IF_MATCH
                     || n == &h::IF_NONE_MATCH
                     || n == &h::IF_MODIFIED_SINCE
@@ -132,7 +132,7 @@ impl From<DenyHeader<'_>> for Error {
             {
                 deny!(428, "missing required precondition header: {}.", n)
             }
-            DenyHeader::None(n) => {
+            DenyHeader::Missing(n) => {
                 deny!(400, "missing required header: {}.", n)
             }
         }

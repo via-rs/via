@@ -32,7 +32,7 @@ pub struct AndThen<T, U> {
 ///     let mut app = via::app(());
 ///
 ///     // Non-idempotent requests will run the cache middleware.
-///     app.middleware(guard(method::is_safe()).flat_map(cache));
+///     app.middleware(guard(method::is_safe()).filter(cache));
 ///
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
 /// }

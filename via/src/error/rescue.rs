@@ -129,7 +129,11 @@ impl Finalize for Sanitizer<'_> {
         if self.json {
             let json = self.message.as_deref().map_or_else(
                 || self.error.repr_json(),
-                |message| Errors::new(self.status(), message),
+                |message| {
+                    let mut errors = Errors::new(self.status());
+                    errors.push(Cow::Borrowed(message));
+                    errors
+                },
             );
 
             builder.json(&json)

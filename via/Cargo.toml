@@ -62,6 +62,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"]  }
 serde_json = "1"
+smallvec = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
 via-router = { version = "3.0.0-beta.34" }

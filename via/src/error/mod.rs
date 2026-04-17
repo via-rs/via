@@ -6,13 +6,10 @@ mod rescue;
 mod result;
 mod server;
 
-use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use http::{StatusCode, header};
 use serde::{Serialize, Serializer};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::{self, Error as IoError};
-
-#[doc(hidden)]
-pub use http::StatusCode; // Required for the raise macro.
 
 pub use rescue::{Rescue, Sanitizer, rescue};
 pub use result::ResultExt;
@@ -268,9 +265,9 @@ impl From<Error> for Response {
 
         let headers = response.headers_mut();
 
-        headers.insert(CONTENT_LENGTH, content_len);
+        headers.insert(header::CONTENT_LENGTH, content_len);
         if let Ok(content_type) = "text/plain; charset=utf-8".try_into() {
-            headers.insert(CONTENT_TYPE, content_type);
+            headers.insert(header::CONTENT_TYPE, content_type);
         }
 
         response

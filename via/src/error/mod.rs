@@ -7,7 +7,10 @@ mod result;
 mod server;
 
 use http::{StatusCode, header};
+use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
+use smallvec::SmallVec;
+use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::{self, Error as IoError};
 
@@ -31,6 +34,8 @@ pub struct Error {
     source: ErrorSource,
 }
 
+struct ErrorList<'a>(SmallVec<[Cow<'a, str>; 1]>);
+
 #[derive(Debug)]
 enum ErrorSource {
     AllowMethod(Box<MethodNotAllowed>),
@@ -44,13 +49,6 @@ enum ErrorSourceRef<'a> {
     Message(&'a str),
     Other(&'a (dyn std::error::Error + 'static)),
     Json(&'a serde_json::Error),
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-enum ErrorList<'a> {
-    Original(&'a str),
-    Chain(Vec<String>),
 }
 
 #[derive(Serialize)]
@@ -204,23 +202,33 @@ impl Error {
         }
     }
 
-    fn repr_json(&self) -> Errors<'_> {
-        if let ErrorSourceRef::Message(message) = self.as_source() {
-            Errors::new(self.status, message)
-        } else {
-            let mut errors = Vec::with_capacity(12);
-            let mut source = self.source();
-
-            while let Some(error) = source {
-                errors.push(error.to_string());
-                source = error.source();
-            }
-
-            // Reverse the order of the error messages to match the call stack.
-            errors.reverse();
-
-            Errors::chain(self.status, errors)
+    fn as_message_or_source(&self) -> Result<&str, Option<&(dyn std::error::Error + 'static)>> {
+        match &self.source {
+            ErrorSource::Message(message) => Ok(message.as_ref()),
+            ErrorSource::AllowMethod(error) => Err(Some(error)),
+            ErrorSource::Other(error) => Err(Some(&**error)),
+            ErrorSource::Json(error) => Err(Some(error)),
         }
+    }
+
+    fn repr_json(&self) -> Errors<'_> {
+        let mut errors = Errors::new(self.status);
+
+        match self.as_message_or_source() {
+            Ok(message) => {
+                errors.push(Cow::Borrowed(message));
+            }
+            Err(mut source) => {
+                while let Some(error) = source {
+                    errors.push(error.to_string().into());
+                    source = error.source();
+                }
+
+                errors.reverse();
+            }
+        }
+
+        errors
     }
 }
 
@@ -281,17 +289,33 @@ impl Serialize for Error {
 }
 
 impl<'a> Errors<'a> {
-    fn new(status: StatusCode, message: &'a str) -> Self {
+    fn new(status: StatusCode) -> Self {
         Self {
             status,
-            errors: ErrorList::Original(message),
+            errors: ErrorList(SmallVec::new()),
         }
     }
 
-    fn chain(status: StatusCode, chain: Vec<String>) -> Self {
-        Self {
-            status,
-            errors: ErrorList::Chain(chain),
+    fn push(&mut self, message: Cow<'a, str>) {
+        self.errors.0.push(message);
+    }
+
+    fn reverse(&mut self) {
+        self.errors.0.reverse();
+    }
+}
+
+impl Serialize for ErrorList<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_seq(Some(self.0.len()))?;
+
+        for message in &self.0 {
+            state.serialize_element(message.as_ref())?;
         }
+
+        state.end()
     }
 }

@@ -117,7 +117,7 @@ impl Display for Sanitizer<'_> {
 }
 
 impl Finalize for Sanitizer<'_> {
-    fn finalize(self, builder: ResponseBuilder) -> Result<Response, Error> {
+    fn finalize(mut self, builder: ResponseBuilder) -> Result<Response, Error> {
         let mut builder = builder.status(self.status());
 
         if let ErrorSourceRef::AllowMethod(error) = self.error.as_source()
@@ -127,9 +127,13 @@ impl Finalize for Sanitizer<'_> {
         }
 
         if self.json {
-            let json = self.message.as_deref().map_or_else(
+            let json = self.message.take().map_or_else(
                 || self.error.repr_json(),
-                |message| Errors::new(self.status(), message),
+                |message| {
+                    let mut errors = Errors::new(self.status());
+                    errors.push(message);
+                    errors
+                },
             );
 
             builder.json(&json)

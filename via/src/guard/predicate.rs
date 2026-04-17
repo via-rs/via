@@ -115,13 +115,13 @@ pub fn when<T, U>(condition: T, predicate: U) -> When<T, U> {
 and_impls!(A B C D E F G H I J);
 or_impls!(A B C D E F G H I J);
 
-impl<Input, Error, F, T> Predicate<Input> for MapErr<F, T>
+impl<Input, E, F, T> Predicate<Input> for MapErr<F, T>
 where
-    for<'a> F: Fn(T::Error<'_>) -> Error + Copy + 'a,
+    for<'a> F: Fn(T::Error<'_>) -> E + Copy + 'a,
     for<'a> T: Predicate<Input> + 'a,
     Input: ?Sized,
 {
-    type Error<'a> = Error;
+    type Error<'a> = E;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
         self.1.cmp(input).map_err(|error| (self.0)(error))

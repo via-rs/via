@@ -51,8 +51,9 @@ macro_rules! or_impls(
 
 macro_rules! impl_and_predicate {
     ($first:ident $($id:ident)+) => {
-        impl<Input: ?Sized, $first, $($id),+> Predicate<Input> for ($first, $($id),+)
+        impl<Input, $first, $($id),+> Predicate<Input> for ($first, $($id),+)
         where
+            Input: ?Sized,
             for<'a> $first: Predicate<Input> + 'a,
             $(for<'a> $id: Predicate<Input, Error<'a> = $first::Error<'a>> + 'a),+
         {
@@ -70,8 +71,9 @@ macro_rules! impl_and_predicate {
 
 macro_rules! impl_or_predicate {
     ($first:ident $($id:ident)+) => {
-        impl<Input: ?Sized, $first, $($id),+> Predicate<Input> for Or<($first, $($id),+)>
+        impl<Input, $first, $($id),+> Predicate<Input> for Or<($first, $($id),+)>
         where
+            Input: ?Sized,
             for<'a> $first: Predicate<Input> + 'a,
             $(for<'a> $id: Predicate<Input, Error<'a> = $first::Error<'a>> + 'a),+
         {
@@ -113,10 +115,11 @@ pub fn when<T, U>(condition: T, predicate: U) -> When<T, U> {
 and_impls!(A B C D E F G H I J);
 or_impls!(A B C D E F G H I J);
 
-impl<Input: ?Sized, Error, F, T> Predicate<Input> for MapErr<F, T>
+impl<Input, Error, F, T> Predicate<Input> for MapErr<F, T>
 where
     for<'a> F: Fn(T::Error<'_>) -> Error + Copy + 'a,
     for<'a> T: Predicate<Input> + 'a,
+    Input: ?Sized,
 {
     type Error<'a> = Error;
 
@@ -125,9 +128,10 @@ where
     }
 }
 
-impl<Input: ?Sized, T> Predicate<Input> for Not<T>
+impl<Input, T> Predicate<Input> for Not<T>
 where
     for<'a> T: Predicate<Input> + 'a,
+    Input: ?Sized,
 {
     type Error<'a> = ();
 
@@ -140,10 +144,12 @@ where
     }
 }
 
-impl<Input: ?Sized, Project, T, U> Predicate<Input> for On<T, U>
+impl<Input, Project, T, U> Predicate<Input> for On<T, U>
 where
     for<'a> T: Fn(&Input) -> &Project + Copy + 'a,
     for<'a> U: Predicate<Project> + 'a,
+    Project: ?Sized,
+    Input: ?Sized,
 {
     type Error<'a> = U::Error<'a>;
 
@@ -152,10 +158,11 @@ where
     }
 }
 
-impl<Input: ?Sized, T, U> Predicate<Input> for When<T, U>
+impl<Input, T, U> Predicate<Input> for When<T, U>
 where
     for<'a> T: Predicate<Input> + 'a,
     for<'a> U: Predicate<Input> + 'a,
+    Input: ?Sized,
 {
     type Error<'a> = U::Error<'a>;
 

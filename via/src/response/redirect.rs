@@ -1,6 +1,7 @@
 use http::StatusCode;
 use http::header::LOCATION;
 
+use crate::deny;
 use crate::error::Error;
 use crate::response::Response;
 
@@ -61,17 +62,17 @@ impl Redirect {
     /// parsed into an HTTP header value or if provided `status` would not
     /// result in a redirect.
     pub fn with_status(location: &str, status: StatusCode) -> Result<Response, Error> {
-        if !status.is_redirection() {
+        if status.is_redirection() {
+            Response::build()
+                .status(status)
+                .header(LOCATION, location)
+                .finish()
+        } else {
             if cfg!(debug_assertions) {
-                eprintln!("error: redirect status out of range {}", status);
+                eprintln!("error(via): redirect status out of range {}", status);
             }
 
-            crate::raise!(500);
+            Err(deny!(500, "internal server error."))
         }
-
-        Response::build()
-            .status(status)
-            .header(LOCATION, location)
-            .finish()
     }
 }

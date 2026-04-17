@@ -58,9 +58,7 @@ where
 
     fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), Self::Error<'a>> {
         let key = &self.key;
-        let Some(value) = headers.get(key) else {
-            return Err(DenyHeader::Missing(key));
-        };
+        let value = headers.get(key).ok_or_else(|| DenyHeader::Missing(key))?;
 
         self.value
             .cmp(value.as_bytes().trim_ascii())

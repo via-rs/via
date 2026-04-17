@@ -58,21 +58,6 @@ struct Errors<'a> {
     errors: ErrorList<'a>,
 }
 
-pub fn deny<S, M>(status: S, message: M) -> Error
-where
-    S: TryInto<StatusCode>,
-    S::Error: std::error::Error + Send + Sync + 'static,
-    M: Into<String>,
-{
-    match status.try_into() {
-        Err(error) => Error::from_source(Box::new(error)),
-        Ok(status) => {
-            let source = ErrorSource::Message(message.into());
-            Error { status, source }
-        }
-    }
-}
-
 fn serialize_status_code<S>(status: &StatusCode, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,

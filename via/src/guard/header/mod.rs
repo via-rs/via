@@ -10,7 +10,7 @@ use std::fmt::Debug;
 
 use crate::guard::Predicate;
 use crate::request::Request;
-use crate::{Error, deny};
+use crate::{Error, err};
 
 pub struct Optional<T>(T);
 
@@ -103,25 +103,25 @@ impl From<DenyHeader<'_>> for Error {
     fn from(error: DenyHeader<'_>) -> Self {
         match error {
             DenyHeader::Predicate(n) if n == &h::ACCEPT => {
-                deny!(406, "response media type not supported.")
+                err!(406, "response media type not supported.")
             }
             DenyHeader::Predicate(n) if n == &h::CONTENT_TYPE => {
-                deny!(415, "request media type not supported.")
+                err!(415, "request media type not supported.")
             }
             DenyHeader::Predicate(n) if n == &h::RANGE => {
-                deny!(416, "unsatisfiable range request.")
+                err!(416, "unsatisfiable range request.")
             }
             DenyHeader::Predicate(n) if n == &h::UPGRADE => {
-                deny!(426, "protocol upgrade is not supported.")
+                err!(426, "protocol upgrade is not supported.")
             }
             DenyHeader::Predicate(n) | DenyHeader::Missing(n) if n == &h::AUTHORIZATION => {
-                deny!(401, "unauthorized.")
+                err!(401, "unauthorized.")
             }
             DenyHeader::Predicate(n) => {
-                deny!(400, "invalid value for header: {}.", n)
+                err!(400, "invalid value for header: {}.", n)
             }
             DenyHeader::Missing(n) if n == &h::CONTENT_LENGTH => {
-                deny!(411, "length required.")
+                err!(411, "length required.")
             }
             DenyHeader::Missing(n)
                 if n == &h::IF_MATCH
@@ -129,10 +129,10 @@ impl From<DenyHeader<'_>> for Error {
                     || n == &h::IF_MODIFIED_SINCE
                     || n == &h::IF_UNMODIFIED_SINCE =>
             {
-                deny!(428, "missing required precondition header: {}.", n)
+                err!(428, "missing required precondition header: {}.", n)
             }
             DenyHeader::Missing(n) => {
-                deny!(400, "missing required header: {}.", n)
+                err!(400, "missing required header: {}.", n)
             }
         }
     }

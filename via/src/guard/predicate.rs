@@ -53,6 +53,7 @@ macro_rules! impl_and_predicate {
     ($first:ident $($id:ident)+) => {
         impl<Input, $first, $($id),+> Predicate<Input> for ($first, $($id),+)
         where
+            Input: ?Sized,
             for<'a> $first: Predicate<Input> + 'a,
             $(for<'a> $id: Predicate<Input, Error<'a> = $first::Error<'a>> + 'a),+
         {
@@ -72,6 +73,7 @@ macro_rules! impl_or_predicate {
     ($first:ident $($id:ident)+) => {
         impl<Input, $first, $($id),+> Predicate<Input> for Or<($first, $($id),+)>
         where
+            Input: ?Sized,
             for<'a> $first: Predicate<Input> + 'a,
             $(for<'a> $id: Predicate<Input, Error<'a> = $first::Error<'a>> + 'a),+
         {

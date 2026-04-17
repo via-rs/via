@@ -2,10 +2,6 @@ use super::Predicate;
 
 pub struct Contains<T>(T);
 
-pub struct OneOf {
-    choice: Vec<Vec<u8>>,
-}
-
 macro_rules! cmp_bytes {
     ($($vis:vis fn $ctor:ident($self:ident: &$ty:ident, $rhs:ident: &[u8]) -> bool {
         $matcher:expr
@@ -44,19 +40,6 @@ pub fn contains<T>(predicate: T) -> Contains<T> {
     Contains(predicate)
 }
 
-pub fn one_of<I>(values: I) -> OneOf
-where
-    I: IntoIterator,
-    I::Item: AsRef<[u8]>,
-{
-    let choice = values
-        .into_iter()
-        .map(|value| value.as_ref().to_owned())
-        .collect();
-
-    OneOf { choice }
-}
-
 impl<T> Predicate<[u8]> for Contains<T>
 where
     for<'a> T: Predicate<[u8]> + 'a,
@@ -67,22 +50,6 @@ where
         if value
             .split(|b| *b == b',')
             .any(|item| self.0.cmp(item.trim_ascii()).is_ok())
-        {
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-}
-
-impl Predicate<[u8]> for OneOf {
-    type Error<'a> = ();
-
-    fn cmp<'a>(&'a self, input: &[u8]) -> Result<(), Self::Error<'a>> {
-        if self
-            .choice
-            .iter()
-            .any(|value| value.as_slice().eq_ignore_ascii_case(input))
         {
             Ok(())
         } else {

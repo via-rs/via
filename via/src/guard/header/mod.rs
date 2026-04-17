@@ -8,8 +8,9 @@ pub use value::*;
 use http::header::{self as h, HeaderMap, HeaderName};
 use std::fmt::Debug;
 
-use super::predicate::Predicate;
-use crate::{Error, Request, deny};
+use crate::guard::Predicate;
+use crate::request::Request;
+use crate::{Error, deny};
 
 pub struct Optional<T>(T);
 

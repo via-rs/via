@@ -1,10 +1,7 @@
-use super::{OneOf, Predicate, TagNoCase, one_of, tag_no_case};
+use super::{Tag, TagNoCase, tag, tag_no_case};
+use crate::guard::{Or, Predicate, or};
 
-pub struct Media(OneOf, Option<TagNoCase>);
-
-pub fn all() -> Media {
-    Media(one_of(Some(b"*/*")), None)
-}
+pub struct Media(Or<(Tag, TagNoCase)>, Option<TagNoCase>);
 
 pub fn html() -> Media {
     media(b"text/html", Some(b"utf-8"))
@@ -19,7 +16,10 @@ pub fn text() -> Media {
 }
 
 pub fn media(essence: &[u8], charset: Option<&[u8]>) -> Media {
-    Media(one_of([b"*/*", essence]), charset.map(tag_no_case))
+    Media(
+        or((tag(b"*/*"), tag_no_case(essence))),
+        charset.map(tag_no_case),
+    )
 }
 
 #[cfg(feature = "mime")]

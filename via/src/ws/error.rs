@@ -18,7 +18,7 @@ pub trait ResultExt {
 }
 
 pub fn already_closed() -> ControlFlow<Error, Error> {
-    ControlFlow::Break(Error::other(Box::new(WebSocketError::AlreadyClosed)))
+    ControlFlow::Break(Error::from_source(Box::new(WebSocketError::AlreadyClosed)))
 }
 
 pub fn rescue(error: WebSocketError) -> ControlFlow<Error, Error> {

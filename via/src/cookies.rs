@@ -147,7 +147,7 @@ struct SetCookieError;
 ///     // Insert username and password verification here...
 ///     // For now, we'll just assert that the password is not empty.
 ///     if params.password.is_empty() {
-///         via::raise!(401, message = "Invalid username or password.");
+///         via::deny!(401, "invalid username or password.");
 ///     }
 ///
 ///     // Generate a response with no content.

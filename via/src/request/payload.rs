@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 
-use crate::error::Error;
+use crate::{Error, err};
 
 mod sealed {
     /// Prevents external implementations of Payload. Allowing us to make
@@ -504,11 +504,11 @@ impl Coalesce {
 }
 
 fn already_read() -> Error {
-    Error::new("a request body can only be read once.")
+    err!(500, "a request body can only be read once.")
 }
 
 fn unknown_frame_type() -> Error {
-    Error::new("unknown frame type received while reading a request body.")
+    err!(400, "unknown frame type encountered in request.")
 }
 
 impl Future for Coalesce {

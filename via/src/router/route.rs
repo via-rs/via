@@ -219,7 +219,7 @@ impl<'a, App> Route<'a, App> {
     /// # Example
     ///
     /// ```
-    /// # use via::{Next, Request, raise};
+    /// # use via::{Next, Request, deny};
     /// # let mut app = via::app(());
     /// #
     /// // Provides application-wide support for request and response cookies.
@@ -231,7 +231,7 @@ impl<'a, App> Route<'a, App> {
     ///     // We suggest using signed cookies to prevent tampering.
     ///     // See the cookies example in our git repo for more information.
     ///     if request.envelope().cookies().get("is-admin").is_none() {
-    ///         raise!(401);
+    ///         deny!(401);
     ///     }
     ///
     ///     next.call(request).await

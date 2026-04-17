@@ -1,18 +1,15 @@
 //! Error handling.
 //!
 
-mod raise;
+mod macros;
 mod rescue;
 mod result;
 mod server;
 
-use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use http::{StatusCode, header};
 use serde::{Serialize, Serializer};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::{self, Error as IoError};
-
-#[doc(hidden)]
-pub use http::StatusCode; // Required for the raise macro.
 
 pub use rescue::{Rescue, Sanitizer, rescue};
 pub use result::ResultExt;
@@ -73,17 +70,14 @@ where
 impl Error {
     /// Returns a new error with the provided status and message.
     ///
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            source: ErrorSource::Message(message.into()),
-        }
+    pub fn new(message: String) -> Self {
+        Self::new_with_status(StatusCode::INTERNAL_SERVER_ERROR, message)
     }
 
-    pub fn other(source: BoxError) -> Self {
+    pub fn new_with_status(status: StatusCode, message: String) -> Self {
         Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            source: ErrorSource::Other(source),
+            status,
+            source: ErrorSource::Message(message),
         }
     }
 
@@ -121,7 +115,18 @@ impl Error {
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
-        Self::other_with_status(Box::new(error), status)
+        Self::from_source_with_status(status, Box::new(error))
+    }
+
+    pub fn from_source(source: BoxError) -> Self {
+        Self::from_source_with_status(StatusCode::INTERNAL_SERVER_ERROR, source)
+    }
+
+    pub fn from_source_with_status(status: StatusCode, source: BoxError) -> Self {
+        Self {
+            status,
+            source: ErrorSource::Other(source),
+        }
     }
 
     /// Returns a reference to the error source.
@@ -189,20 +194,6 @@ impl Error {
         }
     }
 
-    #[doc(hidden)]
-    pub fn new_with_status(message: impl Into<String>, status: StatusCode) -> Self {
-        let mut error = Self::new(message);
-        error.status = status;
-        error
-    }
-
-    #[doc(hidden)]
-    pub fn other_with_status(source: BoxError, status: StatusCode) -> Self {
-        let mut error = Self::other(source);
-        error.status = status;
-        error
-    }
-
     #[inline]
     fn as_source(&self) -> ErrorSourceRef<'_> {
         match &self.source {
@@ -260,7 +251,7 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     fn from(source: E) -> Self {
-        Self::other(Box::new(source))
+        Self::from_source(Box::new(source))
     }
 }
 
@@ -274,9 +265,9 @@ impl From<Error> for Response {
 
         let headers = response.headers_mut();
 
-        headers.insert(CONTENT_LENGTH, content_len);
+        headers.insert(header::CONTENT_LENGTH, content_len);
         if let Ok(content_type) = "text/plain; charset=utf-8".try_into() {
-            headers.insert(CONTENT_TYPE, content_type);
+            headers.insert(header::CONTENT_TYPE, content_type);
         }
 
         response

@@ -16,13 +16,13 @@ pub trait Predicate<App> {
 /// # Example
 ///
 /// ```rust
-/// use via::{Request, guard, raise};
+/// use via::{Request, guard, deny};
 ///
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");
 ///
 /// api.middleware(via::guard(
-///     || raise!(401, message = "\"x-api-key\" is missing or invalid."),
+///     || deny!(401, "\"x-api-key\" is missing or invalid."),
 ///     |request: &Request<_>| {
 ///         request.headers().get("x-api-key").is_some_and(|value| {
 ///             todo!("validate api key value");
@@ -46,13 +46,13 @@ pub struct Guard<E, T> {
 /// # Example
 ///
 /// ```rust
-/// use via::{Request, raise};
+/// use via::{Request, deny};
 ///
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");
 ///
 /// api.middleware(via::guard(
-///     || raise!(401, message = "\"x-api-key\" is missing or invalid."),
+///     || deny!(401, "\"x-api-key\" is missing or invalid."),
 ///     |request: &Request<_>| {
 ///         request.headers().get("x-api-key").is_some_and(|value| {
 ///             todo!("validate api key value");

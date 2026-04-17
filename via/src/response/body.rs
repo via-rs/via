@@ -6,7 +6,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::Error;
+use crate::{Error, err};
 
 pub struct ResponseBody {
     body: BoxBody<Bytes, Error>,
@@ -15,7 +15,7 @@ pub struct ResponseBody {
 impl ResponseBody {
     #[inline]
     pub fn new(buf: Bytes) -> Self {
-        Self::boxed(Full::new(buf).map_err(|_| Error::new("unreachable")))
+        Self::boxed(Full::new(buf).map_err(|_| err!(500, "unreachable")))
     }
 
     #[inline]

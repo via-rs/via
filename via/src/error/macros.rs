@@ -47,6 +47,16 @@
 /// ```
 #[macro_export]
 macro_rules! err {
+    ($status:literal) => {
+        $crate::err!(
+            $crate::__error_expand_status_lit!($status),
+            "{}.",
+            $crate::__error_expand_status_lit!($status)
+                .canonical_reason()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        )
+    };
     ($status:literal $($args:tt)+) => {
         $crate::err!($crate::__error_expand_status_lit!($status) $($args)+)
     };
@@ -82,6 +92,16 @@ macro_rules! err {
 ///
 #[macro_export]
 macro_rules! deny {
+    ($status:literal) => {
+        $crate::deny!(
+            $crate::__error_expand_status_lit!($status),
+            "{}.",
+            $crate::__error_expand_status_lit!($status)
+                .canonical_reason()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        )
+    };
     ($status:literal $($args:tt)+) => {
         $crate::raise!($crate::__error_expand_status_lit!($status) $($args)+)
     };

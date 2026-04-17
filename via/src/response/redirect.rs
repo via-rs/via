@@ -1,7 +1,7 @@
 use http::StatusCode;
 use http::header::LOCATION;
 
-use crate::deny;
+use crate::err;
 use crate::error::Error;
 use crate::response::Response;
 
@@ -72,7 +72,7 @@ impl Redirect {
                 eprintln!("error(via): redirect status out of range {}", status);
             }
 
-            Err(deny!(500, "internal server error."))
+            Err(err!(500, "internal server error."))
         }
     }
 }

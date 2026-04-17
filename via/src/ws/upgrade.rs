@@ -13,7 +13,7 @@ use super::io::UpgradedIo;
 use super::run::RunTask;
 use super::util::sha1;
 use super::{Channel, Request};
-use crate::{BoxFuture, Error, Middleware, Next, Response, deny};
+use crate::{BoxFuture, Error, Middleware, Next, Response, err};
 
 const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 
@@ -147,14 +147,14 @@ where
             .get(header::SEC_WEBSOCKET_VERSION)
             .is_none_or(|value| value.as_bytes() != b"13")
         {
-            return Box::pin(async { Err(deny!(426, "sec-websocket-version must be \"13\".")) });
+            return Box::pin(async { Err(err!(426, "sec-websocket-version must be \"13\".")) });
         }
 
         let accept = match request
             .headers()
             .get(header::SEC_WEBSOCKET_KEY)
             .and_then(|value| value.to_str().ok().map(sha1))
-            .unwrap_or_else(|| Err(deny!(400, "missing required header \"sec-websocket-key\"")))
+            .unwrap_or_else(|| Err(err!(400, "missing required header \"sec-websocket-key\"")))
         {
             Ok(digest) => digest,
             Err(error) => return Box::pin(async { Err(error) }),
@@ -162,7 +162,7 @@ where
 
         let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
             return Box::pin(async {
-                Err(deny!(500, "connection does not support websocket upgrades"))
+                Err(err!(500, "connection does not support websocket upgrades"))
             });
         };
 

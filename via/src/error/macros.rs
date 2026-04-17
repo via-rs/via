@@ -37,18 +37,18 @@
 ///
 /// ```
 /// use std::io::{self, ErrorKind};
-/// use via::deny;
+/// use via::err;
 ///
 /// # fn example() -> via::Result<()> {
 /// let result = Err(ErrorKind::InvalidInput.into());
-/// result.map_err(|error: io::Error| deny!(400, error))?;
+/// result.map_err(|error: io::Error| err!(400, error))?;
 /// # Ok(())
 /// # }
 /// ```
 #[macro_export]
-macro_rules! deny {
+macro_rules! err {
     ($status:literal $($args:tt)+) => {
-        $crate::deny!($crate::__error_expand_status_lit!($status) $($args)+)
+        $crate::err!($crate::__error_expand_status_lit!($status) $($args)+)
     };
     ($status:expr, $message:literal $($args:tt)*) => {
         $crate::Error::new_with_status($status, format!($message $($args)*))
@@ -67,11 +67,11 @@ macro_rules! deny {
 ///
 /// ```
 /// use http::header::AUTHORIZATION;
-/// use via::{Next, Request, raise};
+/// use via::{Next, Request, deny};
 ///
 /// async fn authenticate(request: Request, next: Next) -> via::Result {
 ///     let Some(authorization) = request.headers().get(AUTHORIZATION) else {
-///         raise!(401, "missing required header: authorization.");
+///         deny!(401, "missing required header: authorization.");
 ///     };
 ///
 ///     // Authentication business logic...
@@ -81,7 +81,7 @@ macro_rules! deny {
 /// ```
 ///
 #[macro_export]
-macro_rules! raise {
+macro_rules! deny {
     ($status:literal $($args:tt)+) => {
         $crate::raise!($crate::__error_expand_status_lit!($status) $($args)+)
     };

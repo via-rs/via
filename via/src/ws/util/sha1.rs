@@ -6,7 +6,7 @@ use aws_lc_rs::digest::{Context, SHA1_FOR_LEGACY_USE_ONLY};
 #[cfg(feature = "ring")]
 use ring::digest::{Context, SHA1_FOR_LEGACY_USE_ONLY};
 
-use crate::{Error, deny};
+use crate::{Error, err};
 
 const WS_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -22,7 +22,7 @@ pub fn sha1(input: &str) -> Result<Base64EncodedDigest, Error> {
     if base64.encode_slice(hasher.finish(), &mut buf).is_ok() {
         Ok(Base64EncodedDigest(buf))
     } else {
-        Err(deny!(
+        Err(err!(
             500,
             "an error occurred while generating the websocket accept key."
         ))

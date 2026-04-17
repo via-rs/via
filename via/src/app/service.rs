@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 use crate::request::{Envelope, Request, RequestBody};
 use crate::response::{Response, ResponseBody};
 use crate::server::ServerConfig;
-use crate::{BoxFuture, Next, Via, deny};
+use crate::{BoxFuture, Next, Via, err};
 
 const MAX_URI_PATH_LEN: usize = 8092; // 8 KB
 
@@ -27,7 +27,7 @@ struct ViaService<App> {
 impl FutureResponse {
     fn max_path_len_exceeded() -> Self {
         Self(Box::pin(async {
-            Err(deny!(
+            Err(err!(
                 414,
                 "path exceeds the maximum allowed length of 8 kb."
             ))

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use crate::deny;
+use crate::err;
 use crate::middleware::{BoxFuture, Middleware};
 use crate::request::Request;
 
@@ -52,7 +52,7 @@ impl<App> Next<App> {
         match self.deque.pop_front() {
             Some(middleware) => middleware.call(request, self),
             None => {
-                let error = deny!(404, "not found.");
+                let error = err!(404, "not found.");
                 Box::pin(async { Err(error) })
             }
         }

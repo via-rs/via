@@ -3,11 +3,16 @@ pub mod method;
 
 mod predicate;
 
-pub use header::{DenyHeader, header};
+pub use header::{DenyHeader, Header, header};
 pub use predicate::*;
 
 use crate::request::Request;
 use crate::{BoxFuture, Error, Middleware, Next};
+
+pub struct AndThen<T, U> {
+    predicate: T,
+    middleware: U,
+}
 
 /// Stop processing the request and respond if the provided precondition fails.
 ///
@@ -73,6 +78,32 @@ pub struct Guard<T> {
 ///
 pub fn guard<T>(predicate: T) -> Guard<T> {
     Guard { predicate }
+}
+
+impl<T, U, App> Middleware<App> for AndThen<T, U>
+where
+    T: Predicate<Request<App>> + Send + Sync,
+    for<'a> T::Error<'a>: Into<Error>,
+    U: Middleware<App>,
+{
+    fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
+        match self.predicate.cmp(&request) {
+            Ok(_) => self.middleware.call(request, next),
+            Err(error) => {
+                let error = error.into();
+                Box::pin(async { Err(error) })
+            }
+        }
+    }
+}
+
+impl<T> Guard<T> {
+    pub fn and_then<U>(self, middleware: U) -> AndThen<T, U> {
+        AndThen {
+            predicate: self.predicate,
+            middleware,
+        }
+    }
 }
 
 impl<T, App> Middleware<App> for Guard<T>

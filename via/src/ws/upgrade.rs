@@ -1,4 +1,5 @@
-use http::{HeaderMap, StatusCode, header};
+use http::StatusCode;
+use http::header::{self as h, HeaderMap};
 use hyper::upgrade::OnUpgrade;
 use std::future::Future;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use super::Channel;
 use super::io::UpgradedIo;
 use super::run::RunTask;
 use super::util::{Base64EncodedDigest, sha1};
-use crate::guard::header::{self as h, Contains, Header, Tag, TagNoCase};
+use crate::guard::header::{self, DenyHeader, contains, tag, tag_no_case};
 use crate::guard::{self, Predicate};
 use crate::ws::error::UpgradeError;
 use crate::{BoxFuture, Error, Middleware, Next, Request, Response, ResultExt, deny};
@@ -22,11 +23,14 @@ const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 
 pub struct Ws<T> {
     listener: Arc<Listener<T>>,
-    guard: (
-        Header<Tag>,
-        Header<Contains<TagNoCase>>,
-        Header<Contains<TagNoCase>>,
-    ),
+    guard: guard::MapErr<
+        fn(DenyHeader<'_>) -> UpgradeError,
+        (
+            guard::Header<header::Tag>,
+            guard::Header<header::Contains<header::TagNoCase>>,
+            guard::Header<header::Contains<header::TagNoCase>>,
+        ),
+    >,
 }
 
 pub(super) struct Listener<T> {
@@ -102,10 +106,13 @@ impl<T> Ws<T> {
                 handle: listener,
                 config: WsConfig::default(),
             }),
-            guard: (
-                guard::header(header::SEC_WEBSOCKET_VERSION, h::tag(b"13")),
-                guard::header(header::CONNECTION, h::contains(h::tag_no_case(b"upgrade"))),
-                guard::header(header::UPGRADE, h::contains(h::tag_no_case(b"websocket"))),
+            guard: guard::map_err(
+                |error: DenyHeader<'_>| error.into(),
+                (
+                    guard::header(h::SEC_WEBSOCKET_VERSION, tag(b"13")),
+                    guard::header(h::CONNECTION, contains(tag_no_case(b"upgrade"))),
+                    guard::header(h::UPGRADE, contains(tag_no_case(b"websocket"))),
+                ),
             ),
         }
     }
@@ -142,13 +149,13 @@ impl<T> Ws<T> {
 
 impl<T> Ws<T> {
     fn verify(&self, headers: &HeaderMap) -> Result<Base64EncodedDigest, UpgradeError> {
-        self.guard
-            .cmp(headers)
-            .map_err(|error| error.into())
-            .and_then(|_| match headers.get(header::SEC_WEBSOCKET_KEY) {
-                Some(value) => sha1(value.as_bytes()),
-                None => Err(UpgradeError::SecWebsocketKey),
-            })
+        self.guard.cmp(headers)?;
+
+        let value = headers
+            .get(h::SEC_WEBSOCKET_KEY)
+            .ok_or(UpgradeError::SecWebsocketKey)?;
+
+        sha1(value.as_bytes())
     }
 }
 
@@ -161,15 +168,13 @@ where
     fn call(&self, mut request: Request<App>, _: Next<App>) -> BoxFuture {
         let listener = Arc::clone(&self.listener);
 
-        let Some(upgrade) = request.extensions_mut().remove::<OnUpgrade>() else {
+        let Some(upgrade) = request.extensions_mut().remove() else {
             return Box::pin(async { deny!(500, UpgradeError::Other) });
         };
 
         let accept = match self.verify(request.headers()).or_bad_request() {
             Ok(digest) => digest,
-            Err(error) => {
-                return Box::pin(async { Err(error) });
-            }
+            Err(error) => return Box::pin(async { Err(error) }),
         };
 
         Box::pin(async move {
@@ -182,9 +187,9 @@ where
 
             Response::build()
                 .status(StatusCode::SWITCHING_PROTOCOLS)
-                .header(header::CONNECTION, "upgrade")
-                .header(header::SEC_WEBSOCKET_ACCEPT, accept.as_str())
-                .header(header::UPGRADE, "websocket")
+                .header(h::CONNECTION, "upgrade")
+                .header(h::SEC_WEBSOCKET_ACCEPT, accept.as_str())
+                .header(h::UPGRADE, "websocket")
                 .finish()
         })
     }

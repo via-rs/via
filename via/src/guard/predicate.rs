@@ -124,7 +124,7 @@ where
     type Error<'a> = E;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        self.1.cmp(input).map_err(|error| (self.0)(error))
+        self.1.cmp(input).map_err(&self.0)
     }
 }
 

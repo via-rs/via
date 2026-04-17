@@ -1,7 +1,6 @@
 pub mod header;
 pub mod method;
-
-mod predicate;
+pub mod predicate;
 
 pub use header::{DenyHeader, Header, header};
 pub use predicate::*;
@@ -16,7 +15,29 @@ pub struct AndThen<T, U> {
 }
 
 /// Skip a middleware if the guard's predicate does not match the request.
-pub struct FlatMap<T, U> {
+///
+/// # Example
+///
+/// ```no_run
+/// use std::process::ExitCode;
+/// use via::guard::{method, guard};
+/// use via::{Request, Next, Server};
+///
+/// async fn cache(request: Request, next: Next) -> via::Result {
+///     todo!("implement a simple response cache.");
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> via::Result<ExitCode> {
+///     let mut app = via::app(());
+///
+///     // Non-idempotent requests will run the cache middleware.
+///     app.middleware(guard(method::is_safe()).flat_map(cache));
+///
+///     Server::new(app).listen(("127.0.0.1", 8080)).await
+/// }
+/// ```
+pub struct Filter<T, U> {
     predicate: T,
     middleware: U,
 }
@@ -101,7 +122,7 @@ where
     }
 }
 
-impl<T, U, App> Middleware<App> for FlatMap<T, U>
+impl<T, U, App> Middleware<App> for Filter<T, U>
 where
     T: Predicate<Request<App>> + Send + Sync,
     U: Middleware<App>,
@@ -116,37 +137,6 @@ where
 }
 
 impl<T> Guard<T> {
-    /// Return a new middleware that is only called if the predicate in self
-    /// matches the request.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::process::ExitCode;
-    /// use via::guard::header::{contains, header, tag, tag_no_case};
-    /// use via::{Request, Next, Server, guard};
-    ///
-    /// async fn ws_upgrade(request: Request, next: Next) -> via::Result {
-    ///     todo!("implement a custom websocket reactor.");
-    /// }
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> via::Result<ExitCode> {
-    ///     let mut app = via::app(());
-    ///
-    ///     app.route("/chat").to({
-    ///         let verify_headers = (
-    ///             header("sec-websocket-version", tag(b"13")),
-    ///             header("connection", contains(tag_no_case(b"upgrade"))),
-    ///             header("upgrade", contains(tag_no_case(b"websocket"))),
-    ///         );
-    ///
-    ///         via::get(guard(verify_headers).and_then(ws_upgrade))
-    ///     });
-    ///
-    ///     Server::new(app).listen(("127.0.0.1", 8080)).await
-    /// }
-    /// ```
     pub fn and_then<U>(self, middleware: U) -> AndThen<T, U> {
         AndThen {
             predicate: self.predicate,
@@ -156,30 +146,8 @@ impl<T> Guard<T> {
 
     /// Return a new middleware that is only called if the predicate in self
     /// matches the request.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use std::process::ExitCode;
-    /// use via::guard::{method, guard};
-    /// use via::{Request, Next, Server};
-    ///
-    /// async fn cache(request: Request, next: Next) -> via::Result {
-    ///     todo!("implement a simple response cache.");
-    /// }
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> via::Result<ExitCode> {
-    ///     let mut app = via::app(());
-    ///
-    ///     // Non-idempotent requests will run the cache middleware.
-    ///     app.middleware(guard(method::is_safe()).flat_map(cache));
-    ///
-    ///     Server::new(app).listen(("127.0.0.1", 8080)).await
-    /// }
-    /// ```
-    pub fn flat_map<U>(self, middleware: U) -> FlatMap<T, U> {
-        FlatMap {
+    pub fn filter<U>(self, middleware: U) -> Filter<T, U> {
+        Filter {
             predicate: self.predicate,
             middleware,
         }

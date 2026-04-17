@@ -7,13 +7,13 @@
 ///
 /// ```
 /// use http::header::AUTHORIZATION;
-/// use via::{Next, Request};
+/// use via::{Next, Request, err};
 ///
 /// async fn authenticate(request: Request, next: Next) -> via::Result {
 ///     let authorization = request
 ///         .headers()
 ///         .get(AUTHORIZATION)
-///         .ok_or_else(|| deny!(401, "missing required header: authorization."))?;
+///         .ok_or_else(|| err!(401, "missing required header: authorization."))?;
 ///
 ///     // Authentication business logic...
 ///
@@ -23,16 +23,17 @@
 ///
 /// ### Customizing the error message.
 ///
-/// The `deny!` macro supports the same arguments as [`format!`] following the
+/// The `err!` macro supports the same arguments as [`format!`] following the
 /// status code.
 ///
 /// ```
-/// deny!(404, "user with id \"{}\" not found.", 12345);
+/// # use via::err;
+/// err!(404, "user with id \"{}\" not found.", 12345);
 /// ```
 ///
 /// ### Decorate an existing error.
 ///
-/// Existing errors can be passed as the second argument to the deny macro
+/// Existing errors can be passed as the second argument to the `err!` macro
 /// instead of [`format!`] args.
 ///
 /// ```
@@ -103,7 +104,7 @@ macro_rules! deny {
         )
     };
     ($status:literal $($args:tt)+) => {
-        $crate::raise!($crate::__error_expand_status_lit!($status) $($args)+)
+        $crate::deny!($crate::__error_expand_status_lit!($status) $($args)+)
     };
     ($status:expr, $message:literal $($args:tt)*) => {
         return Err($crate::Error::new_with_status($status, format!($message $($args)*)))

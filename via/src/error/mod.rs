@@ -223,6 +223,8 @@ impl Error {
                     errors.push(error.to_string().into());
                     source = error.source();
                 }
+
+                errors.reverse();
             }
         }
 
@@ -297,6 +299,10 @@ impl<'a> Errors<'a> {
     fn push(&mut self, message: Cow<'a, str>) {
         self.errors.0.push(message);
     }
+
+    fn reverse(&mut self) {
+        self.errors.0.reverse();
+    }
 }
 
 impl Serialize for ErrorList<'_> {
@@ -306,10 +312,9 @@ impl Serialize for ErrorList<'_> {
     {
         let mut state = serializer.serialize_seq(Some(self.0.len()))?;
 
-        self.0
-            .iter()
-            .rev()
-            .try_for_each(|message| state.serialize_element(message.as_ref()))?;
+        for message in &self.0 {
+            state.serialize_element(message.as_ref())?;
+        }
 
         state.end()
     }

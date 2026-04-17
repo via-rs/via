@@ -107,11 +107,11 @@ pub fn when<T, U>(condition: T, predicate: U) -> When<T, U> {
     When(condition, predicate)
 }
 
-// The maximum length of a tuple is 20.
-// This is the worst case cyclomatic complexity.
+// The maximum length of a tuple is 10.
+// This limits the best, worst case cyclomatic complexity to 20.
 
-and_impls!(A B C D E F G H I J K L M N O P Q R S T);
-or_impls!(A B C D E F G H I J K L M N O P Q R S T);
+and_impls!(A B C D E F G H I J);
+or_impls!(A B C D E F G H I J);
 
 impl<Input, Error, F, T> Predicate<Input> for MapErr<F, T>
 where

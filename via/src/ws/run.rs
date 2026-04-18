@@ -18,6 +18,7 @@ use super::error::rescue;
 use super::io::UpgradedIo;
 use super::{Channel, Message, Request};
 use crate::Error;
+use crate::ws::upgrade::Listener;
 
 pub struct RunTask<T, App> {
     run: Pin<Box<Run<T, App>>>,
@@ -37,7 +38,7 @@ struct Facade {
 }
 
 struct Run<T, App> {
-    listener: Arc<T>,
+    listener: Arc<Listener<T>>,
     request: Request<App>,
     stream: WebSocketStream<UpgradedIo>,
     facade: Option<Facade>,
@@ -50,7 +51,7 @@ where
     Await: Future<Output = super::Result> + Send + 'static,
 {
     pub(super) fn new(
-        listener: Arc<T>,
+        listener: Arc<Listener<T>>,
         request: Request<App>,
         stream: WebSocketStream<UpgradedIo>,
     ) -> Self {
@@ -201,7 +202,7 @@ where
         let (ours, theirs) = Channel::new();
         let request = self.request.clone();
         let facade = Facade {
-            listener: Box::pin((self.listener)(theirs, request)),
+            listener: Box::pin((self.listener.handle)(theirs, request)),
             state: IoState::Receive,
             stream: &mut self.stream as *mut _,
             rendezvous: ours,

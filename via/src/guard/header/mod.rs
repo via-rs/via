@@ -23,6 +23,7 @@ pub enum DenyHeader<'a> {
     Missing(&'a HeaderName),
 }
 
+/// Require that a header associated with a key matches a predicate.
 pub struct Header<T> {
     pub(super) value: T,
     pub(super) key: HeaderName,

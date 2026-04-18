@@ -89,21 +89,6 @@ impl Drop for Facade {
     }
 }
 
-macro_rules! log {
-    ($level:tt($indent:literal), $fmt:literal $($arg:tt)*) => {
-        log!(
-            concat!("{}", stringify!($level),"(via::ws): ", $fmt),
-            " ".repeat($indent)
-            $($arg)*
-        )
-    };
-    ($($args:tt)+) => {
-        if cfg!(debug_assertions) {
-            eprintln!($($args)*);
-        }
-    };
-}
-
 impl Future for Facade {
     type Output = super::Result;
 
@@ -167,7 +152,7 @@ impl Future for Facade {
 
                     if let IoState::Send(message) = mem::replace(state, IoState::Flush) {
                         sink.as_mut().start_send(message).map_err(rescue)?;
-                        log!(info(2), "write successful. transitiion to flush.");
+                        log!(info(2), "write successful. transition to flush.");
                     } else {
                         // We are in an invalid state. This can be interpreted
                         // as a signal that the risk of re-entrance is elevated

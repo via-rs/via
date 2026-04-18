@@ -1,3 +1,5 @@
+//! Match on a header.
+
 pub mod media;
 
 mod value;

@@ -1,3 +1,5 @@
+//! Match on a method.
+
 use super::predicate::{Not, Predicate, not};
 use crate::request::Request;
 

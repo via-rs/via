@@ -1,3 +1,5 @@
+//! Value combinators for HTTP media types.
+
 use super::{CaseSensitive, Tag, case_sensitive, tag};
 use crate::guard::Predicate;
 

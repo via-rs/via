@@ -7,6 +7,19 @@ compile_error!("either \"aws-lc-rs\" or \"ring\" must be enabled to use the ws m
 #[cfg(all(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 compile_error!("features \"tokio-tungstenite\" and \"tokio-websockets\" are mutually exclusive.");
 
+macro_rules! log {
+    ($level:tt($indent:literal), $fmt:literal $($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "{:indent$}{}(via::ws): {}",
+            "",
+            stringify!($level),
+            format_args!($fmt $($arg)*),
+            indent = $indent
+        );
+    };
+}
+
 mod channel;
 mod error;
 mod io;

@@ -171,8 +171,17 @@ where
             let request = super::Request::new(request);
 
             tokio::spawn(async move {
-                let stream = handshake(&listener.config, upgrade).await?;
-                RunTask::new(listener, request, stream).await
+                let task = match handshake(&listener.config, upgrade).await {
+                    Ok(stream) => RunTask::new(listener, request, stream),
+                    Err(error) => {
+                        log!(error(0), "{}", &error);
+                        return;
+                    }
+                };
+
+                if let Err(error) = task.await {
+                    log!(error(0), "{}", &error);
+                }
             });
 
             Response::build()

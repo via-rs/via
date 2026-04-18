@@ -17,9 +17,13 @@ use crate::{Error, err};
 /// Treat the predicate as match if the header is `None`.
 pub struct Optional<T>(T);
 
+/// A header predicate does not match the request.
 #[derive(Debug)]
 pub enum DenyHeader<'a> {
+    /// The predicate does not match the header value.
     Predicate(&'a HeaderName),
+
+    /// The header is not present on the request.
     Missing(&'a HeaderName),
 }
 

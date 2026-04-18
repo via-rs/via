@@ -112,38 +112,28 @@ impl<'a> DenyHeader<'a> {
 impl From<DenyHeader<'_>> for Error {
     fn from(error: DenyHeader<'_>) -> Self {
         match error {
-            DenyHeader::Predicate(n) if n == &h::ACCEPT => {
-                err!(406, "response media type not supported.")
-            }
-            DenyHeader::Predicate(n) if n == &h::CONTENT_TYPE => {
-                err!(415, "request media type not supported.")
-            }
-            DenyHeader::Predicate(n) if n == &h::RANGE => {
-                err!(416, "unsatisfiable range request.")
-            }
-            DenyHeader::Predicate(n) if n == &h::UPGRADE => {
-                err!(426, "protocol upgrade is not supported.")
-            }
-            DenyHeader::Predicate(n) | DenyHeader::Missing(n) if n == &h::AUTHORIZATION => {
-                err!(401, "unauthorized.")
-            }
-            DenyHeader::Predicate(n) => {
-                err!(400, "invalid value for header: {}.", n)
-            }
-            DenyHeader::Missing(n) if n == &h::CONTENT_LENGTH => {
-                err!(411, "length required.")
-            }
-            DenyHeader::Missing(n)
-                if n == &h::IF_MATCH
-                    || n == &h::IF_NONE_MATCH
-                    || n == &h::IF_MODIFIED_SINCE
-                    || n == &h::IF_UNMODIFIED_SINCE =>
-            {
-                err!(428, "missing required precondition header: {}.", n)
-            }
-            DenyHeader::Missing(n) => {
-                err!(400, "missing required header: {}.", n)
-            }
+            DenyHeader::Predicate(name) => match name.as_str() {
+                "accept" => err!(406, "response media type not supported."),
+                "authorization" => err!(401, "unauthorized."),
+                "content-type" => err!(415, "request media type not supported."),
+                "range" => err!(416, "unsatisfiable range request."),
+                "upgrade" => err!(426, "protocol upgrade is not supported."),
+                n => err!(400, "invalid value for header: {}.", n),
+            },
+            DenyHeader::Missing(name) => match name.as_str() {
+                "content-length" => err!(411, "length required."),
+
+                if_ @ ("if-match"
+                | "if-none-match"
+                | "if-modified-since"
+                | "if-unmodified-since") => {
+                    err!(428, "missing required precondition: {}.", if_)
+                }
+
+                n => {
+                    err!(400, "invalid value for header: {}.", n)
+                }
+            },
         }
     }
 }

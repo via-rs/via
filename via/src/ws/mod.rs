@@ -9,14 +9,14 @@ compile_error!("features \"tokio-tungstenite\" and \"tokio-websockets\" are mutu
 
 macro_rules! log {
     ($level:tt($indent:literal), $fmt:literal $($arg:tt)*) => {
-        if cfg!(debug_assertions) {
-            eprintln!(
-                "{}{}(via::ws): {}",
-                " ".repeat($indent),
-                stringify!($level),
-                format_args!($fmt $($arg)*)
-            );
-        }
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "{:indent$}{}(via::ws): {}",
+            "",
+            stringify!($level),
+            format_args!($fmt $($arg)*),
+            indent = $indent
+        );
     };
 }
 

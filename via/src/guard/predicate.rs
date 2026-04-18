@@ -101,8 +101,9 @@ macro_rules! impl_or_predicate {
     };
 }
 
-/// Map the provided predicate's error to a different type. The lifetime
-/// associated with the original error must be erased.
+/// Map the provided predicate's error to a different type.
+///
+/// The returned error type must erase the lifetime of the original error.
 pub fn map_err<F, T>(f: F, predicate: T) -> MapErr<F, T> {
     MapErr(f, predicate)
 }

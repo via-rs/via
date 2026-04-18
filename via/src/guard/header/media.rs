@@ -1,7 +1,10 @@
 //! Value combinators for HTTP media types.
 
 use super::{CaseSensitive, Tag, case_sensitive, tag};
-use crate::guard::Predicate;
+use crate::guard::{Or, Predicate};
+
+/// Match `"*/*"(; charset=*)?` or predicate `T`.
+pub type AllOr<T> = Or<(Media<CaseSensitive>, T)>;
 
 /// An essence string with an optional charset.
 ///

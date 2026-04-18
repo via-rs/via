@@ -10,7 +10,7 @@ pub use value::*;
 use http::header::{self as h, HeaderMap, HeaderName};
 use std::fmt::Debug;
 
-use super::{Or, Predicate, Wildcard, header, or, wildcard};
+use super::{Predicate, Wildcard, header, or, wildcard};
 use crate::request::Request;
 use crate::{Error, err};
 
@@ -39,7 +39,7 @@ where
 }
 
 /// The value of `Accept` must include `"*/*"` or match `predicate`.
-pub fn accept<T>(predicate: T) -> Header<Contains<Or<(Media<CaseSensitive>, T)>>> {
+pub fn accept<T>(predicate: T) -> Header<Contains<media::AllOr<T>>> {
     header(h::ACCEPT, contains(or((media::all(), predicate))))
 }
 
@@ -68,7 +68,9 @@ where
 
     fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), Self::Error<'a>> {
         let key = &self.key;
-        let value = headers.get(key).ok_or_else(|| DenyHeader::Missing(key))?;
+        let Some(value) = headers.get(key) else {
+            return Err(DenyHeader::Missing(key));
+        };
 
         self.value
             .cmp(value.as_bytes().trim_ascii())

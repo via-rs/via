@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
-use via::guard::header::media;
-use via::guard::{header, method, when};
-use via::{Next, Payload, Request, Response, Server, guard, rescue};
+use via::guard::{self, header::media};
+use via::{Next, Payload, Request, Response, Server, rescue};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Document<T> {
@@ -42,16 +41,7 @@ async fn main() -> via::Result<ExitCode> {
     app.middleware(rescue(|error| error.use_json()));
 
     // If the client does not speak JSON, deny the request.
-    app.middleware(guard((
-        header::accept(media::json()),
-        when(
-            method::is_mutation(),
-            (
-                header::content_type(media::json()),
-                header::content_length(),
-            ),
-        ),
-    )));
+    app.middleware(guard::content(media::json(), media::json()));
 
     // Define a route that responds to POST /hello.
     app.route("/hello").to(via::post(hello).or_deny());

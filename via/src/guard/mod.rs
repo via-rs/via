@@ -11,6 +11,12 @@ use std::fmt::Debug;
 use crate::request::Request;
 use crate::{BoxFuture, Error, Middleware, Next};
 
+/// Content negotation as validation.
+pub type Content<T, U> = (
+    Header<header::Contains<Or<(header::Media<header::CaseSensitive>, U)>>>,
+    When<Not<method::IsSafe>, (Header<T>, Header<Wildcard>)>,
+);
+
 /// Apply a guard's predicate to an individual middleware.
 pub struct AndThen<T, U> {
     middleware: U,
@@ -54,27 +60,17 @@ pub struct Filter<T, U> {
 /// # Example
 ///
 /// ```rust
-/// use via::guard::header::media;
-/// use via::guard::{guard, header, method, when};
+/// use via::guard::{self, header::media};
 ///
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");
 ///
 /// // If the client does not speak JSON, deny the request.
-/// api.middleware(guard((
-///     header::accept(media::json()),
-///     when(
-///         method::is_mutation(),
-///         (
-///             header::content_type(media::json()),
-///             header::content_length(),
-///         ),
-///     ),
-/// )));
+/// api.middleware(guard::content(media::json(), media::json()));
 ///
 /// // Subsequent routes defined from `api` require:
 /// //   - Accept: application/json, */*
-/// //   - Content-Length: *
+/// //   - Content-Length: * (<= Server::max_request_size)
 /// //   - Content-Type: application/json || application/json; charset=utf-8
 ///
 /// api.route("/users").scope(|users| {
@@ -86,30 +82,6 @@ pub struct Guard<T> {
 }
 
 /// Confirm that request matches the provided predicate before proceeding.
-///
-/// # Example
-///
-/// ```rust
-/// use via::guard::header::media;
-/// use via::guard::{guard, header, method, when};
-///
-/// let mut app = via::app(());
-/// let mut api = app.route("/api");
-///
-/// // Content negotiation. Deny, if the client doesn't speak JSON.
-/// api.middleware(guard((
-///     header::accept(media::json()),
-///     when(method::is_mutation(), header::content_type(media::json())),
-/// )));
-///
-/// // Subsequent routes defined from `api` require:
-/// //   - Accept: application/json, */*
-/// //   - Content-Type: application/json || application/json; charset=utf-8
-///
-/// api.route("/users").scope(|users| {
-///     // Define the /api/users resource.
-/// });
-/// ```
 pub fn guard<T>(predicate: T) -> Guard<T> {
     Guard { predicate }
 }
@@ -124,6 +96,20 @@ where
         value,
         key: key.try_into().expect("invalid header name."),
     }
+}
+
+/// The client and server agree on a media type and payloads have a known length.
+///
+/// The first argument is what the client is allowed to send. The second
+/// argument is how the server will reply.
+pub fn content<T, U>(accepts: T, provides: U) -> Guard<Content<T, U>> {
+    guard((
+        header::accept(provides),
+        when(
+            method::is_mutation(),
+            (header::content_type(accepts), header::content_length()),
+        ),
+    ))
 }
 
 impl<T, U, App> Middleware<App> for AndThen<T, U>

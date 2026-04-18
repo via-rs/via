@@ -29,10 +29,12 @@ pub fn text() -> Media {
     media(tag(b"text/plain"), Some(b"utf-8"))
 }
 
-/// The essence charset param match the input. If the predicate and input both
-/// have a charset they must match.
-pub fn media<T>(essence: T, charset: Option<&[u8]>) -> Media<T> {
-    Media(essence, charset.map(tag))
+/// The `predicate` matches the essence string and optional charset param.
+///
+/// If `charset` is specified and the input has a charset param they must be
+/// a case-insensitive match.
+pub fn media<T>(predicate: T, charset: Option<&[u8]>) -> Media<T> {
+    Media(predicate, charset.map(tag))
 }
 
 /// The mime's essence and optional charset param match the input.

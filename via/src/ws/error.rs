@@ -2,7 +2,7 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::ControlFlow;
 
 use crate::error::Error;
-use crate::guard::DenyHeader;
+use crate::guard::header::DenyHeader;
 
 use http::header::{CONNECTION, SEC_WEBSOCKET_VERSION, UPGRADE};
 #[cfg(feature = "tokio-tungstenite")]

@@ -8,10 +8,11 @@ pub use value::*;
 use http::header::{self as h, HeaderMap, HeaderName};
 use std::fmt::Debug;
 
-use crate::guard::Predicate;
+use super::{Or, Predicate, Wildcard, header, or, wildcard};
 use crate::request::Request;
 use crate::{Error, err};
 
+/// Treat the predicate as match if the header is `None`.
 pub struct Optional<T>(T);
 
 #[derive(Debug)]
@@ -21,30 +22,36 @@ pub enum DenyHeader<'a> {
 }
 
 pub struct Header<T> {
-    value: T,
-    key: HeaderName,
+    pub(super) value: T,
+    pub(super) key: HeaderName,
 }
 
-pub fn header<K, V>(key: K, value: V) -> Header<V>
+/// The header associated with `key` must be present in the request.
+pub fn exists<K>(key: K) -> Header<Wildcard>
 where
     K: TryInto<HeaderName>,
     K::Error: Debug,
 {
-    Header {
-        value,
-        key: key.try_into().expect("invalid header name."),
-    }
+    header(key, wildcard())
 }
 
-pub fn accept(media: Media) -> Header<Contains<Media>> {
-    header(h::ACCEPT, contains(media))
+/// The value of `Accept` must include `"*/*"` or match `predicate`.
+pub fn accept<T>(predicate: T) -> Header<Contains<Or<(Media<CaseSensitive>, T)>>> {
+    header(h::ACCEPT, contains(or((media::all(), predicate))))
 }
 
+/// The value of `Content-Type` must match `predicate`.
 pub fn content_type<T>(predicate: T) -> Header<T> {
     header(h::CONTENT_TYPE, predicate)
 }
 
+/// The `Content-Length` header must be present in the request.
+pub fn content_length() -> Header<Wildcard> {
+    exists(h::CONTENT_LENGTH)
+}
+
 impl<T> Header<T> {
+    /// If the header associated with  the predicate as match if the header is `None`.
     pub fn optional(self) -> Optional<Self> {
         Optional(self)
     }
@@ -52,7 +59,7 @@ impl<T> Header<T> {
 
 impl<T> Predicate<HeaderMap> for Header<T>
 where
-    for<'a> T: Predicate<[u8], Error<'a> = ()> + 'a,
+    for<'a> T: Predicate<[u8]> + 'a,
 {
     type Error<'a> = DenyHeader<'a>;
 
@@ -68,7 +75,7 @@ where
 
 impl<T, App> Predicate<Request<App>> for Header<T>
 where
-    for<'a> T: Predicate<[u8], Error<'a> = ()> + 'a,
+    for<'a> T: Predicate<[u8]> + 'a,
 {
     type Error<'a> = DenyHeader<'a>;
 

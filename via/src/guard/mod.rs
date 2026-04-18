@@ -1,17 +1,20 @@
 pub mod header;
 pub mod method;
-pub mod predicate;
 
-pub use header::{DenyHeader, Header, header};
+mod predicate;
+
+pub use header::Header;
 pub use predicate::*;
+
+use std::fmt::Debug;
 
 use crate::request::Request;
 use crate::{BoxFuture, Error, Middleware, Next};
 
 /// Apply a guard's predicate to an individual middleware.
 pub struct AndThen<T, U> {
-    predicate: T,
     middleware: U,
+    guard: Guard<T>,
 }
 
 /// Skip a middleware if the guard's predicate does not match the request.
@@ -38,8 +41,8 @@ pub struct AndThen<T, U> {
 /// }
 /// ```
 pub struct Filter<T, U> {
-    predicate: T,
     middleware: U,
+    guard: Guard<T>,
 }
 
 /// Stop processing the request and respond if the provided predicate fails.
@@ -57,14 +60,21 @@ pub struct Filter<T, U> {
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");
 ///
-/// // Content negotiation. Deny, if the client doesn't speak JSON.
+/// // If the client does not speak JSON, deny the request.
 /// api.middleware(guard((
 ///     header::accept(media::json()),
-///     when(method::is_mutation(), header::content_type(media::json())),
+///     when(
+///         method::is_mutation(),
+///         (
+///             header::content_type(media::json()),
+///             header::content_length(),
+///         ),
+///     ),
 /// )));
 ///
 /// // Subsequent routes defined from `api` require:
 /// //   - Accept: application/json, */*
+/// //   - Content-Length: *
 /// //   - Content-Type: application/json || application/json; charset=utf-8
 ///
 /// api.route("/users").scope(|users| {
@@ -100,9 +110,20 @@ pub struct Guard<T> {
 ///     // Define the /api/users resource.
 /// });
 /// ```
-///
 pub fn guard<T>(predicate: T) -> Guard<T> {
     Guard { predicate }
+}
+
+/// Require that the header associated with `key` matches `predicate`.
+pub fn header<K, V>(key: K, value: V) -> Header<V>
+where
+    K: TryInto<http::HeaderName>,
+    K::Error: Debug,
+{
+    Header {
+        value,
+        key: key.try_into().expect("invalid header name."),
+    }
 }
 
 impl<T, U, App> Middleware<App> for AndThen<T, U>
@@ -112,7 +133,7 @@ where
     U: Middleware<App>,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        match self.predicate.cmp(&request) {
+        match self.guard.predicate.cmp(&request) {
             Ok(_) => self.middleware.call(request, next),
             Err(error) => {
                 let error = error.into();
@@ -128,7 +149,7 @@ where
     U: Middleware<App>,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        if self.predicate.cmp(&request).is_ok() {
+        if self.guard.predicate.cmp(&request).is_ok() {
             self.middleware.call(request, next)
         } else {
             next.call(request)
@@ -137,19 +158,19 @@ where
 }
 
 impl<T> Guard<T> {
+    /// Apply the guard's predicate to `middleware`.
     pub fn and_then<U>(self, middleware: U) -> AndThen<T, U> {
         AndThen {
-            predicate: self.predicate,
             middleware,
+            guard: self,
         }
     }
 
-    /// Return a new middleware that is only called if the predicate in self
-    /// matches the request.
+    /// Call `middleware` when the guard's predicate matches the request.
     pub fn filter<U>(self, middleware: U) -> Filter<T, U> {
         Filter {
-            predicate: self.predicate,
             middleware,
+            guard: self,
         }
     }
 }

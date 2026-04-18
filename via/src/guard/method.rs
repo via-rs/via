@@ -1,12 +1,15 @@
 use super::predicate::{Not, Predicate, not};
 use crate::request::Request;
 
+/// Non-idempotent requests match.
 pub struct IsSafe;
 
+/// Matches a request unless it is read-only.
 pub fn is_mutation() -> Not<IsSafe> {
     not(is_safe())
 }
 
+/// Non-idempotent requests are a match.
 pub fn is_safe() -> IsSafe {
     IsSafe
 }

@@ -41,10 +41,16 @@ async fn main() -> via::Result<ExitCode> {
     // Errors that occur further down the stack generate a JSON response.
     app.middleware(rescue(|error| error.use_json()));
 
-    // Content negotiation
+    // If the client does not speak JSON, deny the request.
     app.middleware(guard((
         header::accept(media::json()),
-        when(method::is_mutation(), header::content_type(media::json())),
+        when(
+            method::is_mutation(),
+            (
+                header::content_type(media::json()),
+                header::content_length(),
+            ),
+        ),
     )));
 
     // Define a route that responds to POST /hello.

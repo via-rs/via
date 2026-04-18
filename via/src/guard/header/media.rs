@@ -1,27 +1,39 @@
-use super::{Tag, TagNoCase, tag, tag_no_case};
-use crate::guard::{Or, Predicate, or};
+use super::{CaseSensitive, Tag, case_sensitive, tag};
+use crate::guard::Predicate;
 
-pub struct Media(Or<(Tag, TagNoCase)>, Option<TagNoCase>);
+/// An essence string with an optional charset.
+///
+/// Essence strings are case insensitive by default. A charset param is both
+/// optional and case insensitive.
+pub struct Media<T = Tag>(T, Option<Tag>);
 
+/// Match `"*/*"(; charset=*)?`.
+pub fn all() -> Media<CaseSensitive> {
+    media(case_sensitive(b"*/*"), None)
+}
+
+/// Match `"text/html"(; charset=utf-8)?`.
 pub fn html() -> Media {
-    media(b"text/html", Some(b"utf-8"))
+    media(tag(b"text/html"), Some(b"utf-8"))
 }
 
+/// Match `"application/json"(; charset=utf-8)?`.
 pub fn json() -> Media {
-    media(b"application/json", Some(b"utf-8"))
+    media(tag(b"application/json"), Some(b"utf-8"))
 }
 
+/// Match `"text/plain"(; charset=utf-8)?`.
 pub fn text() -> Media {
-    media(b"text/plain", Some(b"utf-8"))
+    media(tag(b"text/plain"), Some(b"utf-8"))
 }
 
-pub fn media(essence: &[u8], charset: Option<&[u8]>) -> Media {
-    Media(
-        or((tag(b"*/*"), tag_no_case(essence))),
-        charset.map(tag_no_case),
-    )
+/// The essence charset param match the input. If the predicate and input both
+/// have a charset they must match.
+pub fn media<T>(essence: T, charset: Option<&[u8]>) -> Media<T> {
+    Media(essence, charset.map(tag))
 }
 
+/// The mime's essence and optional charset param match the input.
 #[cfg(feature = "mime")]
 pub fn mime(value: mime::Mime) -> Media {
     media(
@@ -42,7 +54,10 @@ fn charset(input: &[u8]) -> Option<&[u8]> {
     }
 }
 
-impl Predicate<[u8]> for Media {
+impl<T> Predicate<[u8]> for Media<T>
+where
+    for<'a> T: Predicate<[u8], Error<'a> = ()> + 'a,
+{
     type Error<'a> = ();
 
     fn cmp<'a>(&'a self, input: &[u8]) -> Result<(), Self::Error<'a>> {

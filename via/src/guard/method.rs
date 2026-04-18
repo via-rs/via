@@ -9,7 +9,7 @@ pub fn is_mutation() -> Not<IsSafe> {
     not(is_safe())
 }
 
-/// Non-idempotent requests are a match.
+/// Matches non-idempotent requests.
 pub fn is_safe() -> IsSafe {
     IsSafe
 }

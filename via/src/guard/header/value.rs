@@ -5,19 +5,27 @@ pub struct Contains<T = Tag>(T);
 
 macro_rules! cmp_bytes {
     ($(
-        $(#[$doc:meta])?
+        $(#[$($doc:tt)*])?
         $vis:vis fn $ctor:ident($self:ident: &$ty:ident, $rhs:ident: &[u8]) -> bool {
             $matcher:expr
         }
     )+) => {
-        $($vis struct $ty(Vec<u8>);)+
-        $($vis fn $ctor($rhs: &[u8]) -> $ty { $ty($rhs.to_owned()) })+
-        $(impl Predicate<[u8]> for $ty {
-            type Error<'a> = ();
-            fn cmp<'a>(&'a $self, $rhs: &[u8]) -> Result<(), Self::Error<'a>> {
-                if $matcher { Ok(()) } else { Err(()) }
+        $(
+            $(#[$($doc)*])?
+            $vis struct $ty(Vec<u8>);
+
+            $(#[$($doc)*])?
+            $vis fn $ctor($rhs: &[u8]) -> $ty {
+                $ty($rhs.to_owned())
             }
-        })+
+
+            impl Predicate<[u8]> for $ty {
+                type Error<'a> = ();
+                fn cmp<'a>(&'a $self, $rhs: &[u8]) -> Result<(), Self::Error<'a>> {
+                    if $matcher { Ok(()) } else { Err(()) }
+                }
+            }
+        )+
     }
 }
 

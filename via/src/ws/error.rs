@@ -4,7 +4,6 @@ use std::ops::ControlFlow;
 use crate::error::Error;
 use crate::guard::header::DenyHeader;
 
-use http::header::{CONNECTION, SEC_WEBSOCKET_VERSION, UPGRADE};
 #[cfg(feature = "tokio-tungstenite")]
 pub use tungstenite::error::Error as WebSocketError;
 
@@ -71,10 +70,10 @@ impl Display for UpgradeError {
 
 impl<'a> From<DenyHeader<'a>> for UpgradeError {
     fn from(error: DenyHeader<'a>) -> Self {
-        match error.name() {
-            &SEC_WEBSOCKET_VERSION => UpgradeError::SecWebsocketVersion,
-            &CONNECTION => UpgradeError::UpgradeRequired,
-            &UPGRADE => UpgradeError::UnknownUpgradeType,
+        match error.name().as_str() {
+            "sec-websocket-version" => UpgradeError::SecWebsocketVersion,
+            "connection" => UpgradeError::UpgradeRequired,
+            "upgrade" => UpgradeError::UnknownUpgradeType,
             _ => UpgradeError::Other,
         }
     }

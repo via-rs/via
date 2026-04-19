@@ -119,8 +119,11 @@ where
     ///
     /// **Default:** `10s`
     /// **Max:** `30s`
-    pub fn http1_header_read_timeout(mut self, http1_header_read_timeout: Duration) -> Self {
-        self.config.http1_header_read_timeout = http1_header_read_timeout;
+    pub fn http1_header_read_timeout(mut self, duration: Duration) -> Self {
+        self.config.http1_header_read_timeout = (duration <= Duration::from_secs(30))
+            .then_some(duration)
+            .expect("\"http1_header_read_timeout\" exceeds maximum value of 30 seconds.");
+
         self
     }
 

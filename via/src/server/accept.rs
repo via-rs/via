@@ -171,6 +171,7 @@ where
         .max_buf_size(service.config().max_buf_size())
         .pipeline_flush(false)
         .preserve_header_case(false)
+        .header_read_timeout(Some(service.config().http1_header_read_timeout()))
         .timer(TokioTimer::new())
         .title_case_headers(false)
         .serve_connection(io, service)

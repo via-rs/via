@@ -36,6 +36,7 @@ pub(crate) struct ServerConfig {
     max_connections: usize,
     max_request_size: usize,
     shutdown_timeout: Duration,
+    http1_header_read_timeout: Duration,
 
     #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
     tls_handshake_timeout: Duration,
@@ -104,12 +105,25 @@ where
         self
     }
 
-    /// Set the amount of time in seconds that the server will wait for inflight
+    /// Sets the amount of time that the server will wait for inflight
     /// connections to complete before shutting down.
     ///
     /// **Default:** `10s`
     pub fn shutdown_timeout(mut self, shutdown_timeout: Duration) -> Self {
         self.config.shutdown_timeout = shutdown_timeout;
+        self
+    }
+
+    /// If a client does not transmit the entire request head within this time,
+    /// the connection is closed.
+    ///
+    /// **Default:** `10s`
+    /// **Max:** `30s`
+    pub fn http1_header_read_timeout(mut self, duration: Duration) -> Self {
+        self.config.http1_header_read_timeout = (duration <= Duration::from_secs(30))
+            .then_some(duration)
+            .expect("\"http1_header_read_timeout\" exceeds maximum value of 30 seconds.");
+
         self
     }
 
@@ -265,6 +279,10 @@ impl ServerConfig {
     pub fn shutdown_timeout(&self) -> Duration {
         self.shutdown_timeout
     }
+
+    pub fn http1_header_read_timeout(&self) -> Duration {
+        self.http1_header_read_timeout.min(Duration::from_secs(30))
+    }
 }
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
@@ -290,6 +308,7 @@ impl Default for ServerConfig {
             max_connections: 1000,
             max_request_size: 104_857_600, // 100 MB
             shutdown_timeout: Duration::from_secs(10),
+            http1_header_read_timeout: Duration::from_secs(10),
 
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             http2_max_concurrent_streams: Some(64),

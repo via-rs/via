@@ -10,6 +10,7 @@ use std::ptr;
 use std::rc::Rc;
 use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
+use std::time::Duration;
 
 use crate::{Error, err};
 
@@ -499,6 +500,39 @@ impl Payload for Bytes {
     }
 }
 
+macro_rules! impl_timeout_after {
+    ($ty:ident) => {
+        impl $ty {
+            /// Respond with a `408` Request Timeout error if the future is not
+            /// ready within the specified duration.
+            pub async fn timeout_after(self, duration: Duration) -> Result<Aggregate, Error> {
+                let Ok(result) = tokio::time::timeout(duration, self).await else {
+                    crate::deny!(408, "request timeout.");
+                };
+
+                result
+            }
+
+            /// Respond with a `408` Request Timeout error if the future is not
+            /// ready within the specified timeout in seconds.
+            pub fn timeout_after_secs(
+                self,
+                seconds: u64,
+            ) -> impl Future<Output = Result<Aggregate, Error>> {
+                self.timeout_after(Duration::from_secs(seconds))
+            }
+        }
+    };
+}
+
+fn already_read() -> Error {
+    err!(500, "a request body can only be read once.")
+}
+
+fn unknown_frame_type() -> Error {
+    err!(400, "unknown frame type encountered in request.")
+}
+
 impl Coalesce {
     pub fn with_trailers(self) -> WithTrailers {
         WithTrailers {
@@ -508,18 +542,12 @@ impl Coalesce {
     }
 }
 
+impl_timeout_after!(Coalesce);
+
 impl Coalesce {
     pub(super) fn new(body: RequestBody) -> Self {
         Self { body }
     }
-}
-
-fn already_read() -> Error {
-    err!(500, "a request body can only be read once.")
-}
-
-fn unknown_frame_type() -> Error {
-    err!(400, "unknown frame type encountered in request.")
 }
 
 impl Future for Coalesce {
@@ -536,6 +564,8 @@ impl Future for Coalesce {
         Poll::Ready(self.body.finish(None))
     }
 }
+
+impl_timeout_after!(WithTrailers);
 
 impl Future for WithTrailers {
     type Output = Result<Aggregate, Error>;

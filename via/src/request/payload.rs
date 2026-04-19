@@ -604,13 +604,12 @@ impl Body for RequestBody {
         };
 
         if let Some(data) = frame.data_ref() {
-            self.remaining = self
-                .remaining
-                .checked_sub(data.remaining())
-                .ok_or_else(|| {
-                    self.remaining = 0;
-                    Error::payload_too_large()
-                })?;
+            let Some(remaining) = self.remaining.checked_sub(data.remaining()) else {
+                self.remaining = 0;
+                return Poll::Ready(Some(Err(Error::payload_too_large())));
+            };
+
+            self.remaining = remaining;
         }
 
         Poll::Ready(Some(Ok(frame)))

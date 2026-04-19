@@ -23,7 +23,7 @@ async fn hello(request: Request, _: Next) -> via::Result {
     let (body, _app) = request.into_future();
 
     // Aggregate the frames of the request body and then deserialize a Document<Hello>.
-    let hello: Document<Hello> = body.await?.json()?;
+    let hello: Document<Hello> = body.timeout_after_secs(5).await?.json()?;
 
     // Send a JSON response with our greeting message.
     Response::build().json(&Document {

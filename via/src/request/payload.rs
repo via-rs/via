@@ -626,16 +626,11 @@ impl Body for RequestBody {
 
             hint.set_lower(self.body.size_hint().lower());
 
-            if cfg!(debug_assertions) {
-                use std::sync::Once;
-
-                static ONCE: Once = Once::new();
-
-                ONCE.call_once(|| {
-                    print!("warn: a lossy size hint must be used for RequestBody. ");
-                    println!("usize::MAX exceeds u64::MAX on this platform.");
-                });
-            }
+            #[cfg(debug_assertions)]
+            crate::util::once!(|| {
+                print!("warn(via): a lossy size hint must be used for RequestBody. ");
+                println!("usize::MAX exceeds u64::MAX on this platform.");
+            });
 
             return hint;
         };

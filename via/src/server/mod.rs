@@ -114,8 +114,8 @@ where
         self
     }
 
-    /// If a client does not transmit the entire header within this time, the
-    /// connection is closed.
+    /// If a client does not transmit the entire request head within this time,
+    /// the connection is closed.
     ///
     /// **Default:** `10s`
     /// **Max:** `30s`

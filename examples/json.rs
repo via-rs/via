@@ -20,15 +20,15 @@ struct Hello {
 
 async fn hello(request: Request, _: Next) -> via::Result {
     // A future that resolves with the frames that compose the request body.
-    let (future, _app) = request.into_future();
+    let (body, _app) = request.into_future();
 
     // Aggregate the frames of the request body and then deserialize a Document<Hello>.
-    let body: Document<Hello> = future.await?.json()?;
+    let hello: Document<Hello> = body.await?.json()?;
 
     // Send a JSON response with our greeting message.
     Response::build().json(&Document {
         data: Greeting {
-            message: format!("Hello, {}!", &body.data.name),
+            message: format!("Hello, {}!", &hello.data.name),
         },
     })
 }

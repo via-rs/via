@@ -176,7 +176,6 @@ pub struct Aggregate {
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Coalesce {
     body: RequestBody,
-    trailers: Option<HeaderMap>,
 }
 
 #[derive(Debug)]
@@ -184,6 +183,12 @@ pub struct RequestBody {
     remaining: usize,
     body: Incoming,
     frames: Option<Vec<Bytes>>,
+}
+
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct WithTrailers {
+    body: RequestBody,
+    trailers: Option<HeaderMap>,
 }
 
 struct RequestPayload {
@@ -495,11 +500,17 @@ impl Payload for Bytes {
 }
 
 impl Coalesce {
-    pub(super) fn new(body: RequestBody) -> Self {
-        Self {
-            body,
+    pub fn with_trailers(self) -> WithTrailers {
+        WithTrailers {
+            body: self.body,
             trailers: None,
         }
+    }
+}
+
+impl Coalesce {
+    pub(super) fn new(body: RequestBody) -> Self {
+        Self { body }
     }
 }
 
@@ -516,13 +527,28 @@ impl Future for Coalesce {
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         while let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) {
+            let Ok(data) = frame.into_data() else {
+                break;
+            };
+
+            self.body.frames_mut()?.push(data);
+        }
+
+        Poll::Ready(self.body.finish(None))
+    }
+}
+
+impl Future for WithTrailers {
+    type Output = Result<Aggregate, Error>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        while let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) {
             match frame.into_data() {
                 Ok(data) => {
                     self.body.frames_mut()?.push(data);
                 }
                 Err(frame) => {
                     let trailers = frame.into_trailers().map_err(|_| unknown_frame_type())?;
-
                     if let Some(existing) = self.trailers.as_mut() {
                         existing.extend(trailers);
                     } else {
@@ -532,10 +558,8 @@ impl Future for Coalesce {
             }
         }
 
-        Poll::Ready(Ok(Aggregate::new(RequestPayload {
-            frames: self.body.end()?,
-            trailers: self.trailers.take(),
-        })))
+        let trailers = self.trailers.take();
+        Poll::Ready(self.body.finish(trailers))
     }
 }
 
@@ -548,18 +572,19 @@ impl RequestBody {
         }
     }
 
-    fn has_capacity(&self) -> bool {
-        self.body.size_hint().exact().is_none_or(|upper| {
-            u64::try_from(self.remaining).is_ok_and(|remaining| remaining >= upper)
-        })
+    fn finish(&mut self, trailers: Option<HeaderMap>) -> Result<Aggregate, Error> {
+        let frames = self.frames.take().ok_or_else(already_read)?;
+        Ok(Aggregate::new(RequestPayload { frames, trailers }))
     }
 
     fn frames_mut(&mut self) -> Result<&mut Vec<Bytes>, Error> {
         self.frames.as_mut().ok_or_else(already_read)
     }
 
-    fn end(&mut self) -> Result<Vec<Bytes>, Error> {
-        self.frames.take().ok_or_else(already_read)
+    fn has_capacity(&self) -> bool {
+        self.body.size_hint().exact().is_none_or(|upper| {
+            u64::try_from(self.remaining).is_ok_and(|remaining| remaining >= upper)
+        })
     }
 }
 

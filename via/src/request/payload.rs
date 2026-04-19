@@ -527,11 +527,10 @@ impl Future for Coalesce {
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         while let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) {
-            let Ok(data) = frame.into_data() else {
-                break;
-            };
-
-            self.body.frames_mut()?.push(data);
+            let frames = self.body.frames_mut()?;
+            if let Ok(data) = frame.into_data() {
+                frames.push(data);
+            }
         }
 
         Poll::Ready(self.body.finish(None))

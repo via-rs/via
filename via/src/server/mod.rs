@@ -109,8 +109,12 @@ where
     /// connections to complete before shutting down.
     ///
     /// **Default:** `10s`
-    pub fn shutdown_timeout(mut self, shutdown_timeout: Duration) -> Self {
-        self.config.shutdown_timeout = shutdown_timeout;
+    /// **Max:** `30s`
+    pub fn shutdown_timeout(mut self, duration: Duration) -> Self {
+        self.config.shutdown_timeout = (duration <= Duration::from_secs(30))
+            .then_some(duration)
+            .expect("\"shutdown_timeout\" exceeds maximum value of 30 seconds.");
+
         self
     }
 
@@ -277,7 +281,7 @@ impl ServerConfig {
     }
 
     pub fn shutdown_timeout(&self) -> Duration {
-        self.shutdown_timeout
+        self.shutdown_timeout.min(Duration::from_secs(30))
     }
 
     pub fn http1_header_read_timeout(&self) -> Duration {

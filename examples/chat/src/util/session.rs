@@ -3,7 +3,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cookie::{Cookie, Key, SameSite};
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
-use via::{Error, Response, raise};
+use via::guard::{self};
+use via::{Response, deny, err};
 
 use crate::database::Id;
 use crate::database::models::User;
@@ -14,29 +15,41 @@ pub const COOKIE: &str = "via-chat-session";
 const EXPIRES_AT: usize = 8;
 const TOKEN_LEN: usize = 16;
 
+pub type IsAuthenticated = guard::MapErr<fn(()) -> Unauthorized, fn(&Request) -> bool>;
+
 pub trait Authenticate {
     fn authenticate(&mut self, secret: &Key, user: Option<Identity>);
 }
 
 pub trait Session {
     fn session(&self) -> Option<&Identity>;
-    async fn user(&self) -> via::Result<User>;
+    async fn user(&self) -> Result<User, Unauthorized>;
 }
 
 #[derive(Clone, PartialEq)]
 pub struct Identity([u8; 16]);
+
+pub struct Unauthorized;
 
 #[derive(Clone)]
 struct ProtectFromForgery {
     identity: Identity,
 }
 
-pub fn is_authenticated(request: &Request) -> bool {
-    request.session().is_some()
+pub fn is_authenticated() -> IsAuthenticated {
+    guard::map_err(
+        |_| Unauthorized,
+        |request| {
+            request.session().is_some_and(|id| {
+                let now = OffsetDateTime::now_utc().unix_timestamp();
+                id.expires_at().is_ok_and(|timestamp| timestamp > now)
+            })
+        },
+    )
 }
 
 pub fn unauthorized<T>() -> via::Result<T> {
-    raise!(401, message = "unauthorized.");
+    deny!(401, "unauthorized")
 }
 
 pub async fn restore(mut request: Request, next: Next) -> via::Result {
@@ -47,7 +60,7 @@ pub async fn restore(mut request: Request, next: Next) -> via::Result {
         .map(|cookie| cookie.value().parse::<Identity>())
         .transpose()
     else {
-        raise!(400, message = "unknown session cookie format.");
+        deny!(400, "unknown session cookie format.");
     };
 
     if let Some(mut identity) = refresh_token {
@@ -102,16 +115,16 @@ impl Identity {
         Self(buf)
     }
 
-    pub fn user_id(&self) -> Result<Id, Error> {
-        let Ok(bytes) = self.0[..EXPIRES_AT].try_into() else {
-            raise!(400, message = "unknown session cookie format.");
-        };
+    pub fn expires_at(&self) -> Result<i64, Unauthorized> {
+        self.0[EXPIRES_AT..]
+            .try_into()
+            .or(Err(Unauthorized))
+            .map(i64::from_be_bytes)
+    }
 
-        let Ok(id) = Id::new(u64::from_be_bytes(bytes)) else {
-            return unauthorized();
-        };
-
-        Ok(id)
+    pub fn user_id(&self) -> Result<Id, Unauthorized> {
+        let bytes = self.0[..EXPIRES_AT].try_into().or(Err(Unauthorized))?;
+        Id::new(u64::from_be_bytes(bytes)).or(Err(Unauthorized))
     }
 
     fn is_expired(&self) -> bool {
@@ -133,7 +146,7 @@ impl FromStr for Identity {
         let mut buf = [0u8; TOKEN_LEN];
 
         if URL_SAFE_NO_PAD.decode_slice(input, &mut buf).is_err() {
-            raise!(400, message = "unknown session cookie format.");
+            deny!(400, "unknown session cookie format.");
         }
 
         Ok(Identity(buf))
@@ -147,17 +160,16 @@ impl Session for Request {
             .map(|session| &session.identity)
     }
 
-    async fn user(&self) -> via::Result<User> {
+    async fn user(&self) -> Result<User, Unauthorized> {
         let id = self
             .session()
-            .ok_or_else(|| unauthorized::<()>().unwrap_err())
+            .ok_or(Unauthorized)
             .and_then(Identity::user_id)?;
 
-        let Some(user) = self.app().database().find_user(id).await? else {
-            return unauthorized();
-        };
-
-        Ok(user)
+        match self.app().database().find_user(id).await {
+            Ok(Some(user)) => Ok(user),
+            Ok(None) | Err(_) => Err(Unauthorized),
+        }
     }
 }
 
@@ -182,5 +194,11 @@ impl Authenticate for Response {
 
         // Add the session cookie.
         self.cookies_mut().signed_mut(secret).add(cookie);
+    }
+}
+
+impl From<Unauthorized> for via::Error {
+    fn from(_: Unauthorized) -> Self {
+        err!(401, "unauthorized.")
     }
 }

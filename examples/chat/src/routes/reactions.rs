@@ -1,7 +1,7 @@
 use http::StatusCode;
 use serde::Serialize;
 use via::request::PathParams;
-use via::{Error, Payload, Response, raise};
+use via::{Error, Payload, Response, deny};
 
 use super::channels::ChannelMemberParams;
 use crate::database::Id;
@@ -57,11 +57,11 @@ pub async fn show(request: Request, _: Next) -> via::Result {
 }
 
 pub async fn update(_: Request, _: Next) -> via::Result {
-    raise!(message = "todo!")
+    deny!(500, "todo!")
 }
 
 pub async fn destroy(_: Request, _: Next) -> via::Result {
-    raise!(message = "todo!")
+    deny!(500, "todo!")
 }
 
 impl<'a> TryFrom<PathParams<'a>> for ReactionCollectionParams {

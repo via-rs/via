@@ -10,7 +10,7 @@ use via::{Server, collection, cookies, guard, member, rest};
 use database::Database;
 use routes::auth::{login, logout, me};
 use routes::{channels, reactions, threads, users};
-use util::session::{self, is_authenticated, unauthorized};
+use util::session;
 
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
@@ -63,18 +63,17 @@ async fn main() -> Result<ExitCode, Error> {
 
     // The /api/chat route.
     #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    api.route("chat").scope(|chat| {
-        // Opening a web socket requires an authenticated user.
-        chat.middleware(guard(unauthorized, is_authenticated));
-        chat.index().to(via::get(via::ws(routes::chat)));
-    });
+    api.route("chat").to(guard::flat_map(
+        session::is_authenticated(),
+        via::get(via::ws(routes::chat)),
+    ));
 
     // The /api/users resource.
     let mut users = api.route("users").to(via::post(users::create));
     //                                    ^^^^^^^^^^^^^^^^^^^^^^^^
     // Creating an account does not require authentication.
     // However, subsquenet request to users resource must be authenticated.
-    users.middleware(guard(unauthorized, is_authenticated));
+    users.middleware(guard(session::is_authenticated()));
 
     users.index().to(via::get(users::index));
     users.route(":user-id").to(member!(users));
@@ -83,7 +82,7 @@ async fn main() -> Result<ExitCode, Error> {
     let mut channels = api.route("channels");
 
     // All requests to the channels resource must be authenticated.
-    channels.middleware(guard(unauthorized, is_authenticated));
+    channels.middleware(guard(session::is_authenticated()));
 
     channels.index().to(collection!(channels));
     channels.route(":channel-id").scope(|channel| {

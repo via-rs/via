@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use std::fmt::{self, Debug, Display, Formatter};
 use time::OffsetDateTime;
 use uuid::Uuid;
-use via::{Error, raise};
+use via::{Error, deny};
 
 use crate::database::Id;
 
@@ -84,11 +84,11 @@ impl Display for Emoji {
 impl Reaction {
     pub fn new(new_reaction: NewReaction) -> Result<Self, Error> {
         let Some(conversation_id) = new_reaction.conversation_id else {
-            raise!(message = "conversation_id is required.");
+            deny!(500, "conversation_id is required.");
         };
 
         let Some(user_id) = new_reaction.user_id else {
-            raise!(message = "user_id is required.");
+            deny!(500, "user_id is required.");
         };
 
         Ok(Self {

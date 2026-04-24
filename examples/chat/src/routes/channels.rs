@@ -1,6 +1,6 @@
 use serde::Serialize;
 use via::request::PathParams;
-use via::{Error, raise};
+use via::{Error, deny};
 
 use crate::database::Id;
 use crate::{Next, Request};
@@ -16,23 +16,23 @@ pub async fn authorization(request: Request, next: Next) -> via::Result {
 }
 
 pub async fn index(_: Request, _: Next) -> via::Result {
-    raise!(message = "todo!")
+    deny!(500, "todo!")
 }
 
 pub async fn create(_: Request, _: Next) -> via::Result {
-    raise!(message = "todo!")
+    deny!(500, "todo!")
 }
 
 pub async fn show(_: Request, _: Next) -> via::Result {
-    raise!(message = "todo!")
+    deny!(500, "todo!")
 }
 
 pub async fn update(_: Request, _: Next) -> via::Result {
-    raise!(message = "todo!")
+    deny!(500, "todo!")
 }
 
 pub async fn destroy(_: Request, _: Next) -> via::Result {
-    raise!(message = "todo!")
+    deny!(500, "todo!")
 }
 
 impl<'a> TryFrom<PathParams<'a>> for ChannelMemberParams {

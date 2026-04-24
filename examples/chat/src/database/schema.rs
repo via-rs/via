@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::{fs, io};
 use tokio::sync::{mpsc, oneshot};
+use via::deny;
 use via::error::{BoxError, Error};
-use via::raise;
 
 use super::models::*;
 use super::table::{Id, Table};
@@ -151,10 +151,10 @@ impl Database {
 
         self.tx.send(Command::InsertUser { tx, new_user }).await?;
         let Ok(result) = rx.await else {
-            raise!(500);
+            deny!(500, "internal server error.");
         };
 
-        result.or_else(|error| raise!(boxed = error))
+        result.map_err(Error::from_source)
     }
 
     pub async fn find_user(&self, id: Id) -> Result<Option<User>, Error> {

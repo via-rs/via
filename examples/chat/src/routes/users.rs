@@ -1,5 +1,5 @@
 use http::StatusCode;
-use via::{Payload, Response, raise};
+use via::{Payload, Response, deny};
 
 use crate::database::Identify;
 use crate::database::models::NewUser;
@@ -7,7 +7,7 @@ use crate::util::{Authenticate, Body, Identity};
 use crate::{Next, Request};
 
 pub async fn index(_: Request, _: Next) -> via::Result {
-    raise!(message = "todo!")
+    deny!(500, "todo!")
 }
 
 pub async fn create(request: Request, _: Next) -> via::Result {
@@ -26,14 +26,14 @@ pub async fn create(request: Request, _: Next) -> via::Result {
 pub async fn show(request: Request, _: Next) -> via::Result {
     let id = request.param("user-id").parse()?;
     let Some(user) = request.app().database().find_user(id).await? else {
-        raise!(404, message = "not found")
+        deny!(404, "not found.")
     };
 
     Response::build().json(&Body::new(user))
 }
 
 pub async fn update(_: Request, _: Next) -> via::Result {
-    raise!(message = "todo!")
+    deny!(500, "todo!")
 }
 
 pub async fn destroy(request: Request, _: Next) -> via::Result {
@@ -42,6 +42,6 @@ pub async fn destroy(request: Request, _: Next) -> via::Result {
     if request.app().database().delete_user(id).await?.is_some() {
         Response::build().status(StatusCode::NO_CONTENT).finish()
     } else {
-        raise!(404, message = "not found")
+        deny!(404, "not found.")
     }
 }

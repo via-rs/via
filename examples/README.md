@@ -17,22 +17,25 @@ curl http://localhost:8080/hello/Via
 # => Hello, Via!
 ```
 
+## chat
+
+An in-memory ephemeral chat example with a REST API.
+
+### Running the Example
+
+```sh
+cargo run --example chat --features="<aws-lc-rs|ring> <tokio-tungstenite|tokio-websockets>"
+```
+
+
 ## echo
 
 The classic echo server example with a ws relay for GET requests.
 
 ### Running the Example
 
-**Tungstenite**
-
 ```sh
-cargo run --example echo --features="tokio-tungstenite"
-```
-
-**tokio-websockets**
-
-```sh
-cargo run --example echo --features="tokio-websockets"
+cargo run --example echo --features="<aws-lc-rs|ring> <tokio-tungstenite|tokio-websockets>"
 ```
 
 ---

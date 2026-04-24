@@ -29,8 +29,7 @@ pub struct Bind<T, U> {
 ///
 /// ```no_run
 /// use std::process::ExitCode;
-/// use via::guard::{method, guard};
-/// use via::{Request, Next, Server};
+/// use via::{Request, Next, Server, guard};
 ///
 /// async fn cache(request: Request, next: Next) -> via::Result {
 ///     todo!("implement a simple response cache.");
@@ -41,7 +40,7 @@ pub struct Bind<T, U> {
 ///     let mut app = via::app(());
 ///
 ///     // Non-idempotent requests will run the cache middleware.
-///     app.middleware(guard(method::is_safe()).filter(cache));
+///     app.middleware(guard::filter(guard::method::is_safe(), cache));
 ///
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
 /// }

@@ -1,6 +1,7 @@
 use bitflags::bitflags;
 use std::fmt::{self, Display, Formatter};
 
+use crate::guard::Predicate;
 use crate::middleware::{BoxFuture, Middleware};
 use crate::next::{Continue, Next};
 use crate::{Error, Request};
@@ -26,10 +27,6 @@ pub struct Deny {
 pub(crate) struct MethodNotAllowed {
     allow: Mask,
     method: Mask,
-}
-
-trait Predicate {
-    fn matches(&self, other: &Mask) -> bool;
 }
 
 bitflags! {
@@ -172,17 +169,36 @@ impl MethodNotAllowed {
     }
 }
 
-impl<T> Predicate for Allow<T> {
+impl<T> Predicate<Mask> for Allow<T>
+where
+    for<'a> T: 'a,
+{
+    type Error<'a> = ();
+
     #[inline]
-    fn matches(&self, other: &Mask) -> bool {
-        self.mask.contains(*other)
+    fn cmp<'a>(&'a self, other: &Mask) -> Result<(), Self::Error<'a>> {
+        if self.mask.contains(*other) {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 
-impl<T, U> Predicate for Branch<T, U> {
+impl<T, U> Predicate<Mask> for Branch<T, U>
+where
+    for<'a> T: 'a,
+    for<'a> U: 'a,
+{
+    type Error<'a> = ();
+
     #[inline]
-    fn matches(&self, other: &Mask) -> bool {
-        self.mask.contains(*other)
+    fn cmp<'a>(&'a self, other: &Mask) -> Result<(), Self::Error<'a>> {
+        if self.mask.contains(*other) {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -197,14 +213,14 @@ where
 
 impl<T, OrElse, App> Middleware<App> for Branch<T, OrElse>
 where
-    T: Middleware<App> + Predicate,
+    T: Middleware<App> + Predicate<Mask>,
     OrElse: Middleware<App>,
 {
     #[inline(always)]
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
         let mask = request.method().into();
 
-        if self.middleware.matches(&mask) {
+        if self.middleware.cmp(&mask).is_ok() {
             self.middleware.call(request, next)
         } else {
             self.or_else.call(request, next)

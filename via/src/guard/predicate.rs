@@ -205,3 +205,15 @@ where
         Ok(())
     }
 }
+
+impl<F, Input> Predicate<Input> for F
+where
+    Input: ?Sized,
+    for<'a> F: Fn(&Input) -> bool + Copy + 'a,
+{
+    type Error<'a> = ();
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
+        if (self)(input) { Ok(()) } else { Err(()) }
+    }
+}

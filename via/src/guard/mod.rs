@@ -18,7 +18,7 @@ pub type Content<T, U> = (
 );
 
 /// Apply a guard's predicate to an individual middleware.
-pub struct AndThen<T, U> {
+pub struct Bind<T, U> {
     middleware: U,
     guard: Guard<T>,
 }
@@ -112,7 +112,7 @@ pub fn content<T, U>(accepts: T, provides: U) -> Guard<Content<T, U>> {
     ))
 }
 
-impl<T, U, App> Middleware<App> for AndThen<T, U>
+impl<T, U, App> Middleware<App> for Bind<T, U>
 where
     T: Predicate<Request<App>> + Send + Sync,
     for<'a> T::Error<'a>: Into<Error>,
@@ -145,8 +145,8 @@ where
 
 impl<T> Guard<T> {
     /// Apply the guard's predicate to `middleware`.
-    pub fn and_then<U>(self, middleware: U) -> AndThen<T, U> {
-        AndThen {
+    pub fn bind<U>(self, middleware: U) -> Bind<T, U> {
+        Bind {
             middleware,
             guard: self,
         }

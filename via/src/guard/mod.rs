@@ -17,12 +17,6 @@ pub type Content<T, U> = (
     When<Not<method::IsSafe>, (Header<T>, Header<Wildcard>)>,
 );
 
-/// Apply a guard's predicate to an individual middleware.
-pub struct Bind<T, U> {
-    predicate: T,
-    middleware: U,
-}
-
 /// Skip a middleware if the guard's predicate does not match the request.
 ///
 /// # Example
@@ -46,6 +40,12 @@ pub struct Bind<T, U> {
 /// }
 /// ```
 pub struct Filter<T, U> {
+    predicate: T,
+    middleware: U,
+}
+
+/// Apply a guard's predicate to an individual middleware.
+pub struct FlatMap<T, U> {
     predicate: T,
     middleware: U,
 }
@@ -91,8 +91,8 @@ pub fn filter<T, U>(predicate: T, middleware: U) -> Filter<T, U> {
 /// Confirm that the request matches `predicate` before calling `middleware`.
 ///
 /// Unlike [`guard`], the provided predicate only applies to `middleware`.
-pub fn bind<T, U>(predicate: T, middleware: U) -> Bind<T, U> {
-    Bind {
+pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
+    FlatMap {
         predicate,
         middleware,
     }
@@ -132,7 +132,7 @@ pub fn content<T, U>(accepts: T, provides: U) -> Guard<Content<T, U>> {
     ))
 }
 
-impl<T, U, App> Middleware<App> for Bind<T, U>
+impl<T, U, App> Middleware<App> for FlatMap<T, U>
 where
     T: Predicate<Request<App>> + Send + Sync,
     for<'a> T::Error<'a>: Into<Error>,

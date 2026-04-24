@@ -19,8 +19,8 @@ pub type Content<T, U> = (
 
 /// Apply a guard's predicate to an individual middleware.
 pub struct Bind<T, U> {
+    predicate: T,
     middleware: U,
-    guard: Guard<T>,
 }
 
 /// Skip a middleware if the guard's predicate does not match the request.
@@ -47,8 +47,8 @@ pub struct Bind<T, U> {
 /// }
 /// ```
 pub struct Filter<T, U> {
+    predicate: T,
     middleware: U,
-    guard: Guard<T>,
 }
 
 /// Stop processing the request and respond if the provided predicate fails.
@@ -81,7 +81,28 @@ pub struct Guard<T> {
     predicate: T,
 }
 
-/// Confirm that request matches the provided predicate before proceeding.
+/// Call `middleware` if `predicate` matches the request.
+pub fn filter<T, U>(predicate: T, middleware: U) -> Filter<T, U> {
+    Filter {
+        predicate,
+        middleware,
+    }
+}
+
+/// Confirm that the request matches `predicate` before calling `middleware`.
+///
+/// Unlike [`guard`], the provided predicate only applies to `middleware`.
+pub fn bind<T, U>(predicate: T, middleware: U) -> Bind<T, U> {
+    Bind {
+        predicate,
+        middleware,
+    }
+}
+
+/// Deny the request if it does not match `predicate`.
+///
+/// Guard is preferred when you want every request to a subtree of your app to
+/// match `predicate`.
 pub fn guard<T>(predicate: T) -> Guard<T> {
     Guard { predicate }
 }
@@ -119,7 +140,7 @@ where
     U: Middleware<App>,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        match self.guard.predicate.cmp(&request) {
+        match self.predicate.cmp(&request) {
             Ok(_) => self.middleware.call(request, next),
             Err(error) => {
                 let error = error.into();
@@ -135,28 +156,10 @@ where
     U: Middleware<App>,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-        if self.guard.predicate.cmp(&request).is_ok() {
+        if self.predicate.cmp(&request).is_ok() {
             self.middleware.call(request, next)
         } else {
             next.call(request)
-        }
-    }
-}
-
-impl<T> Guard<T> {
-    /// Apply the guard's predicate to `middleware`.
-    pub fn bind<U>(self, middleware: U) -> Bind<T, U> {
-        Bind {
-            middleware,
-            guard: self,
-        }
-    }
-
-    /// Call `middleware` when the guard's predicate matches the request.
-    pub fn filter<U>(self, middleware: U) -> Filter<T, U> {
-        Filter {
-            middleware,
-            guard: self,
         }
     }
 }

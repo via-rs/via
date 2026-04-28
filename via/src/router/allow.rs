@@ -232,7 +232,7 @@ impl<App> Middleware<App> for Deny {
     fn call(&self, request: Request<App>, _: Next<App>) -> BoxFuture {
         let error = Error::method_not_allowed(MethodNotAllowed {
             allow: self.allow,
-            method: request.envelope().method().into(),
+            method: request.method().into(),
         });
 
         Box::pin(async { Err(error) })

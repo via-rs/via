@@ -40,9 +40,7 @@ impl<App> Next<App> {
     /// use via::{Request, Next};
     ///
     /// async fn logger(request: Request, next: Next) -> via::Result {
-    ///     let head = request.envelope();
-    ///
-    ///     println!("{} -> {}", head.method(), head.uri().path());
+    ///     println!("{} -> {}", request.method(), request.uri().path());
     ///     next.call(request).await.inspect(|response| {
     ///         println!("<- {}", response.status());
     ///     })

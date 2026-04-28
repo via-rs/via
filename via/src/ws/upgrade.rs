@@ -17,8 +17,8 @@ use super::io::UpgradedIo;
 use super::run::RunTask;
 use super::util::{Base64EncodedDigest, sha1};
 use super::{Channel, Request};
-use crate::guard::header::{CaseSensitive, Contains, DenyHeader, Header};
-use crate::guard::{self, MapErr, Predicate, header};
+use crate::guard::header::{CaseSensitive, Contains, Header};
+use crate::guard::{Predicate, header};
 use crate::ws::error::UpgradeError;
 use crate::{BoxFuture, Error, Middleware, Next, Response, ResultExt};
 
@@ -26,10 +26,7 @@ const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 
 pub struct Ws<T> {
     listener: Arc<Listener<T>>,
-    guard: MapErr<
-        fn(DenyHeader<'_>) -> UpgradeError,
-        (Header<CaseSensitive>, Header<Contains>, Header<Contains>),
-    >,
+    guard: (Header<CaseSensitive>, Header<Contains>, Header<Contains>),
 }
 
 pub(super) struct Listener<T> {
@@ -117,13 +114,10 @@ impl<T> Ws<T> {
                     max_message_size: Some(DEFAULT_FRAME_SIZE),
                 },
             }),
-            guard: guard::map_err(
-                |error| error.into(),
-                (
-                    header(h::SEC_WEBSOCKET_VERSION, header::case_sensitive(b"13")),
-                    header(h::CONNECTION, header::contains(header::tag(b"upgrade"))),
-                    header(h::UPGRADE, header::contains(header::tag(b"websocket"))),
-                ),
+            guard: (
+                header(h::SEC_WEBSOCKET_VERSION, header::case_sensitive(b"13")),
+                header(h::CONNECTION, header::contains(header::tag(b"upgrade"))),
+                header(h::UPGRADE, header::contains(header::tag(b"websocket"))),
             ),
         }
     }
@@ -161,12 +155,13 @@ impl<T> Ws<T> {
 impl<T> Ws<T> {
     #[inline]
     fn validate(&self, headers: &HeaderMap) -> Result<Base64EncodedDigest, UpgradeError> {
-        self.guard
-            .cmp(headers)
-            .and_then(|_| match headers.get(h::SEC_WEBSOCKET_KEY) {
+        self.guard.cmp(headers).map_or_else(
+            |error| Err(error.into()),
+            |_| match headers.get(h::SEC_WEBSOCKET_KEY) {
                 Some(key) => sha1(key.as_bytes()),
                 None => Err(UpgradeError::SecWebsocketKey),
-            })
+            },
+        )
     }
 }
 

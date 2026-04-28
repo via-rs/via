@@ -161,13 +161,8 @@ impl<App> Request<App> {
         self.app.clone()
     }
 
-    #[inline]
-    pub fn envelope(&self) -> &Envelope {
-        &self.envelope
-    }
-
     delegate! {
-        to self.envelope() {
+        to self.envelope {
             /// Returns a reference to the request's method.
             pub fn method(&self) -> &Method;
 
@@ -179,33 +174,19 @@ impl<App> Request<App> {
 
             /// Returns a reference to the request's headers.
             pub fn headers(&self) -> &HeaderMap;
-        }
-    }
 
-    /// Returns reference to the cookies associated with the request.
-    #[inline]
-    pub fn cookies(&self) -> &CookieJar {
-        self.envelope().cookies()
-    }
+            /// Returns reference to the cookies associated with the request.
+            pub fn cookies(&self) -> &CookieJar;
 
-    /// Returns a mutable reference to the cookies associated with the request.
-    pub fn cookies_mut(&mut self) -> &mut CookieJar {
-        self.envelope.cookies_mut()
-    }
+            /// Returns a mutable reference to the cookies associated with the request.
+            pub fn cookies_mut(&mut self) -> &mut CookieJar;
 
-    /// Returns a reference to the associated extensions.
-    pub fn extensions(&self) -> &Extensions {
-        self.envelope().extensions()
-    }
+            /// Returns a reference to the associated extensions.
+            pub fn extensions(&self) -> &Extensions;
 
-    /// Returns a mutable reference to the associated extensions.
-    #[inline]
-    pub fn extensions_mut(&mut self) -> &mut Extensions {
-        self.envelope.extensions_mut()
-    }
+            /// Returns a mutable reference to the associated extensions.
+            pub fn extensions_mut(&mut self) -> &mut Extensions;
 
-    delegate! {
-        to self.envelope() {
             /// Returns reference to the cookies associated with the request.
             pub fn param<'b>(&self, name: &'b str) -> PathParam<'_, 'b>;
 
@@ -239,7 +220,7 @@ impl<App> Request<App> {
 impl<App> Debug for Request<App> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("Request")
-            .field("envelope", self.envelope())
+            .field("envelope", &self.envelope)
             .field("body", &self.body)
             .field("app", &self.app)
             .finish()

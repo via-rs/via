@@ -68,8 +68,8 @@ impl Display for UpgradeError {
     }
 }
 
-impl<'a> From<DenyHeader<'a>> for UpgradeError {
-    fn from(error: DenyHeader<'a>) -> Self {
+impl From<DenyHeader<'_>> for UpgradeError {
+    fn from(error: DenyHeader<'_>) -> Self {
         match error.name().as_str() {
             "sec-websocket-version" => UpgradeError::SecWebsocketVersion,
             "connection" => UpgradeError::UpgradeRequired,

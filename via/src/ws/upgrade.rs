@@ -2,6 +2,7 @@ use http::StatusCode;
 use http::header::{self as h, HeaderMap};
 use std::future::Future;
 use std::sync::Arc;
+use tokio::task::coop::unconstrained;
 
 #[cfg(feature = "tokio-tungstenite")]
 use tokio_tungstenite::{
@@ -89,7 +90,7 @@ where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send + 'static,
 {
-    let err = match handshake(&mut request, &listener.config).await {
+    let err = match unconstrained(handshake(&mut request, &listener.config)).await {
         Err(error) => Some(error),
         Ok(stream) => {
             let task = RunTask::new(listener, request, stream);

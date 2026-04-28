@@ -51,7 +51,7 @@ fn configure<T>(listener: &mut Arc<Listener<T>>) -> &mut WsConfig {
 }
 
 #[cfg(feature = "tokio-tungstenite")]
-async fn open<App>(
+async fn handshake<App>(
     request: &mut Request<App>,
     config: &WsConfig,
 ) -> Result<WebSocketStream<UpgradedIo>, Error> {
@@ -68,7 +68,7 @@ async fn open<App>(
 }
 
 #[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
-async fn open<App>(
+async fn handshake<App>(
     request: &mut Request<App>,
     config: &WsConfig,
 ) -> Result<WebSocketStream<UpgradedIo>, Error> {
@@ -89,7 +89,7 @@ where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send + 'static,
 {
-    let err = match open(&mut request, &listener.config).await {
+    let err = match handshake(&mut request, &listener.config).await {
         Err(error) => Some(error),
         Ok(stream) => {
             let task = RunTask::new(listener, request, stream);

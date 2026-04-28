@@ -14,7 +14,6 @@ async fn hello(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
     // ownership of the request to the next middleware. In this example, we are
     // using the signed cookie jar to store and retrieve the "counter" cookie.
     let mut counter = request
-        .envelope()
         .cookies()
         .signed(&app.secret)
         .get("counter")

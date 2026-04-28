@@ -55,7 +55,7 @@ async fn open<App>(
     request: &mut Request<App>,
     config: &WsConfig,
 ) -> Result<WebSocketStream<UpgradedIo>, Error> {
-    let on_upgrade = request.on_upgrade.take().ok_or(UpgradeError::Other)?;
+    let on_upgrade = request.on_upgrade.take().expect("already upgraded.");
     let upgraded = UpgradedIo::new(on_upgrade.await?);
     let config = WebSocketConfig::default()
         .accept_unmasked_frames(false)
@@ -74,7 +74,7 @@ async fn open<App>(
 ) -> Result<WebSocketStream<UpgradedIo>, Error> {
     use tokio_websockets::{Config, Limits, server::Builder};
 
-    let on_upgrade = request.on_upgrade.take().ok_or(UpgradeError::Other)?;
+    let on_upgrade = request.on_upgrade.take().expect("already upgraded.");
     let upgraded = UpgradedIo::new(on_upgrade.await?);
     let limits = Limits::default().max_payload_len(config.max_message_size);
     let config = Config::default()

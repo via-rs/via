@@ -219,18 +219,18 @@ impl<'a, App> Route<'a, App> {
     /// # Example
     ///
     /// ```
-    /// # use via::{Next, Request, deny};
+    /// # use via::{Next, Request, cookies, deny};
     /// # let mut app = via::app(());
     /// #
     /// // Provides application-wide support for request and response cookies.
-    /// app.middleware(via::cookies(["is-admin"]));
+    /// app.middleware(cookies(["is-admin"]));
     ///
     /// // Requests made to /admin or any of its descendants must have an
     /// // is-admin cookie present on the request.
     /// app.route("/admin").middleware(async |request: Request, next: Next| {
     ///     // We suggest using signed cookies to prevent tampering.
     ///     // See the cookies example in our git repo for more information.
-    ///     if request.envelope().cookies().get("is-admin").is_none() {
+    ///     if request.cookies().get("is-admin").is_none() {
     ///         deny!(401);
     ///     }
     ///

@@ -243,6 +243,9 @@ where
                 Poll::Ready(Err(error))
             }
             Poll::Ready(Err(ControlFlow::Continue(error))) => {
+                #[cfg(not(debug_assertions))]
+                let _ = error;
+
                 log!(warn(2), "{}", &error);
 
                 this.reconnect();

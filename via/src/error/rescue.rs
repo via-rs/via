@@ -2,6 +2,7 @@ use http::StatusCode;
 use http::header::ALLOW;
 use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 
 use super::{Error, ErrorSourceRef, Errors};
 use crate::middleware::{BoxFuture, Middleware};
@@ -11,7 +12,7 @@ use crate::{Next, Request};
 /// Recover from errors that occur in downstream middleware.
 ///
 pub struct Rescue<F> {
-    recover: Box<F>,
+    recover: Arc<F>,
 }
 
 /// Customize how an [`Error`] is converted to a response.
@@ -29,7 +30,7 @@ where
     F: Fn(&mut Sanitizer) + Copy + Send + Sync,
 {
     Rescue {
-        recover: Box::new(recover),
+        recover: Arc::new(recover),
     }
 }
 
@@ -38,13 +39,13 @@ where
     F: Fn(&mut Sanitizer) + Copy + Send + Sync + Sized + 'static,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
+        let recover = Arc::clone(&self.recover);
         let future = next.call(request);
-        let recover = *self.recover;
 
         Box::pin(async move {
             future.await.or_else(|mut error| {
                 let mut sanitizer = Sanitizer::new(&mut error);
-                recover(&mut sanitizer);
+                (recover)(&mut sanitizer);
 
                 let response = Response::build();
                 sanitizer.finalize(response).or_else(|residual| {

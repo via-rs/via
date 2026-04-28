@@ -45,7 +45,7 @@ where
         Box::pin(async move {
             future.await.or_else(|mut error| {
                 let mut sanitizer = Sanitizer::new(&mut error);
-                (&*recover)(&mut sanitizer);
+                (recover)(&mut sanitizer);
 
                 let response = Response::build();
                 sanitizer.finalize(response).or_else(|residual| {

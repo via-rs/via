@@ -48,6 +48,7 @@ impl Acceptor for TcpAcceptor {
     type Error = Infallible;
     type Stream = TcpStream;
 
+    #[allow(clippy::manual_async_fn)]
     fn accept(
         &self,
         _: TcpStream,

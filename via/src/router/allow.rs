@@ -32,12 +32,12 @@ pub(crate) struct MethodNotAllowed {
 bitflags! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct Mask: u8 {
-        const DELETE  = 1 << 0;
-        const GET     = 1 << 1;
+        const GET     = 1 << 0;
+        const POST    = 1 << 1;
         const HEAD    = 1 << 2;
         const OPTIONS = 1 << 3;
         const PATCH   = 1 << 4;
-        const POST    = 1 << 5;
+        const DELETE  = 1 << 5;
         const PUT     = 1 << 6;
         const TRACE   = 1 << 7;
     }

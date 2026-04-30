@@ -118,7 +118,7 @@ where
             async move {
                 let io = timeout(service.config().tls_handshake_timeout(), handshake).await??;
 
-                if matches!(*io.preferred_alpn(), Alpn::HTTP_2) {
+                if *io.preferred_alpn() == Alpn::HTTP_2 {
                     let io = IoWithPermit::new(io, permit);
                     let serve = serve_http2_connection(io, service, cancellation);
 

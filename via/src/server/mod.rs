@@ -12,8 +12,8 @@ use tokio::net::{TcpListener, ToSocketAddrs};
 
 use crate::app::{ServiceAdapter, Via};
 use crate::error::Error;
+
 use accept::accept;
-use io::IoWithPermit;
 use tls::TcpAcceptor;
 
 #[cfg(feature = "native-tls")]
@@ -21,6 +21,26 @@ use tls::NativeTlsAcceptor;
 
 #[cfg(feature = "rustls-23")]
 use tls::RustlsAcceptor;
+
+#[cfg(all(
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
+    not(feature = "rustls-23"),
+    feature = "native-tls",
+))]
+pub(crate) type IoStream = io::IoWithPermit<tls::NativeTlsStream>;
+
+#[cfg(all(
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
+    not(feature = "native-tls"),
+    feature = "rustls-23",
+))]
+pub(crate) type IoStream = io::IoWithPermit<tls::RustlsStream>;
+
+#[cfg(all(
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
+    not(any(feature = "native-tls", feature = "rustls-23"))
+))]
+pub(crate) type IoStream = io::IoWithPermit<tokio::net::TcpStream>;
 
 /// Serve an app over HTTP.
 ///

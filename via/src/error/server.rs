@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io;
@@ -46,6 +47,12 @@ impl Error for ServerError {
 impl From<Elapsed> for ServerError {
     fn from(_: Elapsed) -> Self {
         Self::Other(Box::new(HandshakeTimeoutError))
+    }
+}
+
+impl From<Infallible> for ServerError {
+    fn from(_: Infallible) -> Self {
+        unreachable!()
     }
 }
 

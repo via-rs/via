@@ -22,13 +22,24 @@ use tls::NativeTlsAcceptor;
 #[cfg(feature = "rustls-23")]
 use tls::RustlsAcceptor;
 
-#[cfg(all(feature = "native-tls", not(feature = "rustls-23")))]
+#[cfg(all(
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
+    not(feature = "rustls-23"),
+    feature = "native-tls",
+))]
 pub(crate) type IoStream = io::IoWithPermit<tls::NativeTlsStream>;
 
-#[cfg(all(feature = "rustls-23", not(feature = "native-tls")))]
+#[cfg(all(
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
+    not(feature = "native-tls"),
+    feature = "rustls-23",
+))]
 pub(crate) type IoStream = io::IoWithPermit<tls::RustlsStream>;
 
-#[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+#[cfg(all(
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
+    not(any(feature = "native-tls", feature = "rustls-23"))
+))]
 pub(crate) type IoStream = io::IoWithPermit<tokio::net::TcpStream>;
 
 /// Serve an app over HTTP.

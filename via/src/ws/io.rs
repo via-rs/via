@@ -5,16 +5,23 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use super::error::UpgradeError;
+use crate::server::IoStream;
+
 pub struct UpgradedIo {
-    io: TokioIo<Upgraded>,
+    io: TokioIo<IoStream>,
 }
 
 impl UpgradedIo {
     #[inline]
-    pub fn new(io: Upgraded) -> Self {
-        Self {
-            io: TokioIo::new(io),
-        }
+    pub fn new(io: Upgraded) -> Result<Self, UpgradeError> {
+        let Ok(parts) = io.downcast() else {
+            return Err(UpgradeError::Other);
+        };
+
+        Ok(Self {
+            io: TokioIo::new(parts.io),
+        })
     }
 }
 

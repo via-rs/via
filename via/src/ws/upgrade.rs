@@ -54,7 +54,7 @@ async fn handshake<App>(
     config: &WsConfig,
 ) -> Result<WebSocketStream<UpgradedIo>, Error> {
     let on_upgrade = request.on_upgrade.take().expect("already upgraded.");
-    let upgraded = UpgradedIo::new(on_upgrade.await?);
+    let upgraded = UpgradedIo::new(on_upgrade.await?)?;
     let config = WebSocketConfig::default()
         .accept_unmasked_frames(false)
         .read_buffer_size(config.buffer_size)

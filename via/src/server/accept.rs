@@ -13,14 +13,33 @@ use tokio::time::timeout;
 use hyper_util::rt::TokioExecutor;
 
 use super::cancel::Cancellation;
-use super::{IoWithPermit, tls};
+use super::io::IoWithPermit;
+use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
 use crate::error::ServerError;
+
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+use super::tls::{Alpn, NegotiateAlpn};
 
 macro_rules! log {
     ($($arg:tt)*) => {
         if cfg!(debug_assertions) {
             eprintln!($($arg)*)
+        }
+    };
+}
+
+macro_rules! serve_unless_cancelled {
+    ($cancellation:ident, $connection:ident) => {
+        tokio::select! {
+            // The connection future is ready.
+            result = &mut $connection => result?,
+            // A graceful shutdown signal was sent to the process.
+            _ = $cancellation.wait() => {
+                let mut $connection = Pin::new(&mut $connection);
+                $connection.as_mut().graceful_shutdown();
+                $connection.await?;
+            }
         }
     };
 }
@@ -33,8 +52,8 @@ pub(super) async fn accept<App, TlsAcceptor>(
 where
     App: Send + Sync + 'static,
     ServerError: From<TlsAcceptor::Error>,
-    TlsAcceptor: tls::Acceptor,
-    TlsAcceptor::Io: Send + Unpin + 'static,
+    TlsAcceptor: Acceptor,
+    TlsAcceptor::Stream: Send + Unpin + 'static,
 {
     #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
     drop(acceptor);
@@ -53,9 +72,6 @@ where
     // Start accepting incoming connections.
     let exit_code = loop {
         let (io, _) = tokio::select! {
-            // Keep tail latency low when the server is at capacity.
-            biased;
-
             // A new TCP stream was accepted from the listener.
             result = listener.accept() => match result {
                 Ok(stream) => stream,
@@ -75,7 +91,6 @@ where
                     break ExitCode::FAILURE;
                 }
             },
-
             // A graceful shutdown signal was sent to the process.
             _ = cancellation.wait() => {
                 break ExitCode::SUCCESS;
@@ -96,19 +111,23 @@ where
         // Spawn a task to serve the connection.
         #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
         connections.spawn({
-            let handshake = timeout(
-                service.config().tls_handshake_timeout(),
-                acceptor.accept(io),
-            );
+            let handshake = acceptor.accept(io);
 
+            // native-tls task size: 1952
+            // rustls task size: 1712
             async move {
-                let (io, alpn) = handshake.await??;
-                let io = IoWithPermit::new(io, permit);
+                let io = timeout(service.config().tls_handshake_timeout(), handshake).await??;
 
-                if alpn == tls::Alpn::HTTP_2 {
-                    serve_http2_connection(io, service, cancellation).await
+                if matches!(*io.preferred_alpn(), Alpn::HTTP_2) {
+                    let io = IoWithPermit::new(io, permit);
+                    let serve = serve_http2_connection(io, service, cancellation);
+
+                    serve.await
                 } else {
-                    serve_http1_connection(io, service, cancellation).await
+                    let io = IoWithPermit::new(io, permit);
+                    let serve = serve_http1_connection(io, service, cancellation);
+
+                    serve.await
                 }
             }
         });
@@ -116,7 +135,9 @@ where
         #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
         connections.spawn(async move {
             let io = IoWithPermit::new(io, permit);
-            serve_http1_connection(io, service, cancellation).await
+            let serve = serve_http1_connection(io, service, cancellation);
+
+            serve.await
         });
 
         if connections.len() >= 1024 {
@@ -162,7 +183,7 @@ where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let connection = http1::Builder::new()
+    let mut connection = http1::Builder::new()
         .allow_multiple_spaces_in_request_line_delimiters(false)
         .auto_date_header(true)
         .half_close(false)
@@ -177,20 +198,7 @@ where
         .serve_connection(io, service)
         .with_upgrades();
 
-    tokio::pin!(connection);
-
-    tokio::select! {
-        // Keep tail latency low when the server is at capacity.
-        biased;
-        // The connection future is ready.
-        result = connection.as_mut() => result?,
-        // A graceful shutdown signal was sent to the process.
-        _ = cancellation.wait() => {
-            connection.as_mut().graceful_shutdown();
-            connection.await?;
-        }
-    }
-
+    serve_unless_cancelled!(cancellation, connection);
     Ok(())
 }
 
@@ -204,7 +212,7 @@ where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let connection = http2::Builder::new(TokioExecutor::new())
+    let mut connection = http2::Builder::new(TokioExecutor::new())
         .adaptive_window(false)
         .auto_date_header(true)
         .max_header_list_size(16384) // 16 KB
@@ -216,19 +224,7 @@ where
         .timer(TokioTimer::new())
         .serve_connection(io, service);
 
-    tokio::pin!(connection);
-
-    tokio::select! {
-        // Keep tail latency low when the server is at capacity.
-        biased;
-        // The connection future is ready.
-        result = connection.as_mut() => result?,
-        // A graceful shutdown signal was sent to the process.
-        _ = cancellation.wait() => {
-            connection.as_mut().graceful_shutdown();
-            connection.await?;
-        }
-    }
+    serve_unless_cancelled!(cancellation, connection);
 
     Ok(())
 }

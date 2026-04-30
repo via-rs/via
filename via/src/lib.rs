@@ -63,7 +63,7 @@ pub use middleware::{BoxFuture, Middleware, Result};
 pub use next::{Continue, Next};
 pub use request::{Payload, Request};
 pub use response::{Finalize, Response};
-pub use router::{connect, delete, get, head, options, patch, post, put, trace};
+pub use router::{delete, get, head, options, patch, post, put, trace};
 pub use server::Server;
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]

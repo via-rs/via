@@ -31,16 +31,15 @@ pub(crate) struct MethodNotAllowed {
 
 bitflags! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    struct Mask: u16 {
-        const CONNECT = 1 << 0;
-        const DELETE  = 1 << 1;
-        const GET     = 1 << 2;
-        const HEAD    = 1 << 3;
-        const OPTIONS = 1 << 4;
-        const PATCH   = 1 << 5;
-        const POST    = 1 << 6;
-        const PUT     = 1 << 7;
-        const TRACE   = 1 << 8;
+    struct Mask: u8 {
+        const DELETE  = 1 << 0;
+        const GET     = 1 << 1;
+        const HEAD    = 1 << 2;
+        const OPTIONS = 1 << 3;
+        const PATCH   = 1 << 4;
+        const POST    = 1 << 5;
+        const PUT     = 1 << 6;
+        const TRACE   = 1 << 7;
     }
 }
 
@@ -77,7 +76,6 @@ macro_rules! methods {
 }
 
 methods! {
-    pub fn connect(CONNECT);
     pub fn delete(DELETE);
     pub fn get(GET);
     pub fn head(HEAD);
@@ -90,7 +88,6 @@ methods! {
 
 impl<T, U> Branch<T, U> {
     methods! {
-        pub fn connect(self, CONNECT);
         pub fn delete(self, DELETE);
         pub fn get(self, GET);
         pub fn head(self, HEAD);
@@ -136,7 +133,6 @@ impl<T, U> Branch<T, U> {
 impl Mask {
     fn as_str(&self) -> Option<&str> {
         match *self {
-            Mask::CONNECT => Some("CONNECT"),
             Mask::DELETE => Some("DELETE"),
             Mask::GET => Some("GET"),
             Mask::HEAD => Some("HEAD"),
@@ -242,7 +238,6 @@ impl<App> Middleware<App> for Deny {
 impl From<&'_ http::Method> for Mask {
     fn from(method: &http::Method) -> Self {
         match *method {
-            http::Method::CONNECT => Mask::CONNECT,
             http::Method::DELETE => Mask::DELETE,
             http::Method::GET => Mask::GET,
             http::Method::HEAD => Mask::HEAD,

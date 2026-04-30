@@ -31,6 +31,10 @@ pub trait Acceptor {
     ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send + 'static;
 }
 
+#[cfg_attr(
+    not(any(feature = "native-tls", feature = "rustls-23")),
+    allow(dead_code)
+)]
 pub trait NegotiateAlpn {
     fn preferred_alpn(&self) -> &Alpn;
 }

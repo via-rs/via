@@ -132,6 +132,7 @@ where
             }
         });
 
+        // task size: 928
         #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
         connections.spawn(async move {
             let io = IoWithPermit::new(io, permit);

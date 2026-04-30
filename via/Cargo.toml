@@ -1,6 +1,6 @@
 [package]
 name = "via"
-version = "2.0.0-gm.44"
+version = "2.0.0-gm.45"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -105,4 +105,4 @@ optional = true
 default-features = false
 
 [package.metadata.docs.rs]
-features = ["file", "native-tls", "ring", "rustls-23", "tokio-tungstenite"]
+features = ["file", "ring", "tokio-tungstenite"]

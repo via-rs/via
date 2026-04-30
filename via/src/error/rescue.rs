@@ -1,5 +1,5 @@
 use http::StatusCode;
-use http::header::ALLOW;
+use http::header::{ALLOW, CONNECTION};
 use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
@@ -19,6 +19,7 @@ pub struct Rescue<F> {
 ///
 pub struct Sanitizer<'a> {
     json: bool,
+    keep_alive: bool,
     error: &'a mut Error,
     message: Option<Cow<'a, str>>,
 }
@@ -68,6 +69,11 @@ impl<'a> Sanitizer<'a> {
         self.error.source()
     }
 
+    /// If `false` a connection `close` header will be added to the response.
+    pub fn keep_alive(&mut self, keep_alive: bool) {
+        self.keep_alive = keep_alive;
+    }
+
     /// Provide a custom message to use for the response generated from this
     /// error.
     ///
@@ -105,6 +111,7 @@ impl<'a> Sanitizer<'a> {
     fn new(error: &'a mut Error) -> Self {
         Self {
             json: false,
+            keep_alive: true,
             error,
             message: None,
         }
@@ -125,6 +132,10 @@ impl Finalize for Sanitizer<'_> {
             && let Some(allow) = error.allows()
         {
             builder = builder.header(ALLOW, allow);
+        }
+
+        if !self.keep_alive {
+            builder = builder.header(CONNECTION, "close");
         }
 
         if self.json {

@@ -113,14 +113,14 @@ where
 ///
 /// The first argument is what the client is allowed to send. The second
 /// argument is how the server will reply.
-pub fn content<T, U>(accepts: T, provides: U) -> FlatMap<Content<T, U>, Continue> {
-    guard((
+pub fn content<T, U>(accepts: T, provides: U) -> Content<T, U> {
+    (
         header::accept(provides),
         when(
             method::is_mutation(),
             (header::content_type(accepts), header::content_length()),
         ),
-    ))
+    )
 }
 
 impl<T, U, App> Middleware<App> for FlatMap<T, U>

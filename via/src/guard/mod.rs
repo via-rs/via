@@ -23,6 +23,7 @@ pub type Content<T, U> = (
 ///
 /// ```no_run
 /// use std::process::ExitCode;
+/// use via::guard::method;
 /// use via::{Request, Next, Server, guard};
 ///
 /// async fn cache(request: Request, next: Next) -> via::Result {
@@ -34,7 +35,7 @@ pub type Content<T, U> = (
 ///     let mut app = via::app(());
 ///
 ///     // Non-idempotent requests will run the cache middleware.
-///     app.middleware(guard::filter(guard::method::is_safe(), cache));
+///     app.middleware(guard::filter(method::is_safe(), cache));
 ///
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
 /// }
@@ -76,13 +77,14 @@ pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
 /// # Example
 ///
 /// ```rust
-/// use via::guard::{self, header::media};
+/// use via::guard::{content, header::media};
+/// use via::guard;
 ///
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");
 ///
 /// // If the client does not speak JSON, deny the request.
-/// api.middleware(guard::content(media::json(), media::json()));
+/// api.middleware(guard(content(media::json(), media::json())));
 ///
 /// // Subsequent routes defined from `api` require:
 /// //   - Accept: application/json, */*
@@ -113,14 +115,14 @@ where
 ///
 /// The first argument is what the client is allowed to send. The second
 /// argument is how the server will reply.
-pub fn content<T, U>(accepts: T, provides: U) -> FlatMap<Content<T, U>, Continue> {
-    guard((
+pub fn content<T, U>(accepts: T, provides: U) -> Content<T, U> {
+    (
         header::accept(provides),
         when(
             method::is_mutation(),
             (header::content_type(accepts), header::content_length()),
         ),
-    ))
+    )
 }
 
 impl<T, U, App> Middleware<App> for FlatMap<T, U>

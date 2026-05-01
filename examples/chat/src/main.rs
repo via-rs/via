@@ -5,6 +5,8 @@ mod util;
 use cookie::Key;
 use std::process::ExitCode;
 use via::error::{Error, rescue};
+use via::guard::header::media;
+use via::guard::{content, method, not, or};
 use via::{Server, collection, cookies, guard, member, rest};
 
 use database::Database;
@@ -52,16 +54,35 @@ async fn main() -> Result<ExitCode, Error> {
     // Parse and track changes that are made to the session cookie.
     api.middleware(cookies([session::COOKIE]));
 
-    // Restore the user's session if it exists.
-    api.middleware(session::restore);
+    // Confirm that the client speaks JSON, then load the session from the
+    // session cookie if it is present in the request.
+    api.middleware(guard::flat_map(
+        content(media::json(), media::json()),
+        session::restore(),
+    ));
+
+    // If the TTL of the session's identity has not expired and the request can
+    // be cached, we can skip verifying that the user still exists.
+    //
+    // This optimization is safe so long as your app is the authoritative
+    // source of truth for the session and you properly end websocket sessions
+    // if the user deletes their account.
+    api.middleware(guard::filter(
+        or((not(method::is_safe()), session::is_stale())),
+        session::refresh,
+    ));
 
     // The /api/auth namespace.
-    let mut auth = api.route("auth");
+    let mut auth = api.route("/auth");
 
     auth.index().to(via::delete(logout).post(login));
-    auth.route("me").to(via::get(me));
+    auth.route("/me").to(via::get(me));
 
     // The /api/chat route.
+    //
+    // Before the websocket upgrade is initiated, we synchronously confirm
+    // that the user has an active session. This helps filter malicious traffic
+    // to our chat endpoint.
     #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
     api.route("chat").to(guard::flat_map(
         session::is_authenticated(),

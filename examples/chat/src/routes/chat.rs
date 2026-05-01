@@ -1,7 +1,8 @@
 use serde::Deserialize;
-use tokio::task::yield_now;
 use via::Payload;
 use via::ws::{self, Channel, ResultExt};
+
+use crate::util::Session;
 
 type Request = ws::Request<crate::Unicorn>;
 
@@ -10,13 +11,26 @@ struct Message {
     body: String,
 }
 
-pub async fn chat(mut channel: Channel, _request: Request) -> ws::Result {
+pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
     if cfg!(debug_assertions) {
         eprintln!("  info(examples/chat): setup ws recv loop.");
     }
 
+    let Some(mut session) = request.session().cloned() else {
+        return via::err!(401, "unauthorized.").or_close();
+    };
+
     while let Some(next) = channel.recv().await {
-        // Message::is_* methods ensure compatibility with both ws backends.
+        // Confirm that the user still exists before we proceed.
+        if session.is_expired() {
+            if session.user(request.app().database()).await.is_err() {
+                break;
+            }
+
+            session = session.refresh();
+        }
+
+        // Stop receiving messages if the client ends the session.
         if next.is_close() {
             break;
         }
@@ -41,7 +55,7 @@ pub async fn chat(mut channel: Channel, _request: Request) -> ws::Result {
         // For example, sending a reply, acquiring a database connection, or
         // sending a command to a database unconditionally is enough to
         // guarantee progress when we're not waiting for I/O.
-        yield_now().await;
+        tokio::task::yield_now().await;
     }
 
     if cfg!(debug_assertions) {

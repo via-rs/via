@@ -1,14 +1,14 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cookie::{Cookie, Key, SameSite};
+use http::StatusCode;
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
-use via::guard::{self};
-use via::{Response, deny, err};
+use via::{Error, Middleware, Response, deny, err, guard};
 
-use crate::database::Id;
 use crate::database::models::User;
-use crate::{Next, Request};
+use crate::database::{Database, Id};
+use crate::{Next, Request, Unicorn};
 
 pub const COOKIE: &str = "via-chat-session";
 
@@ -23,18 +23,18 @@ pub trait Authenticate {
 
 pub trait Session {
     fn session(&self) -> Option<&Identity>;
-    async fn user(&self) -> Result<User, Unauthorized>;
+    async fn user(&self) -> Result<User, Error>;
 }
 
 #[derive(Clone, PartialEq)]
 pub struct Identity([u8; 16]);
 
+pub struct RestoreSession;
+
 pub struct Unauthorized;
 
 #[derive(Clone)]
-struct ProtectFromForgery {
-    identity: Identity,
-}
+struct ProtectFromForgery(Identity);
 
 pub fn is_authenticated() -> IsAuthenticated {
     guard::map_err(
@@ -48,56 +48,40 @@ pub fn is_authenticated() -> IsAuthenticated {
     )
 }
 
+pub fn is_stale() -> impl Fn(&Request) -> bool + Copy {
+    |request| request.session().is_none_or(Identity::is_expired)
+}
+
 pub fn unauthorized<T>() -> via::Result<T> {
     deny!(401, "unauthorized")
 }
 
-pub async fn restore(mut request: Request, next: Next) -> via::Result {
-    let Ok(mut refresh_token) = request
-        .cookies()
-        .signed(request.app().secret())
-        .get(COOKIE)
-        .map(|cookie| cookie.value().parse::<Identity>())
-        .transpose()
-    else {
-        deny!(400, "unknown session cookie format.");
-    };
+pub fn restore() -> RestoreSession {
+    RestoreSession
+}
 
-    if let Some(mut identity) = refresh_token {
-        refresh_token = if identity.is_expired() {
-            let Some(_) = request
-                .app()
-                .database()
-                .find_user(identity.user_id()?)
-                .await?
-            else {
-                return unauthorized();
-            };
-
-            identity.refresh();
-
-            request
-                .extensions_mut()
-                .insert(ProtectFromForgery { identity })
-                .map(|session| session.identity)
-        } else {
-            request
-                .extensions_mut()
-                .insert(ProtectFromForgery { identity })
-                .and(None)
-        }
-    }
-
+pub async fn refresh(mut request: Request, next: Next) -> via::Result {
     let app = request.app_owned();
-    let mut response = next.call(request).await?;
 
-    match response.status().as_u16() {
-        200..=399 if refresh_token.is_some() => response.authenticate(app.secret(), refresh_token),
-        401 => response.authenticate(app.secret(), None),
-        _ => {}
+    if let Some(identity) = request
+        .extensions_mut()
+        .get_mut::<ProtectFromForgery>()
+        .map(|session| session.identity_mut())
+        && identity.user(app.database()).await.is_ok()
+    {
+        let mut identity = Some(identity.refresh());
+        let mut response = next.call(request).await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            identity = None;
+        }
+
+        response.authenticate(app.secret(), identity);
+
+        Ok(response)
+    } else {
+        next.call(request).await
     }
-
-    Ok(response)
 }
 
 #[inline(always)]
@@ -122,20 +106,29 @@ impl Identity {
             .map(i64::from_be_bytes)
     }
 
-    pub fn user_id(&self) -> Result<Id, Unauthorized> {
+    pub fn is_expired(&self) -> bool {
+        self.expires_at()
+            .is_ok_and(|timestamp| OffsetDateTime::now_utc().unix_timestamp() > timestamp)
+    }
+
+    pub async fn user(&self, database: &Database) -> Result<User, Error> {
+        if let Some(user) = database.find_user(self.user_id()?).await? {
+            Ok(user)
+        } else {
+            unauthorized()
+        }
+    }
+
+    pub fn refresh(&mut self) -> Self {
+        let new_expires_at = in_an_hour().to_be_bytes();
+
+        self.0[EXPIRES_AT..].copy_from_slice(new_expires_at.as_slice());
+        Self(self.0)
+    }
+
+    fn user_id(&self) -> Result<Id, Unauthorized> {
         let bytes = self.0[..EXPIRES_AT].try_into().or(Err(Unauthorized))?;
         Id::new(u64::from_be_bytes(bytes)).or(Err(Unauthorized))
-    }
-
-    fn is_expired(&self) -> bool {
-        self.0[EXPIRES_AT..].try_into().is_ok_and(|bytes| {
-            OffsetDateTime::now_utc().unix_timestamp() > i64::from_be_bytes(bytes)
-        })
-    }
-
-    fn refresh(&mut self) {
-        let new_expires_at = in_an_hour().to_be_bytes();
-        self.0[EXPIRES_AT..].copy_from_slice(new_expires_at.as_slice());
     }
 }
 
@@ -153,23 +146,40 @@ impl FromStr for Identity {
     }
 }
 
-impl Session for Request {
-    fn session(&self) -> Option<&Identity> {
-        self.extensions()
-            .get::<ProtectFromForgery>()
-            .map(|session| &session.identity)
+impl ProtectFromForgery {
+    fn identity(&self) -> &Identity {
+        &self.0
     }
 
-    async fn user(&self) -> Result<User, Unauthorized> {
-        let id = self
-            .session()
-            .ok_or(Unauthorized)
-            .and_then(Identity::user_id)?;
+    fn identity_mut(&mut self) -> &mut Identity {
+        &mut self.0
+    }
+}
 
-        match self.app().database().find_user(id).await {
-            Ok(Some(user)) => Ok(user),
-            Ok(None) | Err(_) => Err(Unauthorized),
-        }
+impl Session for Request {
+    fn session(&self) -> Option<&Identity> {
+        self.extensions().get().map(ProtectFromForgery::identity)
+    }
+
+    async fn user(&self) -> Result<User, Error> {
+        let session = self.session().ok_or(Unauthorized)?;
+        let database = self.app().database();
+
+        session.user(database).await
+    }
+}
+
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+impl Session for via::ws::Request<Unicorn> {
+    fn session(&self) -> Option<&Identity> {
+        self.extensions().get().map(ProtectFromForgery::identity)
+    }
+
+    async fn user(&self) -> Result<User, Error> {
+        let session = self.session().ok_or(Unauthorized)?;
+        let database = self.app().database();
+
+        session.user(database).await
     }
 }
 
@@ -194,6 +204,24 @@ impl Authenticate for Response {
 
         // Add the session cookie.
         self.cookies_mut().signed_mut(secret).add(cookie);
+    }
+}
+
+impl Middleware<Unicorn> for RestoreSession {
+    fn call(&self, mut request: Request, next: Next) -> via::BoxFuture {
+        let app = request.app();
+        let jar = request.cookies().signed(app.secret());
+
+        if let Some(cookie) = jar.get(COOKIE) {
+            let session = match cookie.value().parse::<Identity>() {
+                Ok(identity) => ProtectFromForgery(identity),
+                Err(error) => return Box::pin(async { Err(error) }),
+            };
+
+            request.extensions_mut().insert(session);
+        }
+
+        next.call(request)
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "via"
-version = "2.0.0-gm.45"
+version = "2.0.0-gm.46"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"

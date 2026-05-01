@@ -42,12 +42,15 @@ impl Acceptor for RustlsAcceptor {
         &self,
         io: TcpStream,
     ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send + 'static {
-        let mut tls = Box::pin(MaybeTlsStream {
-            state: ReadyState::Handshake(self.0.accept(io)),
-        });
+        let acceptor = self.0.clone();
 
         async move {
+            let mut tls = Box::pin(MaybeTlsStream {
+                state: ReadyState::Handshake(acceptor.accept(io)),
+            });
+
             let alpn = (&mut tls).await?;
+
             Ok(RustlsStream { alpn, tls })
         }
     }

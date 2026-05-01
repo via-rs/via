@@ -26,7 +26,7 @@ Below is a basic example to demonstrate how to use Via to create a simple web se
 
 ```rust
 use std::process::ExitCode;
-use via::{Error, Next, Request, Response, Server};
+use via::{Error, Next, Request, Response, ResultExt, Server};
 
 async fn hello(request: Request, _: Next) -> via::Result {
     // Get a reference to `name` from the request uri path.

@@ -41,11 +41,11 @@ impl Acceptor for NativeTlsAcceptor {
 
         async move {
             let stream = acceptor.accept(io).await?;
-            let alpn = stream
-                .get_ref()
-                .negotiated_alpn()?
-                .and_then(|negotiated| (negotiated == b"h2").then_some(Alpn::HTTP_2))
-                .unwrap_or(Alpn::HTTP_11);
+            let inner = stream.get_ref();
+            let alpn = match inner.negotiated_alpn()? {
+                Some(value) if value == b"h2" => Alpn::HTTP_2,
+                _ => Alpn::HTTP_11,
+            };
 
             Ok(NativeTlsStream { alpn, stream })
         }

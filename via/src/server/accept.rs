@@ -114,8 +114,8 @@ where
             let handshake = acceptor.accept(io);
 
             // native-tls task size: 1952
-            // rustls task size: 1712
-            let task = async move {
+            // rustls task size: 1752
+            async move {
                 let io = timeout(service.config().tls_handshake_timeout(), handshake).await??;
 
                 if *io.preferred_alpn() == Alpn::HTTP_2 {
@@ -129,10 +129,7 @@ where
 
                     serve.await
                 }
-            };
-
-            println!("task size = {}", std::mem::size_of_val(&task));
-            task
+            }
         });
 
         // task size: 928

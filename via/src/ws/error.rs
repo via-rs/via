@@ -79,6 +79,18 @@ impl From<DenyHeader<'_>> for UpgradeError {
     }
 }
 
+impl ResultExt for Error {
+    type Output = ();
+
+    fn or_close(self) -> Result<Self::Output> {
+        Err(ControlFlow::Break(self))
+    }
+
+    fn or_reconnect(self) -> Result<Self::Output> {
+        Err(ControlFlow::Continue(self))
+    }
+}
+
 impl<T, E> ResultExt for std::result::Result<T, E>
 where
     Error: From<E>,

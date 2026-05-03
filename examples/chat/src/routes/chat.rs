@@ -42,24 +42,14 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
             //                                   ^^^^^^^^^^^^
             // If an error occurs while deserializing the message due to
             // malformed user input, restart the session rather than ending it.
-            println!("      info(examples/chat): {}", &message.body);
+            eprintln!("    info(examples/chat): {}", &message.body);
         } else if cfg!(debug_assertions) {
-            eprintln!("      warn(examples/chat): ignoring message {:?}", next);
+            eprintln!("    warn(examples/chat): ignoring message {:?}", next);
         }
-
-        // Yield to the runtime to uphold the web socket reactor contract.
-        //
-        // This isn't necessary if you await any other future that is not
-        // immediately ready.
-        //
-        // For example, sending a reply, acquiring a database connection, or
-        // sending a command to a database unconditionally is enough to
-        // guarantee progress when we're not waiting for I/O.
-        tokio::task::yield_now().await;
     }
 
     if cfg!(debug_assertions) {
-        eprintln!("      info(examples/chat): ws session ended.");
+        eprintln!("    info(examples/chat): ws session ended.");
     }
 
     Ok(())

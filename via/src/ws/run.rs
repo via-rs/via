@@ -93,6 +93,9 @@ impl Future for Facade {
     type Output = super::Result;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        #[cfg(debug_assertions)]
+        let mut i = 0;
+
         loop {
             // Safety:
             //
@@ -104,12 +107,10 @@ impl Future for Facade {
 
             match &mut self.state {
                 IoState::Receive => {
-                    log!(info(0), "state = receive");
+                    log!(info(i), "state = receive");
 
                     // Confirm that the listener can receive the next message.
                     if self.rendezvous.has_capacity()? {
-                        log!(info(2), "listener is ready for the next message.");
-
                         // Attempt to pull the next message out of the stream.
                         if let Poll::Ready(next) = Pin::new(stream).poll_next(cx).map_err(rescue)? {
                             let Some(received) = next else {
@@ -119,10 +120,10 @@ impl Future for Facade {
 
                             // If send fails, the channel is disconnected.
                             self.rendezvous.try_send(received)?;
-                            log!(info(4), "message received.");
+                            log!(info(i + 2), "inbound message forwarded to listener.");
                         }
                     } else {
-                        log!(info(2), "listener has not received the previous message.");
+                        log!(info(i + 2), "listener is busy.");
                     }
 
                     // The listener will probably register an additional wake.
@@ -132,27 +133,27 @@ impl Future for Facade {
                     }
 
                     if let Some(sent) = self.rendezvous.try_recv()? {
-                        log!(info(4), "listener sent a message");
+                        log!(info(i + 2), "outbound message received from listener.");
                         self.state = IoState::Send(sent);
                     } else {
-                        log!(info(4), "wake for the next message or listener progress.");
+                        log!(info(i + 2), "waiting for something interesting to happen.");
                         return Poll::Pending;
                     }
                 }
 
                 state @ IoState::Send(_) => {
-                    log!(info(0), "state = send");
+                    log!(info(i), "state = send");
 
                     let mut sink = Pin::new(stream);
 
                     if sink.as_mut().poll_ready(cx).map_err(rescue)?.is_pending() {
-                        log!(info(2), "waiting for i/o to become available for write.");
+                        log!(info(i + 2), "waiting for i/o to become available.");
                         return Poll::Pending;
                     }
 
                     if let IoState::Send(message) = mem::replace(state, IoState::Flush) {
                         sink.as_mut().start_send(message).map_err(rescue)?;
-                        log!(info(2), "write successful. transition to flush.");
+                        log!(info(i + 2), "outbound message accepted by i/o.");
                     } else {
                         // We are in an invalid state. This can be interpreted
                         // as a signal that the risk of re-entrance is elevated
@@ -162,16 +163,23 @@ impl Future for Facade {
                 }
 
                 IoState::Flush => {
-                    log!(info(0), "state = flush");
+                    log!(info(i), "state = flush");
 
                     if Pin::new(stream).poll_flush(cx).map_err(rescue)?.is_ready() {
-                        log!(info(2), "flush complete. transition to receive.");
+                        log!(info(i + 2), "outbound message sent successfully.");
                         self.state = IoState::Receive;
+                        cx.waker().wake_by_ref();
                     } else {
-                        log!(info(2), "waiting for flush to complete.");
-                        return Poll::Pending;
+                        log!(info(i + 2), "waiting for flush to complete.");
                     }
+
+                    return Poll::Pending;
                 }
+            }
+
+            #[cfg(debug_assertions)]
+            {
+                i += 4;
             }
         }
     }
@@ -239,14 +247,14 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
             Poll::Ready(Err(ControlFlow::Break(error))) => {
-                log!(error(2), "{}", &error);
+                log!(error(0), "{}", &error);
                 Poll::Ready(Err(error))
             }
             Poll::Ready(Err(ControlFlow::Continue(error))) => {
                 #[cfg(not(debug_assertions))]
                 let _ = error;
 
-                log!(warn(2), "{}", &error);
+                log!(warn(0), "{}", &error);
 
                 this.reconnect();
                 context.waker().wake_by_ref();

@@ -8,10 +8,10 @@ compile_error!("either \"aws-lc-rs\" or \"ring\" must be enabled to use the ws m
 compile_error!("features \"tokio-tungstenite\" and \"tokio-websockets\" are mutually exclusive.");
 
 macro_rules! log {
-    ($level:tt($indent:literal), $fmt:literal $($arg:tt)*) => {
+    ($level:tt($indent:expr), $fmt:literal $($arg:tt)*) => {
         #[cfg(debug_assertions)]
         eprintln!(
-            "{:indent$}{}(via::ws): {}",
+            "{:indent$}{}(ws): {}",
             "",
             stringify!($level),
             format_args!($fmt $($arg)*),

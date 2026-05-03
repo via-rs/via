@@ -26,6 +26,7 @@ struct Recv<'a> {
     recv: mpsc::Recv<'a, mpsc::Receiver<Message>>,
 }
 
+#[inline]
 fn poll_ready(tx: &mut Sender<Message>, cx: &mut Context) -> Poll<super::Result> {
     match tx.poll_ready(cx) {
         Poll::Pending => Poll::Pending,
@@ -98,9 +99,9 @@ impl Channel {
 impl Future for Recv<'_> {
     type Output = Option<Message>;
 
-    fn poll(mut self: Pin<&mut Self>, _: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // Receive progress is driven by the I/O of `WebSocketStream`.
-        poll_immediate_no_wake(|noop| Pin::new(&mut self.recv).poll(noop)).map(Result::ok)
+        Pin::new(&mut self.recv).poll(cx).map(|result| result.ok())
     }
 }
 

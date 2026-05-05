@@ -41,45 +41,10 @@ mod sealed {
 /// Payload methods take ownership of `self` to prevent accidental reuse of
 /// volatile buffers. This behavior ensures that once the data is coalesced or
 /// deserialized, the original memory is unreachable.
-///
-/// ## Zeroization
-///
-/// The majority of use-cases where zeroization is preferred but not strictly
-/// necessary can benefit from using the `bez_*` prefixed versions of the
-/// methods defined in the `Payload` trait. The `be_z` prefix stands for
-/// "best-effort zeroization". If zeroization is impossible due to non-unique
-/// access of a buffer contained in the payload, `bez_*` variations fall back
-/// to their non-zeroing counterparts.
-///
-/// If zeroization is a hard requirement, we recommend defining a policy that
-/// is sufficient for your business use-case. For example, returning an opaque
-/// 500 error to the client and immediately stopping request processing is likely
-/// enough to satisfy the definition of "fair handling of user data". As always,
-/// we suggest defining a policy and working with compliance and legal to
-/// determine what is right for your situation.
-///
-/// In any case, users should avoid retaining the payload returned in the `Err`
-/// branch of strict zeroizing methods prefixed by `z_*` and stop processing
-/// the request as soon as possible. This reduces the likelihood of a panic
-/// crashing a connection task, potentially (albeit unlikely) exposing
-/// un-zeroed memory.
-///
 pub trait Payload: sealed::Sealed + Sized {
     /// Coalesces all non-contiguous bytes into a single contiguous `Vec<u8>`.
     ///
     fn coalesce(self) -> Vec<u8>;
-
-    /// Coalesces all non-contiguous bytes into a single contiguous `Vec<u8>`.
-    ///
-    /// If zeroization is impossible due to non-unique access of an underlying
-    /// frame buffer, `self` is returned to the caller.
-    ///
-    /// # Security
-    ///
-    /// Users should avoid retaining the returned `Self` in `Err` longer than
-    /// necessary, as it contains un-zeroed memory.
-    ///
-    fn z_coalesce(self) -> Result<Vec<u8>, Self>;
 
     /// Deserialize the payload as JSON into the specified type `T`.
     ///
@@ -91,6 +56,42 @@ pub trait Payload: sealed::Sealed + Sized {
     where
         T: DeserializeOwned;
 
+    /// Converts the payload into a UTF-8 `String`.
+    ///
+    /// # Errors
+    ///
+    /// - `Err(Error)` if the payload contains an invalid UTF-8 byte sequence
+    ///
+    fn utf8(self) -> Result<String, Error> {
+        deserialize_utf8(self.coalesce())
+    }
+}
+
+/// Zeroizing variations of the functions provided in `Payload`.
+///
+/// Unique access to each frame of the payload is required for safe
+/// zeroization. If zeroization is a hard requirement, we recommend defining a
+/// policy that is sufficient for your business use-case. For example, yielding
+/// to runtime and retrying reads when unique access is guaranteed is a viable
+/// option for many use-cases. If retaining an unzeroed secret in memory is too
+/// risky for your use-case, you can chose to continue processing the request
+/// and add a `Connection: close` header to the response or panic to ensure
+/// that the memory gets reclaimed by the OS as soon as possible.
+///
+/// Most of our users just want to do the right thing and zeroize "secrets"
+/// such as a password in request payloads when possible. In these cases, it's
+/// probably best to avoid decision fatigue and use a "best effort" variation
+/// of the function (prefixed by `be_z_*`). They fall back to their non-zeroing
+/// counterparts if unique access is not guarateed.
+pub trait Payloadz: Payload {
+    /// Coalesces all non-contiguous bytes into a single contiguous `Vec<u8>`.
+    ///
+    /// If zeroization is impossible due to non-unique access of an underlying
+    /// frame buffer, `self` is returned to the caller. This allows users to
+    /// yield to the runtime and retry zeriozation, add `connection: close` to
+    /// the response header, or panic.
+    fn z_coalesce(self) -> Result<Vec<u8>, Self>;
+
     /// Deserialize the payload as JSON into the specified type `T`, zeroizing
     /// the original data from which the `T` is deserialized.
     ///
@@ -99,17 +100,37 @@ pub trait Payload: sealed::Sealed + Sized {
     /// - `Err(Self)` if zeroization is impossible due to non-unique access
     /// - `Ok(Err(Error))` if `T` cannot be deserialized from the data in `self`
     ///
-    /// # Security
+    /// ## Unique Access
     ///
-    /// Users should avoid retaining the returned `Self` in `Err` longer than
-    /// necessary, as it contains un-zeroed memory.
-    ///
+    /// If zeroization is impossible due to non-unique access of an underlying
+    /// frame buffer, `self` is returned to the caller. This allows users to
+    /// yield to the runtime and retry zeriozation, add `Connection: close` to
+    /// the response header, or panic.
     fn z_json<T>(self) -> Result<Result<T, Error>, Self>
     where
         T: DeserializeOwned,
     {
         self.z_coalesce()
             .map(|data| deserialize_json(data.as_slice()))
+    }
+
+    /// Converts the payload into a UTF-8 `String`, zeroizing the original data
+    /// from which the `String` is constructed.
+    ///
+    /// # Errors
+    ///
+    /// - `Err(Self)` if zeroization is impossible due to non-unique access
+    /// - `Ok(Err(Error))` if the payload contains an invalid UTF-8 byte
+    ///   sequence
+    ///
+    /// ## Unique Access
+    ///
+    /// If zeroization is impossible due to non-unique access of an underlying
+    /// frame buffer, `self` is returned to the caller. This allows users to
+    /// yield to the runtime and retry zeriozation, add `Connection: close` to
+    /// the response header, or panic.
+    fn z_utf8(self) -> Result<Result<String, Error>, Self> {
+        self.z_coalesce().map(deserialize_utf8)
     }
 
     /// Deserialize the payload as JSON into the specified type `T`, zeroizing
@@ -122,34 +143,11 @@ pub trait Payload: sealed::Sealed + Sized {
     ///
     /// - `Err(Error)` if `T` cannot be deserialized from the data in `self`
     ///
-    fn bez_json<T>(self) -> Result<T, Error>
+    fn be_z_json<T>(self) -> Result<T, Error>
     where
         T: DeserializeOwned,
     {
         self.z_json().unwrap_or_else(Self::json)
-    }
-
-    /// Converts the payload into a UTF-8 `String`.
-    ///
-    /// # Errors
-    ///
-    /// - `Err(Error)` if the payload contains an invalid UTF-8 byte sequence
-    ///
-    fn utf8(self) -> Result<String, Error> {
-        deserialize_utf8(self.coalesce())
-    }
-
-    /// Converts the payload into a UTF-8 `String`, zeroizing the original data
-    /// from which the `String` is constructed.
-    ///
-    /// # Errors
-    ///
-    /// - `Err(Self)` if zeroization is impossible due to non-unique access
-    /// - `Ok(Err(Error))` if the payload contains an invalid UTF-8 byte
-    ///   sequence
-    ///
-    fn z_utf8(self) -> Result<Result<String, Error>, Self> {
-        self.z_coalesce().map(deserialize_utf8)
     }
 
     /// Converts the payload into a UTF-8 `String`, zeroizing the original data
@@ -162,7 +160,7 @@ pub trait Payload: sealed::Sealed + Sized {
     ///
     /// - `Err(Error)` if the payload contains an invalid UTF-8 byte sequence
     ///
-    fn bez_utf8(self) -> Result<String, Error> {
+    fn be_z_utf8(self) -> Result<String, Error> {
         self.z_utf8().unwrap_or_else(Self::utf8)
     }
 }
@@ -222,7 +220,6 @@ fn deserialize_utf8(data: Vec<u8>) -> Result<String, Error> {
 ///   2. `compiler_fence` is called after each frame is zeroized
 ///
 /// [zeroize]: https://crates.io/crates/zeroize/
-#[inline(never)]
 unsafe fn unfenced_zeroize(frame: &mut Bytes) {
     let len = frame.remaining();
     let ptr = frame.as_ptr() as *mut u8;
@@ -284,26 +281,11 @@ macro_rules! impl_payload_for_bytes_like {
                 Payload::coalesce(Bytes::from($from(self)))
             }
 
-            fn z_coalesce(self) -> Result<Vec<u8>, Self> {
-                Payload::z_coalesce(Bytes::from($from(self))).map_err($into)
-            }
-
             fn json<T>(self) -> Result<T, Error>
             where
                 T: DeserializeOwned,
             {
                 Payload::json(Bytes::from($from(self)))
-            }
-
-            fn z_json<T>(self) -> Result<Result<T, Error>, Self>
-            where
-                T: DeserializeOwned,
-            {
-                Payload::z_json(Bytes::from($from(self))).map_err($into)
-            }
-
-            fn z_utf8(self) -> Result<Result<String, Error>, Self> {
-                Payload::z_utf8(Bytes::from($from(self))).map_err($into)
             }
         }
     };
@@ -339,39 +321,9 @@ impl Payload for Aggregate {
 
         deserialize_json(self.coalesce().as_slice())
     }
+}
 
-    fn z_json<T>(mut self) -> Result<Result<T, Error>, Self>
-    where
-        T: DeserializeOwned,
-    {
-        if let [frame] = self.payload.frames_mut() {
-            // If we do not have unique access to self, return back to the caller.
-            if !frame.is_unique() {
-                return Err(self);
-            }
-
-            // Attempt to deserialize `T` from the bytes in self.
-            let result = deserialize_json(frame.as_ref());
-
-            // Safety:
-            //
-            // The precondition at the top of this function ensures that we
-            // have unique access to self and therefore, can mutate the buffer.
-            unsafe {
-                unfenced_zeroize(frame);
-            }
-
-            // Ensures sequential access to the buffers contained in self.
-            // A necessary step after zeroization.
-            release_compiler_fence();
-
-            return Ok(result);
-        }
-
-        self.z_coalesce()
-            .map(|data| deserialize_json(data.as_slice()))
-    }
-
+impl Payloadz for Aggregate {
     fn z_coalesce(mut self) -> Result<Vec<u8>, Self> {
         let mut dest = self.len().map(Vec::with_capacity).unwrap_or_default();
         let payload = &mut self.payload;
@@ -408,6 +360,38 @@ impl Payload for Aggregate {
 
         Ok(dest)
     }
+
+    fn z_json<T>(mut self) -> Result<Result<T, Error>, Self>
+    where
+        T: DeserializeOwned,
+    {
+        if let [frame] = self.payload.frames_mut() {
+            // If we do not have unique access to self, return back to the caller.
+            if !frame.is_unique() {
+                return Err(self);
+            }
+
+            // Attempt to deserialize `T` from the bytes in self.
+            let result = deserialize_json(frame.as_ref());
+
+            // Safety:
+            //
+            // The precondition at the top of this function ensures that we
+            // have unique access to self and therefore, can mutate the buffer.
+            unsafe {
+                unfenced_zeroize(frame);
+            }
+
+            // Ensures sequential access to the buffers contained in self.
+            // A necessary step after zeroization.
+            release_compiler_fence();
+
+            return Ok(result);
+        }
+
+        self.z_coalesce()
+            .map(|data| deserialize_json(data.as_slice()))
+    }
 }
 
 #[cfg(feature = "tokio-tungstenite")]
@@ -433,32 +417,6 @@ impl Payload for Bytes {
         dest
     }
 
-    fn z_coalesce(mut self) -> Result<Vec<u8>, Self> {
-        // If we do not have unique access to self, return back to the caller.
-        if !self.is_unique() {
-            return Err(self);
-        }
-
-        let mut dest = Vec::with_capacity(self.remaining());
-
-        // The transport layer sufficiently chunks each frame.
-        dest.extend_from_slice(self.as_ref());
-
-        // Safety:
-        //
-        // The precondition at the top of this function ensures that we
-        // have unique access to self and therefore, can mutate the buffer.
-        unsafe {
-            unfenced_zeroize(&mut self);
-        }
-
-        // Ensures sequential access to the buffers contained in self.
-        // A necessary step after zeroization.
-        release_compiler_fence();
-
-        Ok(dest)
-    }
-
     fn json<T>(mut self) -> Result<T, Error>
     where
         T: DeserializeOwned,
@@ -470,33 +428,6 @@ impl Payload for Bytes {
         self.advance(self.remaining());
 
         result
-    }
-
-    fn z_json<T>(mut self) -> Result<Result<T, Error>, Self>
-    where
-        T: DeserializeOwned,
-    {
-        // If we do not have unique access to self, return back to the caller.
-        if !self.is_unique() {
-            return Err(self);
-        }
-
-        // Attempt to deserialize `T` from the bytes in self.
-        let result = deserialize_json(self.as_ref());
-
-        // Safety:
-        //
-        // The precondition at the top of this function ensures that we
-        // have unique access to self and therefore, can mutate the buffer.
-        unsafe {
-            unfenced_zeroize(&mut self);
-        }
-
-        // Ensures sequential access to the buffers contained in self.
-        // A necessary step after zeroization.
-        release_compiler_fence();
-
-        Ok(result)
     }
 }
 

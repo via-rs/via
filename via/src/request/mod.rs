@@ -4,7 +4,7 @@ mod payload;
 mod query;
 
 pub use params::{PathParams, QueryParams};
-pub use payload::{Aggregate, Coalesce, Payload, RequestBody};
+pub use payload::{Aggregate, Coalesce, Payload, Payloadz, RequestBody};
 
 use cookie::CookieJar;
 use delegate::delegate;

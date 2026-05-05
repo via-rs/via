@@ -41,29 +41,6 @@ mod sealed {
 /// Payload methods take ownership of `self` to prevent accidental reuse of
 /// volatile buffers. This behavior ensures that once the data is coalesced or
 /// deserialized, the original memory is unreachable.
-///
-/// ## Zeroization
-///
-/// The majority of use-cases where zeroization is preferred but not strictly
-/// necessary can benefit from using the `bez_*` prefixed versions of the
-/// methods defined in the `Payload` trait. The `be_z` prefix stands for
-/// "best-effort zeroization". If zeroization is impossible due to non-unique
-/// access of a buffer contained in the payload, `bez_*` variations fall back
-/// to their non-zeroing counterparts.
-///
-/// If zeroization is a hard requirement, we recommend defining a policy that
-/// is sufficient for your business use-case. For example, returning an opaque
-/// 500 error to the client and immediately stopping request processing is likely
-/// enough to satisfy the definition of "fair handling of user data". As always,
-/// we suggest defining a policy and working with compliance and legal to
-/// determine what is right for your situation.
-///
-/// In any case, users should avoid retaining the payload returned in the `Err`
-/// branch of strict zeroizing methods prefixed by `z_*` and stop processing
-/// the request as soon as possible. This reduces the likelihood of a panic
-/// crashing a connection task, potentially (albeit unlikely) exposing
-/// un-zeroed memory.
-///
 pub trait Payload: sealed::Sealed + Sized {
     /// Coalesces all non-contiguous bytes into a single contiguous `Vec<u8>`.
     ///
@@ -90,6 +67,27 @@ pub trait Payload: sealed::Sealed + Sized {
     }
 }
 
+/// The zeroizing version of the [`Payload`] trait.
+///
+/// The majority of use-cases where zeroization is preferred but not strictly
+/// necessary can benefit from using the `be_z_*` prefixed versions of the
+/// methods defined in the [`Payloadz`] trait. The `be_z` prefix stands for
+/// "best-effort zeroization". If zeroization is impossible due to non-unique
+/// access of a buffer contained in the payload, `be_z_*` variations fall back
+/// to their non-zeroing counterparts.
+///
+/// If zeroization is a hard requirement, we recommend defining a policy that
+/// is sufficient for your business use-case. For example, returning an opaque
+/// 500 error to the client and immediately stopping request processing is
+/// likely enough to satisfy the definition of "fair handling of user data". As
+/// always, we suggest defining a policy and working with compliance and legal
+/// to determine what is right for your situation.
+///
+/// In any case, users should avoid retaining the payload returned in the `Err`
+/// branch of strict zeroizing methods prefixed by `z_*` and stop processing
+/// the request as soon as possible. This reduces the likelihood of a panic
+/// crashing a connection task, potentially (albeit unlikely) exposing
+/// un-zeroed memory.
 pub trait Payloadz: Payload {
     /// Coalesces all non-contiguous bytes into a single contiguous `Vec<u8>`.
     ///
@@ -100,7 +98,6 @@ pub trait Payloadz: Payload {
     ///
     /// Users should avoid retaining the returned `Self` in `Err` longer than
     /// necessary, as it contains un-zeroed memory.
-    ///
     fn z_coalesce(self) -> Result<Vec<u8>, Self>;
 
     /// Deserialize the payload as JSON into the specified type `T`, zeroizing
@@ -115,7 +112,6 @@ pub trait Payloadz: Payload {
     ///
     /// Users should avoid retaining the returned `Self` in `Err` longer than
     /// necessary, as it contains un-zeroed memory.
-    ///
     fn z_json<T>(self) -> Result<Result<T, Error>, Self>
     where
         T: DeserializeOwned,
@@ -132,7 +128,6 @@ pub trait Payloadz: Payload {
     /// - `Err(Self)` if zeroization is impossible due to non-unique access
     /// - `Ok(Err(Error))` if the payload contains an invalid UTF-8 byte
     ///   sequence
-    ///
     fn z_utf8(self) -> Result<Result<String, Error>, Self> {
         self.z_coalesce().map(deserialize_utf8)
     }

@@ -67,7 +67,7 @@ pub trait Payload: sealed::Sealed + Sized {
     }
 }
 
-/// The zeroizing version of the [`Payload`] trait.
+/// Zeroizing variations of the functions provided in `Payload`.
 ///
 /// Unique access to each frame of the payload is required for safe
 /// zeroization. If zeroization is a hard requirement, we recommend defining a

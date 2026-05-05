@@ -104,7 +104,7 @@ pub trait Payloadz: Payload {
     ///
     /// If zeroization is impossible due to non-unique access of an underlying
     /// frame buffer, `self` is returned to the caller. This allows users to
-    /// yield to the runtime and retry zeriozation, add `connection: close` to
+    /// yield to the runtime and retry zeriozation, add `Connection: close` to
     /// the response header, or panic.
     fn z_json<T>(self) -> Result<Result<T, Error>, Self>
     where
@@ -127,7 +127,7 @@ pub trait Payloadz: Payload {
     ///
     /// If zeroization is impossible due to non-unique access of an underlying
     /// frame buffer, `self` is returned to the caller. This allows users to
-    /// yield to the runtime and retry zeriozation, add `connection: close` to
+    /// yield to the runtime and retry zeriozation, add `Connection: close` to
     /// the response header, or panic.
     fn z_utf8(self) -> Result<Result<String, Error>, Self> {
         self.z_coalesce().map(deserialize_utf8)

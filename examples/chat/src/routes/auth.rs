@@ -1,6 +1,6 @@
 use http::StatusCode;
 use serde::Deserialize;
-use via::{Payload, Response};
+use via::{Response, request::Payloadz};
 
 use crate::database::Identify;
 use crate::util::session::Identity;
@@ -18,7 +18,7 @@ pub async fn me(request: Request, _: Next) -> via::Result {
 
 pub async fn login(request: Request, _: Next) -> via::Result {
     let (future, app) = request.into_future();
-    let Body { data } = future.await?.bez_json::<Body<Login>>()?;
+    let Body { data } = future.await?.be_z_json::<Body<Login>>()?;
 
     if let Some(user) = app.database().fetch_user_by_username(data.username).await? {
         let identity = Identity::new(*user.id());

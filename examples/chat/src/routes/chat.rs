@@ -36,8 +36,8 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
         // Deserialize a `Message` from `next` if it contains data.
         let message = if next.is_binary() || next.is_text() {
             // We require our users to send us valid UTF-8 even if the message
-            // payload is binary data. Verify that payload is valid UTF-8 or
-            // restart the session.
+            // payload contains binary data. Verify that payload is valid UTF-8
+            // or restart the session.
 
             #[cfg(feature = "tokio-tungstenite")]
             let text = next.to_text().or_reconnect()?;

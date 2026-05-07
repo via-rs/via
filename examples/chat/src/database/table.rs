@@ -42,6 +42,10 @@ where
         self.store.get(id).cloned()
     }
 
+    pub fn exists(&self, id: &Id) -> bool {
+        self.store.get(id).is_some()
+    }
+
     pub fn insert<U>(&mut self, row: U) -> Result<T, BoxError>
     where
         BoxError: From<U::Error>,

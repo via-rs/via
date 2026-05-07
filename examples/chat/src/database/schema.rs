@@ -40,6 +40,10 @@ enum Command {
         tx: oneshot::Sender<Option<User>>,
         username: String,
     },
+    UserExists {
+        tx: oneshot::Sender<bool>,
+        id: Id,
+    },
 
     InsertChannel {
         tx: oneshot::Sender<Result<Channel, BoxError>>,
@@ -104,6 +108,11 @@ async fn recv_loop(mut schema: Schema, mut rx: mpsc::Receiver<Command>) -> Resul
                     .cloned();
 
                 let _ = tx.send(user_opt).inspect_err(warn_receiver_dropped);
+            }
+            Command::UserExists { tx, id } => {
+                let _ = tx
+                    .send(schema.users.exists(&id))
+                    .inspect_err(warn_receiver_dropped);
             }
 
             Command::InsertChannel { tx, payload } => {
@@ -173,6 +182,13 @@ impl Database {
             .await?;
 
         Ok(rx.await?)
+    }
+
+    pub async fn user_exists(&self, id: Id) -> bool {
+        let (tx, rx) = oneshot::channel();
+        let command = Command::UserExists { tx, id };
+
+        self.tx.send(command).await.is_ok() && rx.await.is_ok_and(|exists| exists)
     }
 }
 

@@ -26,7 +26,7 @@ pub trait Session {
     async fn user(&self) -> Result<User, Error>;
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Identity([u8; 16]);
 
 pub struct RestoreSession;
@@ -62,26 +62,24 @@ pub fn restore() -> RestoreSession {
 
 pub async fn refresh(mut request: Request, next: Next) -> via::Result {
     let app = request.app_owned();
-
-    if let Some(identity) = request
+    let Some(identity) = request
         .extensions_mut()
         .get_mut::<ProtectFromForgery>()
         .map(|session| session.identity_mut())
-        && identity.user(app.database()).await.is_ok()
-    {
-        let mut identity = Some(identity.refresh());
-        let mut response = next.call(request).await?;
+    else {
+        return next.call(request).await;
+    };
 
-        if response.status() == StatusCode::UNAUTHORIZED {
-            identity = None;
-        }
+    let mut identity = identity.refresh(app.database()).await.ok();
+    let mut response = next.call(request).await?;
 
-        response.authenticate(app.secret(), identity);
-
-        Ok(response)
-    } else {
-        next.call(request).await
+    if response.status() == StatusCode::UNAUTHORIZED {
+        identity = None;
     }
+
+    response.authenticate(app.secret(), identity);
+
+    Ok(response)
 }
 
 #[inline(always)]
@@ -111,6 +109,14 @@ impl Identity {
             .is_ok_and(|timestamp| OffsetDateTime::now_utc().unix_timestamp() > timestamp)
     }
 
+    pub async fn verify(&self, database: &Database) -> bool {
+        if let Ok(id) = self.user_id() {
+            database.user_exists(id).await
+        } else {
+            false
+        }
+    }
+
     pub async fn user(&self, database: &Database) -> Result<User, Error> {
         if let Some(user) = database.find_user(self.user_id()?).await? {
             Ok(user)
@@ -119,11 +125,17 @@ impl Identity {
         }
     }
 
-    pub fn refresh(&mut self) -> Self {
+    async fn refresh(&mut self, database: &Database) -> Result<Self, Unauthorized> {
+        // Compute the value of a timestamp one hour in the future to prevent
+        // leaking timing data about our database.
         let new_expires_at = in_an_hour().to_be_bytes();
 
-        self.0[EXPIRES_AT..].copy_from_slice(new_expires_at.as_slice());
-        Self(self.0)
+        if self.verify(database).await {
+            self.0[EXPIRES_AT..].copy_from_slice(new_expires_at.as_slice());
+            Ok(*self)
+        } else {
+            Err(Unauthorized)
+        }
     }
 
     fn user_id(&self) -> Result<Id, Unauthorized> {

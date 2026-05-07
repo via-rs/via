@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use via::Payload;
 use via::ws::{self, Channel, ResultExt};
 
 use crate::util::Session;
@@ -7,50 +6,57 @@ use crate::util::Session;
 type Request = ws::Request<crate::Unicorn>;
 
 #[derive(Deserialize)]
-struct Message {
-    body: String,
+struct Message<'a> {
+    body: &'a str,
+}
+
+macro_rules! log {
+    ($($args:tt)*) => {
+        // Placeholder for tracing...
+        #[cfg(debug_assertions)]
+        eprintln!($($args)*);
+    };
 }
 
 pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
-    if cfg!(debug_assertions) {
-        eprintln!("  info(examples/chat): setup ws recv loop.");
-    }
+    log!("  info(examples/chat): setup ws recv loop.");
 
-    let Some(mut session) = request.session().cloned() else {
+    // An active session is required to keep the web socket open.
+    let Some(session) = request.session().copied() else {
         return via::err!(401, "unauthorized.").or_close();
     };
 
     while let Some(next) = channel.recv().await {
-        // Confirm that the user still exists before we proceed.
-        if session.is_expired() {
-            if session.user(request.app().database()).await.is_err() {
-                break;
-            }
-
-            session = session.refresh();
-        }
-
-        // Stop receiving messages if the client ends the session.
-        if next.is_close() {
+        // End the session if the next message is a close message or the active
+        // user no longer has an account.
+        if next.is_close() || !session.verify(request.app().database()).await {
             break;
         }
 
-        if next.is_text() {
-            // The impl of Payload::json for ws::Message does not allocate.
-            // However, fields of the deserialized type can allocate.
-            let message = next.json::<Message>().or_reconnect()?;
-            //                                   ^^^^^^^^^^^^
-            // If an error occurs while deserializing the message due to
-            // malformed user input, restart the session rather than ending it.
-            eprintln!("    info(examples/chat): {}", &message.body);
-        } else if cfg!(debug_assertions) {
-            eprintln!("    warn(examples/chat): ignoring message {:?}", next);
-        }
+        // Deserialize a `Message` from `next` if it contains data.
+        let message = if next.is_binary() || next.is_text() {
+            // We require our users to send us valid UTF-8 even if the message
+            // payload is binary data. Verify that payload is valid UTF-8 or
+            // restart the session.
+
+            #[cfg(feature = "tokio-tungstenite")]
+            let text = next.to_text().or_reconnect()?;
+
+            #[cfg(feature = "tokio-websockets")]
+            let text = str::from_utf8(next.as_payload()).or_reconnect()?;
+
+            // In this example, we want to keep the number of allocations as
+            // low as possible. Therefore, we use `serde_json` directly...
+            serde_json::from_str::<Message>(text).or_reconnect()?
+        } else {
+            log!("  warn(examples/chat): ignoring message {:?}", next);
+            continue; // Other message types are handled internally. Continue.
+        };
+
+        eprintln!("  info(examples/chat): {}", &message.body);
     }
 
-    if cfg!(debug_assertions) {
-        eprintln!("    info(examples/chat): ws session ended.");
-    }
+    log!("    info(examples/chat): ws session ended.");
 
     Ok(())
 }

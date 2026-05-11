@@ -13,12 +13,12 @@ use tokio_tungstenite::{
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
-use super::io::UpgradedIo;
 use super::run::RunTask;
 use super::util::{Base64EncodedDigest, sha1};
 use super::{Channel, Request};
 use crate::guard::header::{CaseSensitive, Contains, Header};
 use crate::guard::{Predicate, header};
+use crate::server::IoStream;
 use crate::ws::error::UpgradeError;
 use crate::{BoxFuture, Error, Middleware, Next, Response, ResultExt};
 
@@ -52,9 +52,8 @@ fn configure<T>(listener: &mut Arc<Listener<T>>) -> &mut WsConfig {
 async fn handshake<App>(
     request: &mut Request<App>,
     config: &WsConfig,
-) -> Result<WebSocketStream<UpgradedIo>, Error> {
+) -> Result<WebSocketStream<IoStream>, Error> {
     let on_upgrade = request.on_upgrade.take().expect("already upgraded.");
-    let upgraded = UpgradedIo::new(on_upgrade.await?)?;
     let config = WebSocketConfig::default()
         .accept_unmasked_frames(false)
         .read_buffer_size(config.buffer_size)
@@ -62,24 +61,33 @@ async fn handshake<App>(
         .max_frame_size(config.max_frame_size)
         .max_message_size(config.max_message_size);
 
-    Ok(WebSocketStream::from_raw_socket(upgraded, Role::Server, Some(config)).await)
+    let upgraded = on_upgrade.await?;
+    let Ok(parts) = upgraded.downcast() else {
+        return Err(UpgradeError::Other.into());
+    };
+
+    Ok(WebSocketStream::from_raw_socket(parts.io, Role::Server, Some(config)).await)
 }
 
 #[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
 async fn handshake<App>(
     request: &mut Request<App>,
     config: &WsConfig,
-) -> Result<WebSocketStream<UpgradedIo>, Error> {
+) -> Result<WebSocketStream<IoStream>, Error> {
     use tokio_websockets::{Config, Limits, server::Builder};
 
     let on_upgrade = request.on_upgrade.take().expect("already upgraded.");
-    let upgraded = UpgradedIo::new(on_upgrade.await?)?;
     let limits = Limits::default().max_payload_len(config.max_message_size);
     let config = Config::default()
         .frame_size(config.max_frame_size.unwrap_or(DEFAULT_FRAME_SIZE))
         .flush_threshold(config.buffer_size);
 
-    Ok(Builder::new().config(config).limits(limits).serve(upgraded))
+    let upgraded = on_upgrade.await?;
+    let Ok(parts) = upgraded.downcast() else {
+        return Err(UpgradeError::Other.into());
+    };
+
+    Ok(Builder::new().config(config).limits(limits).serve(parts.io))
 }
 
 async fn reactor<T, App, Await>(mut request: Request<App>, listener: Arc<Listener<T>>)

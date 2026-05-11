@@ -69,6 +69,7 @@ smallvec = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
 via-router = { version = "3.0.0-beta.34" }
+zeroize = "1"
 
 [dependencies.native-tls]
 version = "0.2"

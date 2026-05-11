@@ -15,9 +15,9 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_websockets::WebSocketStream;
 
 use super::error::rescue;
-use super::io::UpgradedIo;
 use super::{Channel, Message, Request};
 use crate::Error;
+use crate::server::IoStream;
 use crate::ws::upgrade::Listener;
 
 pub struct RunTask<T, App> {
@@ -33,14 +33,14 @@ enum IoState {
 struct Facade {
     listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
     state: IoState,
-    stream: *mut WebSocketStream<UpgradedIo>,
+    stream: *mut WebSocketStream<IoStream>,
     rendezvous: Channel,
 }
 
 struct Run<T, App> {
     listener: Arc<Listener<T>>,
     request: Request<App>,
-    stream: WebSocketStream<UpgradedIo>,
+    stream: WebSocketStream<IoStream>,
     facade: Option<Facade>,
     _pin: PhantomPinned,
 }
@@ -53,7 +53,7 @@ where
     pub(super) fn new(
         listener: Arc<Listener<T>>,
         request: Request<App>,
-        stream: WebSocketStream<UpgradedIo>,
+        stream: WebSocketStream<IoStream>,
     ) -> Self {
         Self {
             run: Box::pin(Run {

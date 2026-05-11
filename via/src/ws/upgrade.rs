@@ -180,7 +180,7 @@ where
             let result = Response::build()
                 .status(StatusCode::SWITCHING_PROTOCOLS)
                 .header(h::CONNECTION, "upgrade")
-                .header(h::SEC_WEBSOCKET_ACCEPT, accept.as_str())
+                .header(h::SEC_WEBSOCKET_ACCEPT, accept.as_str()?)
                 .header(h::UPGRADE, "websocket")
                 .finish();
 

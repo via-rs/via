@@ -28,9 +28,8 @@ pub fn sha1(input: &[u8]) -> Result<Base64EncodedDigest, UpgradeError> {
 }
 
 impl Base64EncodedDigest {
-    #[inline(always)]
-    pub fn as_str(&self) -> &str {
-        // Safety: Base64 is guaranteed to be ASCII and therefore, valid UTF-8.
-        unsafe { str::from_utf8_unchecked(&self.0) }
+    #[inline]
+    pub fn as_str(&self) -> Result<&str, UpgradeError> {
+        str::from_utf8(&self.0).or(Err(UpgradeError::Other))
     }
 }

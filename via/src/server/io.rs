@@ -1,4 +1,5 @@
 use hyper::rt::{Read, ReadBufCursor, Write};
+use hyper_util::rt::tokio::WithHyperIo;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -6,14 +7,17 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::OwnedSemaphorePermit;
 
 pub(crate) struct IoWithPermit<T> {
-    io: T,
+    io: WithHyperIo<T>,
     _permit: OwnedSemaphorePermit,
 }
 
 impl<T> IoWithPermit<T> {
     #[inline]
     pub fn new(io: T, _permit: OwnedSemaphorePermit) -> Self {
-        Self { io, _permit }
+        Self {
+            io: WithHyperIo::new(io),
+            _permit,
+        }
     }
 }
 
@@ -28,66 +32,82 @@ impl<T> Drop for IoWithPermit<T> {
     fn drop(&mut self) {}
 }
 
+impl<T: AsyncRead + Unpin> AsyncRead for IoWithPermit<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context,
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
+        AsyncRead::poll_read(Pin::new(&mut self.io), context, buf)
+    }
+}
+
 impl<T: AsyncRead + Unpin> Read for IoWithPermit<T> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         context: &mut Context,
-        mut buf: ReadBufCursor,
+        buf: ReadBufCursor,
     ) -> Poll<io::Result<()>> {
-        // Safety:
-        //
-        // ReadBufCursor::as_mut requires that no bytes are uninitialized that
-        // have been initialized before. We trust that the impl of T::poll_read
-        // reads linearly into the unfilled portion of buf and that the filled
-        // portion of buf ends at the byte position of the last byte that was
-        // read during the call to <T as AsyncRead>::poll_read.
-        let len = unsafe {
-            let mut dest = ReadBuf::uninit(buf.as_mut());
-            let Poll::Ready(_) = Pin::new(&mut self.io).poll_read(context, &mut dest)? else {
-                return Poll::Pending;
-            };
+        Read::poll_read(Pin::new(&mut self.io), context, buf)
+    }
+}
 
-            dest.filled().len()
-        };
+impl<T: AsyncWrite + Unpin> AsyncWrite for IoWithPermit<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        AsyncWrite::poll_write(Pin::new(&mut self.io), context, buf)
+    }
 
-        // Safety:
-        //
-        // The buffer is advanced by the exact number of bytes that were read
-        // during the call to <T as AsyncRead>::poll_read. We trust that the
-        // implementation of TcpStream for the runtime is sound and does not
-        // grow the filled portion of the buffer beyond it's total size.
-        unsafe { buf.advance(len) };
+    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
+        AsyncWrite::poll_flush(Pin::new(&mut self.io), context)
+    }
 
-        Poll::Ready(Ok(()))
+    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
+        AsyncWrite::poll_shutdown(Pin::new(&mut self.io), context)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        AsyncWrite::is_write_vectored(&self.io)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        context: &mut Context,
+        bufs: &[io::IoSlice],
+    ) -> Poll<io::Result<usize>> {
+        AsyncWrite::poll_write_vectored(Pin::new(&mut self.io), context, bufs)
     }
 }
 
 impl<T: AsyncWrite + Unpin> Write for IoWithPermit<T> {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
+        context: &mut Context,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.io).poll_write(context, buf)
+        Write::poll_write(Pin::new(&mut self.io), context, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.io).poll_flush(context)
+    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
+        Write::poll_flush(Pin::new(&mut self.io), context)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.io).poll_shutdown(context)
+    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
+        Write::poll_shutdown(Pin::new(&mut self.io), context)
     }
 
     fn is_write_vectored(&self) -> bool {
-        self.io.is_write_vectored()
+        Write::is_write_vectored(&self.io)
     }
 
     fn poll_write_vectored(
         mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
+        context: &mut Context,
+        bufs: &[io::IoSlice],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.io).poll_write_vectored(context, bufs)
+        Write::poll_write_vectored(Pin::new(&mut self.io), context, bufs)
     }
 }

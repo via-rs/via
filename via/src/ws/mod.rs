@@ -22,7 +22,6 @@ macro_rules! log {
 
 mod channel;
 mod error;
-mod io;
 mod request;
 mod run;
 mod upgrade;

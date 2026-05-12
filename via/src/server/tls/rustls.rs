@@ -58,16 +58,14 @@ impl Acceptor for RustlsAcceptor {
 
 impl MaybeTlsStream {
     #[inline]
-    fn with_stream<F, T>(mut self: Pin<&mut Self>, f: F) -> Poll<T>
+    fn with_stream<F, T>(mut self: Pin<&mut Self>, f: F) -> Poll<io::Result<T>>
     where
-        F: FnOnce(Pin<&mut TlsStream<TcpStream>>) -> Poll<T>,
+        F: FnOnce(Pin<&mut TlsStream<TcpStream>>) -> Poll<io::Result<T>>,
     {
-        match &mut self.state {
-            ReadyState::Stream(stream) => f(Pin::new(stream)),
-            ReadyState::Handshake(_) => {
-                // TODO: Placeholder for tracing...
-                Poll::Pending
-            }
+        if let ReadyState::Stream(stream) = &mut self.state {
+            f(Pin::new(stream))
+        } else {
+            Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
         }
     }
 }

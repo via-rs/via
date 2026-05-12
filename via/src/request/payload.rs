@@ -6,11 +6,10 @@ use serde::de::DeserializeOwned;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::ptr;
 use std::rc::Rc;
-use std::sync::atomic::{Ordering, compiler_fence};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
+use zeroize::Zeroize;
 
 use crate::{Error, err};
 
@@ -208,35 +207,20 @@ fn deserialize_utf8(data: Vec<u8>) -> Result<String, Error> {
     String::from_utf8(data).map_err(|_| Error::invalid_utf8_sequence("request body"))
 }
 
-/// Zeroize the buffer backing the provided `Bytes`. Afterwards, the data in
-/// `frame` is unreachable and the visible length is 0.
+/// Zeroize the buffer backing the provided `Bytes`.
 ///
-/// Adapted from the [zeroize] crate in order to prevent an O(n) call to
-/// compiler_fence where n is the number of frames in a payload.
-///
-/// To safely call this fn, you must guarantee the following invariants:
-///
-///   1. `Bytes::is_unique` is true for `frame`
-///   2. `compiler_fence` is called after each frame is zeroized
-///
-/// [zeroize]: https://crates.io/crates/zeroize/
-unsafe fn unfenced_zeroize(frame: &mut Bytes) {
+/// To safely call this fn, you must guarantee unique access to the buffer that
+/// `Bytes` points to. This can be achieved by calling `Bytes::is_unique`.
+unsafe fn zeroize_bytes(frame: &mut Bytes) {
     let len = frame.remaining();
     let ptr = frame.as_ptr() as *mut u8;
+    let buf = std::ptr::slice_from_raw_parts_mut(ptr, len);
 
-    for idx in 0..len {
-        unsafe {
-            ptr::write_volatile(ptr.add(idx), 0);
-        }
-    }
-
-    // Make the visible length of the frame buffer 0.
-    frame.advance(len);
-}
-
-#[inline(always)]
-fn release_compiler_fence() {
-    compiler_fence(Ordering::Release);
+    // Safety:
+    // - The allocation backing `frame` is not null
+    // - We have unique access to the allocation backing `frame`
+    // - The length of `buf` does not exceed the length of `frame`
+    Zeroize::zeroize(unsafe { &mut *buf });
 }
 
 impl Aggregate {
@@ -339,7 +323,6 @@ impl Payloadz for Aggregate {
             dest.extend_from_slice(frame.as_ref());
 
             // Safety:
-            //
             // The precondition at the top of this function ensures that we
             // have unique access to each frame contained in self.
             //
@@ -350,13 +333,12 @@ impl Payloadz for Aggregate {
             // The combination of the aforementioned proofs confirms that we
             // can safely mutate the buffer backing each frame in the payload.
             unsafe {
-                unfenced_zeroize(frame);
+                zeroize_bytes(frame);
             }
-        }
 
-        // Ensures sequential access to the buffers contained in self.
-        // A necessary step after zeroization.
-        release_compiler_fence();
+            // Make the visible length of the frame buffer 0.
+            frame.advance(frame.remaining());
+        }
 
         Ok(dest)
     }
@@ -366,7 +348,8 @@ impl Payloadz for Aggregate {
         T: DeserializeOwned,
     {
         if let [frame] = self.payload.frames_mut() {
-            // If we do not have unique access to self, return back to the caller.
+            // If we do not have unique access to the frame, return self back
+            // to the caller.
             if !frame.is_unique() {
                 return Err(self);
             }
@@ -375,22 +358,20 @@ impl Payloadz for Aggregate {
             let result = deserialize_json(frame.as_ref());
 
             // Safety:
-            //
             // The precondition at the top of this function ensures that we
             // have unique access to self and therefore, can mutate the buffer.
             unsafe {
-                unfenced_zeroize(frame);
+                zeroize_bytes(frame);
             }
 
-            // Ensures sequential access to the buffers contained in self.
-            // A necessary step after zeroization.
-            release_compiler_fence();
+            // Make the visible length of the frame buffer 0.
+            frame.advance(frame.remaining());
 
-            return Ok(result);
+            Ok(result)
+        } else {
+            self.z_coalesce()
+                .map(|data| deserialize_json(data.as_slice()))
         }
-
-        self.z_coalesce()
-            .map(|data| deserialize_json(data.as_slice()))
     }
 }
 

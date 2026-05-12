@@ -1,6 +1,6 @@
 [package]
 name = "via"
-version = "2.0.0-gm.49"
+version = "2.0.0-gm.51"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -69,6 +69,7 @@ smallvec = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
 via-router = { version = "3.0.0-beta.34" }
+zeroize = "1"
 
 [dependencies.native-tls]
 version = "0.2"

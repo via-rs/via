@@ -43,7 +43,7 @@ where
     }
 
     pub fn exists(&self, id: &Id) -> bool {
-        self.store.get(id).is_some()
+        self.store.contains_key(id)
     }
 
     pub fn insert<U>(&mut self, row: U) -> Result<T, BoxError>

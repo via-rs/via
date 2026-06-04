@@ -320,6 +320,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use super::{Route, Router};
     use crate::path::PathParam;
 
@@ -334,16 +336,15 @@ mod tests {
     type Match<'a> = (Route<'a, String>, Option<PathParam>);
 
     macro_rules! assert_param_matches {
-        ($param:expr, $pat:pat) => {{
-            let param = $param.as_ref().map(|param| (param.ident(), param.range()));
-
-            assert!(
-                matches!(param, $pat),
+        ($param:expr, $pat:pat) => {
+            assert_matches!(
+                $param.as_ref().map(|param| (param.ident(), param.range())),
+                $pat,
                 "\n{} => {:?}\n",
                 stringify!($pat),
                 $param
             )
-        }};
+        };
     }
 
     #[allow(clippy::type_complexity)]
@@ -356,7 +357,7 @@ mod tests {
     }
 
     fn assert_matches_root((mut stack, param): Match<'_>) {
-        assert!(matches!(stack.next().as_deref(), Some("/")));
+        assert_matches!(stack.next().as_deref(), Some("/"));
         assert!(stack.next().is_none());
 
         assert!(param.is_none());
@@ -377,7 +378,7 @@ mod tests {
         {
             let (mut stack, param) = expect_match(results.next());
 
-            assert!(matches!(stack.next().as_deref(), Some("/*path")));
+            assert_matches!(stack.next().as_deref(), Some("/*path"));
             assert!(stack.next().is_none());
 
             assert_param(&param);
@@ -441,7 +442,7 @@ mod tests {
             {
                 let (mut stack, param) = expect_match(results.next());
 
-                assert!(matches!(stack.next().as_deref(), Some("/echo/*path")));
+                assert_matches!(stack.next().as_deref(), Some("/echo/*path"));
                 assert!(stack.next().is_none());
 
                 assert_param_matches!(param, Some(("path", Some([6, _]))));
@@ -478,7 +479,7 @@ mod tests {
             {
                 let (mut stack, param) = expect_match(results.next());
 
-                assert!(matches!(stack.next().as_deref(), Some("/articles/:id")));
+                assert_matches!(stack.next().as_deref(), Some("/articles/:id"));
                 assert!(stack.next().is_none());
 
                 assert_param_matches!(param, Some(("id", Some([10, 15]))));
@@ -516,7 +517,7 @@ mod tests {
             {
                 let (mut stack, param) = expect_match(results.next());
 
-                assert!(matches!(stack.next().as_deref(), Some("/articles/:id")));
+                assert_matches!(stack.next().as_deref(), Some("/articles/:id"));
                 assert!(stack.next().is_none());
 
                 assert_param_matches!(param, Some(("id", Some([10, 15]))));

@@ -67,7 +67,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --features="ring tokio-tungstenite" --tests --examples -- -D warnings
+          args: --features __test --tests --examples -- -D warnings
 
       - name: fmt
         uses: actions-rs/cargo@v1

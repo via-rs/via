@@ -57,15 +57,26 @@ jobs:
       - uses: actions/checkout@master
 
       - name: setup
-        run: |
-          rustup component add clippy rustfmt
-          rustc --version
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          components: rustfmt, clippy
 
       - name: clippy
-        run: cargo clippy --features="ring tokio-tungstenite" --tests --examples -- -D warnings
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --features __test --tests --examples -- -D warnings
 
       - name: fmt
-        run: cargo fmt --all -- --check
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
 
       - name: docs
-        run: cargo doc --no-deps
+        uses: actions-rs/cargo@v1
+        with:
+          command: doc
+          args: --no-deps

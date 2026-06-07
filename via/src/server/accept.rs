@@ -77,14 +77,41 @@ where
                 Ok(stream) => stream,
                 Err(error) => {
                     log!("error(accept): {}", error);
+                    break cfg_select! {
+                        unix => match error.raw_os_error() {
+                            // ENOMEM or ENFILE
+                            //
+                            // Immutably replacing the node is preferred when
+                            // the process exits with any of these codes.
+                            Some(code @ (12 | 23)) => ExitCode::from(code as u8),
 
-                    #[cfg(unix)]
-                    if let Some(24) = error.raw_os_error() { // EMFILE
-                        tokio::task::yield_now().await; // We're at capacity.
-                        continue; // Try again after yielding to the runtime.
-                    }
+                            // EMFILE
+                            //
+                            // The server is at capacity. Yield to the runtime.
+                            //
+                            // A connection task is likely using an fd that the
+                            // application developer did not account for.
+                            Some(24) => {
+                                tokio::task::yield_now().await;
+                                continue; // Retry after yield.
+                            }
 
-                    break ExitCode::FAILURE;
+                            // All other codes are an opaque error.
+                            //
+                            // Follow the instructions provided for non-POSIX
+                            // systems.
+                            _ => ExitCode::FAILURE,
+                        },
+
+                        // Use an opaque exit code for non-POSIX platforms.
+                        //
+                        // Either restart the process or immutably replace
+                        // the node.
+                        //
+                        // When possible, prefer containerized immutable
+                        // deployments.
+                        _ => ExitCode::FAILURE,
+                    };
                 }
             },
             // A graceful shutdown signal was sent to the process.

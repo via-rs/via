@@ -3,30 +3,20 @@ use futures_core::Stream;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED};
 use http_body::Frame;
 use httpdate::HttpDate;
-use std::fs::{File as StdFile, Metadata};
-use std::io::{self, ErrorKind, Read};
-use std::mem::MaybeUninit;
+use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
-use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncRead, ReadBuf};
-use tokio::{task, time};
+use tokio::fs::{self, File as TokioFile};
+use tokio::sync::OwnedSemaphorePermit;
+use tokio_util::io::ReaderStream;
 
 use super::{Finalize, Response, ResponseBuilder};
-use crate::error::{BoxError, Error};
+use crate::Error;
 
-/// The base amount of time that the server will wait before
-/// attempting to open a file after an error has occurred.
+/// The maximum amount of data that can be buffered in memory.
 ///
-const BASE_DELAY_IN_MILLIS: u64 = 100;
-
-const MAX_BUFFER_SIZE: usize = 16 * 1024; // 16KB
-
-/// The amount of times that we'll retry to open a file if in an error occurs.
-///
-const MAX_ATTEMPTS: u64 = 5;
+const MAX_BUFFER_SIZE: usize = 64 * 1024; // 64KB
 
 /// A function pointer used to generate an etag.
 ///
@@ -37,6 +27,7 @@ type GenerateEtag = fn(&Metadata) -> Result<Option<String>, Error>;
 pub struct File {
     path: PathBuf,
     etag: Option<GenerateEtag>,
+    permit: Option<OwnedSemaphorePermit>,
     content_type: Option<String>,
     with_last_modified: bool,
 }
@@ -51,16 +42,15 @@ enum Open {
     /// The file should be streamed over the socket with chunked
     /// `Transfer-Encoding`.
     ///
-    Stream(usize, Metadata, TokioFile),
+    Stream(Metadata, TokioFile),
 }
 
 /// A stream that wraps the `AsyncRead` impl for `TokioFile`.
 ///
 #[must_use = "streams do nothing unless polled"]
 struct FileStream {
-    remaining: usize,
-    buffer: Vec<MaybeUninit<u8>>,
-    file: TokioFile,
+    reader: ReaderStream<TokioFile>,
+    permit: Option<OwnedSemaphorePermit>,
 }
 
 /// Attempt to open the file and access the metadata at the provided path.
@@ -68,50 +58,18 @@ struct FileStream {
 /// If the file size is less than `max_alloc_size`, the contents will be
 /// eagerly read into memory.
 ///
-async fn open(path: &Path, max_alloc_size: usize) -> Result<Open, Error> {
-    let mut attempts = 0;
+async fn open(path: &Path, max_alloc_size: u64) -> Result<Open, Error> {
+    let metadata = fs::metadata(path).await.map_err(Error::from_io_error)?;
 
-    loop {
-        let path = path.to_owned();
-        let delay = BASE_DELAY_IN_MILLIS << attempts;
-        let future = task::spawn_blocking(move || {
-            let mut std = StdFile::open(path)?;
-            let metadata = std.metadata()?;
-            let required_cap = match isize::try_from(metadata.len()) {
-                Err(e) => return Err(io::Error::new(ErrorKind::FileTooLarge, e)),
-                Ok(cap) => cap as usize,
-            };
-
-            if required_cap > max_alloc_size {
-                let mut file = TokioFile::from_std(std);
-
-                file.set_max_buf_size(MAX_BUFFER_SIZE);
-                Ok(Open::Stream(required_cap, metadata, file))
-            } else {
-                let mut data = Vec::with_capacity(required_cap);
-
-                std.read_to_end(&mut data)?;
-                Ok(Open::Eager(metadata, data))
-            }
-        });
-
-        break match future.await? {
-            Ok(open) => Ok(open),
-            Err(error) => match error.kind() {
-                ErrorKind::IsADirectory | ErrorKind::NotFound | ErrorKind::PermissionDenied => {
-                    Err(Error::from_io_error(error))
-                }
-                _ => {
-                    if attempts > MAX_ATTEMPTS {
-                        Err(Error::from_io_error(error))
-                    } else {
-                        time::sleep(Duration::from_millis(delay)).await;
-                        attempts += 1;
-                        continue;
-                    }
-                }
-            },
-        };
+    if metadata.len() > max_alloc_size {
+        let mut file = TokioFile::open(path).await.map_err(Error::from_io_error)?;
+        file.set_max_buf_size(0); // Buffering occurs in ReaderStream.
+        Ok(Open::Stream(metadata, file))
+    } else {
+        match fs::read(path).await {
+            Ok(data) => Ok(Open::Eager(metadata, data)),
+            Err(error) => Err(Error::from_io_error(error)),
+        }
     }
 }
 
@@ -122,6 +80,7 @@ impl File {
         Self {
             path: path.as_ref().to_owned(),
             etag: None,
+            permit: None,
             content_type: None,
             with_last_modified: false,
         }
@@ -135,6 +94,14 @@ impl File {
             etag: Some(f),
             ..self
         }
+    }
+
+    // Assign a semaphore permit to the file. This is used to limit the number
+    // of files that are open concurrently.
+    //
+    pub fn permit(mut self, permit: OwnedSemaphorePermit) -> Self {
+        self.permit = Some(permit);
+        self
     }
 
     /// Set the value of the `Content-Type` header that will be included in the
@@ -167,15 +134,16 @@ impl File {
     /// If the file is larger than the provided `max_alloc_size` in bytes, it
     /// will be streamed over the socket with chunked transfer encoding.
     ///
-    pub async fn serve(self, max_alloc_size: usize) -> crate::Result {
-        match open(&self.path, max_alloc_size).await? {
+    pub async fn serve(mut self, max_alloc_size: u64) -> crate::Result {
+        match open(&self.path, max_alloc_size.min(isize::MAX as u64)).await? {
             Open::Eager(meta, data) => {
                 let response = Response::build().header(CONTENT_LENGTH, data.len());
+                self.permit = None;
                 self.set_headers(&meta, response)?.body(data.into())
             }
-            Open::Stream(len, meta, file) => {
+            Open::Stream(meta, file) => {
                 let response = self.set_headers(&meta, Response::build())?;
-                FileStream::new(len, file).finalize(response)
+                FileStream::new(self.permit, file).finalize(response)
             }
         }
     }
@@ -207,50 +175,30 @@ impl File {
 }
 
 impl FileStream {
-    fn new(remaining: usize, file: TokioFile) -> Self {
+    fn new(permit: Option<OwnedSemaphorePermit>, file: TokioFile) -> Self {
         Self {
-            remaining,
-            buffer: vec![MaybeUninit::uninit(); MAX_BUFFER_SIZE],
-            file,
+            reader: ReaderStream::with_capacity(file, MAX_BUFFER_SIZE),
+            permit,
         }
     }
 }
 
 impl Stream for FileStream {
-    type Item = Result<Frame<Bytes>, BoxError>;
+    type Item = Result<Frame<Bytes>, Error>;
 
-    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.remaining == 0 {
-            return Poll::Ready(None);
-        }
-
-        let this = self.get_mut();
-        let mut data = ReadBuf::uninit(&mut this.buffer);
-
-        match Pin::new(&mut this.file).poll_read(context, &mut data) {
-            Poll::Pending => Poll::Pending,
-
-            Poll::Ready(Ok(())) => {
-                let filled = data.filled();
-                let len = filled.len();
-
-                if let Some(remaining) = this.remaining.checked_sub(len) {
-                    let data = Bytes::copy_from_slice(filled);
-                    this.remaining = remaining;
-                    this.buffer[..len].fill_with(MaybeUninit::uninit);
-                    Poll::Ready(Some(Ok(Frame::data(data))))
-                } else {
-                    this.remaining = 0;
-                    this.buffer.fill_with(MaybeUninit::uninit);
-                    Poll::Ready(Some(Err(io::Error::from(ErrorKind::UnexpectedEof).into())))
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.reader)
+            .poll_next(context)
+            .map(|next| match next {
+                Some(Ok(chunk)) => Some(Ok(Frame::data(chunk))),
+                Some(Err(error)) => {
+                    self.permit = None;
+                    Some(Err(Error::from_io_error(error)))
                 }
-            }
-
-            Poll::Ready(Err(error)) => {
-                this.remaining = 0;
-                this.buffer.fill(MaybeUninit::uninit());
-                Poll::Ready(Some(Err(error.into())))
-            }
-        }
+                None => {
+                    self.permit = None;
+                    None
+                }
+            })
     }
 }

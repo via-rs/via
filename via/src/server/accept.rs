@@ -22,10 +22,14 @@ use crate::error::ServerError;
 use super::tls::{Alpn, NegotiateAlpn};
 
 macro_rules! log {
-    ($($arg:tt)*) => {
-        if cfg!(debug_assertions) {
-            eprintln!($($arg)*)
-        }
+    ($level:tt($reason:tt), $fmt:literal $($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "{}({}): {}",
+            stringify!($level),
+            stringify!($reason),
+            format_args!($fmt $($arg)*)
+        );
     };
 }
 
@@ -76,19 +80,46 @@ where
             result = listener.accept() => match result {
                 Ok(stream) => stream,
                 Err(error) => {
-                    log!("error(accept): {}", error);
+                    // Print the error message to stderr in debug builds.
+                    log!(error(accept), "{}", error);
 
-                    #[cfg(unix)]
-                    let Some(12 | 23 | 24) = error.raw_os_error() else {
-                        continue;
+                    // Exit with a corresponding error exit code or continue
+                    // on EMFILE for POSIX systems.
+                    break cfg_select! {
+                        unix => match error.raw_os_error() {
+                            // ENOMEM or ENFILE
+                            //
+                            // Immutably replacing the node is preferred when
+                            // the process exits with any of these codes.
+                            Some(code @ (12 | 23)) => ExitCode::from(code as u8),
+
+                            // EMFILE
+                            //
+                            // The server is at capacity. Yield to the runtime.
+                            //
+                            // A connection task is likely using an fd that the
+                            // application developer did not account for.
+                            Some(24) => {
+                                tokio::task::yield_now().await;
+                                continue; // Retry after yield.
+                            }
+
+                            // All other codes are an opaque error.
+                            //
+                            // Follow the instructions provided for non-POSIX
+                            // systems.
+                            _ => ExitCode::FAILURE,
+                        },
+
+                        // Use an opaque exit code for non-POSIX platforms.
+                        //
+                        // Either restart the process or immutably replace
+                        // the node.
+                        //
+                        // When possible, prefer containerized immutable
+                        // deployments.
+                        _ => ExitCode::FAILURE,
                     };
-
-                    #[cfg(windows)]
-                    let Some(10024 | 10055) = error.raw_os_error() else {
-                        continue;
-                    };
-
-                    break ExitCode::FAILURE;
                 }
             },
             // A graceful shutdown signal was sent to the process.
@@ -141,7 +172,7 @@ where
             serve.await
         });
 
-        if connections.len() >= 1024 {
+        if connections.len() >= 999 {
             let batch = mem::take(&mut connections);
             tokio::spawn(drain_connections(false, batch));
         }
@@ -160,13 +191,25 @@ where
 }
 
 async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), ServerError>>) {
-    log!("joining {} inflight connections...", connections.len());
+    log!(
+        info(gc),
+        "joining {} inflight connections...",
+        connections.len()
+    );
 
     while let Some(result) = connections.join_next().await {
+        #[cfg(not(debug_assertions))]
+        drop(result);
+
+        #[cfg(debug_assertions)]
         match result {
             Ok(Ok(_)) => {}
-            Err(error) => log!("error(connection): {}", error),
-            Ok(Err(error)) => log!("error(service): {}", error),
+            Err(error) => {
+                log!(error(connection), "{}", &error);
+            }
+            Ok(Err(error)) => {
+                log!(error(service), "{}", &error);
+            }
         }
 
         if !immediate {

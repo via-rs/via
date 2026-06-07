@@ -6,10 +6,11 @@ use tokio::sync::Semaphore;
 use via::{Error, Middleware, Next, Request, Server};
 
 const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
-const MAX_CONNECTIONS: usize = 500;
+
+const MAX_CONNECTIONS: usize = 1000;
 
 #[cfg(feature = "fs")]
-const MAX_ALLOC_SIZE: usize = 1024 * 1024; // 1 MB
+const MAX_ALLOC_SIZE: u64 = 1024 * 1024; // 1 MB
 
 #[allow(dead_code)]
 struct ServeFrom {
@@ -80,11 +81,9 @@ impl<T: Send + Sync> Middleware<T> for ServeFrom {
             let response = File::open(&path)
                 .content_type(&mime_type)
                 .with_last_modified()
+                .permit(permit)
                 .serve(MAX_ALLOC_SIZE) // stream files > 1 MB
                 .await?;
-
-            // TODO: add an optional permit field or close callback to file.
-            drop(permit);
 
             Ok(response)
         })
@@ -95,7 +94,22 @@ impl<T: Send + Sync> Middleware<T> for ServeFrom {
 async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(());
     let public_dir = resolve_public_dir();
-    let file_server = ServeFrom::new(MAX_CONNECTIONS, &public_dir);
+    let (max_concurrency, max_connections) = cfg_select! {
+        // On Windows, sockets are not files.
+        windows => (MAX_CONNECTIONS, MAX_CONNECTIONS),
+
+        // On POSIX, max_concurrency affects the max_connections budget.
+        //
+        // The default amount of padding provided by Via is 13. The maximum
+        // amount of concurrent file streams should not exceed the number of
+        // worker process in the tokio runtime.
+        _ => {{
+            let concurrency = std::thread::available_parallelism()?.get();
+            let adjusted = ((13isize - concurrency as isize) + MAX_CONNECTIONS as isize) as usize;
+
+            (concurrency, adjusted)
+        }}
+    };
 
     if cfg!(not(feature = "fs")) {
         panic!("the \"fs\" feature must be enabled in order to serve files.");
@@ -103,10 +117,11 @@ async fn main() -> Result<ExitCode, Error> {
 
     println!("serving files from: {:?}", &public_dir);
 
-    app.route("/*path").to(via::get(file_server));
+    let serve_dir = ServeFrom::new(max_concurrency, &public_dir);
+    app.route("/*path").to(via::get(serve_dir));
 
     Server::new(app)
-        .max_connections(MAX_CONNECTIONS * 2)
+        .max_connections(max_connections)
         .listen(("127.0.0.1", 8080))
         .await
 }

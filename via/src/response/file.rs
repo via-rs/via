@@ -62,10 +62,9 @@ async fn open(path: &Path, max_alloc_size: u64) -> Result<Open, Error> {
     let metadata = fs::metadata(path).await.map_err(Error::from_io_error)?;
 
     if metadata.len() > max_alloc_size {
-        match TokioFile::open(path).await {
-            Ok(file) => Ok(Open::Stream(metadata, file)),
-            Err(error) => Err(Error::from_io_error(error)),
-        }
+        let mut file = TokioFile::open(path).await.map_err(Error::from_io_error)?;
+        file.set_max_buf_size(0); // Buffering occurs in ReaderStream.
+        Ok(Open::Stream(metadata, file))
     } else {
         match fs::read(path).await {
             Ok(data) => Ok(Open::Eager(metadata, data)),

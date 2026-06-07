@@ -16,7 +16,7 @@ default = []
 aws-lc-rs = ["dep:aws-lc-rs", "rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
 ring = ["dep:ring", "rustls/ring", "tokio-rustls/ring"]
 
-file = ["dep:httpdate", "tokio/fs"]
+file = ["dep:httpdate", "tokio/fs", "tokio-util"]
 
 mime = ["dep:mime"]
 
@@ -103,6 +103,12 @@ default-features = false
 [dependencies.tokio-rustls]
 version = "0.26"
 optional = true
+default-features = false
+
+[dependencies.tokio-util]
+version = "0.7"
+optional = true
+features = ["io"]
 default-features = false
 
 [package.metadata.docs.rs]

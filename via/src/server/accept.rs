@@ -22,10 +22,14 @@ use crate::error::ServerError;
 use super::tls::{Alpn, NegotiateAlpn};
 
 macro_rules! log {
-    ($($arg:tt)*) => {
-        if cfg!(debug_assertions) {
-            eprintln!($($arg)*)
-        }
+    ($level:tt($reason:tt), $fmt:literal $($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "{}({}): {}",
+            stringify!($level),
+            stringify!($reason),
+            format_args!($fmt $($arg)*)
+        );
     };
 }
 
@@ -76,7 +80,11 @@ where
             result = listener.accept() => match result {
                 Ok(stream) => stream,
                 Err(error) => {
-                    log!("error(accept): {}", error);
+                    // Print the error message to stderr in debug builds.
+                    log!(error(accept), "{}", error);
+
+                    // Exit with a corresponding error exit code or continue
+                    // on EMFILE for POSIX systems.
                     break cfg_select! {
                         unix => match error.raw_os_error() {
                             // ENOMEM or ENFILE
@@ -183,13 +191,21 @@ where
 }
 
 async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), ServerError>>) {
-    log!("joining {} inflight connections...", connections.len());
+    log!(
+        info(gc),
+        "joining {} inflight connections...",
+        connections.len()
+    );
 
     while let Some(result) = connections.join_next().await {
         match result {
             Ok(Ok(_)) => {}
-            Err(error) => log!("error(connection): {}", error),
-            Ok(Err(error)) => log!("error(service): {}", error),
+            Err(error) => {
+                log!(error(connection), "{}", error);
+            }
+            Ok(Err(error)) => {
+                log!(error(service), "{}", error);
+            }
         }
 
         if !immediate {

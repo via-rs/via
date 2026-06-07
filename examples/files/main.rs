@@ -7,6 +7,8 @@ use via::{Error, Middleware, Next, Request, Server};
 
 const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
+const MAX_CONNECTIONS: usize = 1000;
+
 #[cfg(feature = "fs")]
 const MAX_ALLOC_SIZE: u64 = 1024 * 1024; // 1 MB
 
@@ -92,13 +94,21 @@ impl<T: Send + Sync> Middleware<T> for ServeFrom {
 async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(());
     let public_dir = resolve_public_dir();
-    let max_concurrency = cfg_select! {
+    let (max_concurrency, max_connections) = cfg_select! {
         // On Windows, sockets are not files.
-        windows => 1000,
+        windows => (MAX_CONNECTIONS, MAX_CONNECTIONS),
 
-        // If you increase this value, you must subject the absolute value of
-        // max_concurrency - 13 from Server::max_connections.
-        _ => std::thread::available_parallelism()?.get(),
+        // On POSIX, max_concurrency affects the max_connections budget.
+        //
+        // The default amount of padding provided by Via is 13. The maximum
+        // amount of concurrent file streams should not exceed the number of
+        // worker process in the tokio runtime.
+        _ => {{
+            let concurrency = std::thread::available_parallelism()?.get();
+            let adjusted = ((13isize - concurrency as isize) + MAX_CONNECTIONS as isize) as usize;
+
+            (concurrency, adjusted)
+        }}
     };
 
     if cfg!(not(feature = "fs")) {
@@ -110,5 +120,8 @@ async fn main() -> Result<ExitCode, Error> {
     let serve_dir = ServeFrom::new(max_concurrency, &public_dir);
     app.route("/*path").to(via::get(serve_dir));
 
-    Server::new(app).listen(("127.0.0.1", 8080)).await
+    Server::new(app)
+        .max_connections(max_connections)
+        .listen(("127.0.0.1", 8080))
+        .await
 }

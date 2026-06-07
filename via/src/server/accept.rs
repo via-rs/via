@@ -141,7 +141,7 @@ where
             serve.await
         });
 
-        if connections.len() >= 1024 {
+        if connections.len() >= 999 {
             let batch = mem::take(&mut connections);
             tokio::spawn(drain_connections(false, batch));
         }

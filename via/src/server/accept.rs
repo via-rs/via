@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
-use tokio::task::{JoinSet, coop};
+use tokio::task::{self, JoinSet, coop};
 use tokio::time::timeout;
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
@@ -79,14 +79,10 @@ where
                     log!("error(accept): {}", error);
 
                     #[cfg(unix)]
-                    let Some(12 | 23 | 24) = error.raw_os_error() else {
-                        continue;
-                    };
-
-                    #[cfg(windows)]
-                    let Some(10024 | 10055) = error.raw_os_error() else {
-                        continue;
-                    };
+                    if let Some(24) = error.raw_os_error() { // EMFILE
+                        task::yield_now().await; // We're at capacity.
+                        continue; // Try again after yielding to the runtime.
+                    }
 
                     break ExitCode::FAILURE;
                 }

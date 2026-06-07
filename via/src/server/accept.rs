@@ -198,13 +198,17 @@ async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), 
     );
 
     while let Some(result) = connections.join_next().await {
+        #[cfg(not(debug_assertions))]
+        let _ = result;
+
+        #[cfg(debug_assertions)]
         match result {
             Ok(Ok(_)) => {}
             Err(error) => {
-                log!(error(connection), "{}", error);
+                log!(error(connection), "{}", &error);
             }
             Ok(Err(error)) => {
-                log!(error(service), "{}", error);
+                log!(error(service), "{}", &error);
             }
         }
 

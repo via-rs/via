@@ -232,11 +232,14 @@ where
         Ok(future.await)
     }
 
-    /// Listens for incoming HTTPS connections using `native-tls` for TLS
+    /// Listens for incoming HTTPS connections using `rustls` for TLS
     /// termination.
     ///
-    /// This variant enables TLS using a platform-native TLS implementation via
-    /// the `native-tls` crate.
+    /// This variant enables TLS using `rustls v0.23`, a pure-Rust TLS
+    /// implementation.
+    ///
+    /// It is typically preferred in environments where deterministic behavior,
+    /// portability, or avoidance of system TLS dependencies is desired.
     ///
     /// It accepts a server identity (certificate + private key) and wraps
     /// incoming TCP connections in a TLS stream before handing them to the

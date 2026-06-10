@@ -159,7 +159,6 @@ where
     /// # Errors
     ///
     /// - If the server fails to bind to the provided address.
-    /// - If the `rustls` feature is enabled and `rustls_config` is missing.
     ///
     /// # Exit Codes
     ///
@@ -200,6 +199,24 @@ where
         Ok(future.await)
     }
 
+    /// Listens for incoming HTTPS connections using `native-tls` for TLS
+    /// termination.
+    ///
+    /// This variant enables TLS using a platform-native TLS implementation via
+    /// the `native-tls` crate.
+    ///
+    /// It accepts a server identity (certificate + private key) and wraps
+    /// incoming TCP connections in a TLS stream before handing them to the
+    /// HTTP service layer.
+    ///
+    /// # Errors
+    ///
+    /// - If the server fails to bind to the provided address.
+    /// - If the [`native_tls::Identity`] struct is invalid.
+    ///
+    /// # Exit Codes
+    ///
+    /// See [`Server::listen`] for details on exit code semantics.
     #[cfg(feature = "native-tls")]
     pub async fn listen_native_tls(
         self,
@@ -215,6 +232,24 @@ where
         Ok(future.await)
     }
 
+    /// Listens for incoming HTTPS connections using `native-tls` for TLS
+    /// termination.
+    ///
+    /// This variant enables TLS using a platform-native TLS implementation via
+    /// the `native-tls` crate.
+    ///
+    /// It accepts a server identity (certificate + private key) and wraps
+    /// incoming TCP connections in a TLS stream before handing them to the
+    /// HTTP service layer.
+    ///
+    /// # Errors
+    ///
+    /// - If the server fails to bind to the provided address.
+    /// - If the [`rustls::ServerConfig`] struct is invalid.
+    ///
+    /// # Exit Codes
+    ///
+    /// See [`Server::listen`] for details on exit code semantics.
     #[cfg(feature = "rustls-23")]
     pub async fn listen_rustls_23(
         self,

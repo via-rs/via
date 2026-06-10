@@ -107,9 +107,9 @@ macro_rules! methods {
     ($($vis:vis fn $name:ident($self:ident, $method:ident));+ $(;)?) => {
         $(
             #[doc = concat!(
-                "Call the provided middleware for ",
+                "Route `",
                 stringify!($method),
-                "requests."
+                "` requests to the provided middleware."
             )]
             $vis fn $name<F>($self, middleware: F) -> Switch<Allow<F>, Self> {
             let mask = Mask::$method;

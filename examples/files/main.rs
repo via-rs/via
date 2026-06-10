@@ -1,21 +1,26 @@
-use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::{env, thread};
 use tokio::sync::Semaphore;
-use via::{Error, Middleware, Next, Request, Server};
+use via::{Error, Next, Request, ResultExt, Server};
 
-const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
+/// The maximum number of connections we are willing to accept before
+/// accounting for resources other than TCP connections.
+const MAX_CONNECTIONS: usize = 1024;
 
-const MAX_CONNECTIONS: usize = 1000;
-
-#[cfg(feature = "fs")]
-const MAX_ALLOC_SIZE: u64 = 1024 * 1024; // 1 MB
+/// The number of file descriptors required for the multi-threaded tokio
+/// runtime, a graceful shutdown signal, and a tcp listener.
+///
+/// This is used to provide padding for the runtime so we can deterministically
+/// calculate the number of file descriptors required for the server to never
+/// trigger an EMFILE.
+const RT_FD_REQUIREMENT: usize = 13;
 
 #[allow(dead_code)]
-struct ServeFrom {
+struct Unicorn {
     /// The directory from which files can be served.
-    public_dir: PathBuf,
+    public_dir: Arc<Path>,
 
     /// Limit concurrent requests to prevent exit on EMFILE (for safety).
     /// Via prefers that fd back-pressure be a user-space responsibility.
@@ -29,6 +34,8 @@ struct ServeFrom {
 /// compiled. Then,
 ///
 fn resolve_public_dir() -> PathBuf {
+    const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
+
     let manifest_dir = Path::new(CARGO_MANIFEST_DIR);
 
     if CARGO_MANIFEST_DIR.ends_with("examples") {
@@ -38,65 +45,43 @@ fn resolve_public_dir() -> PathBuf {
     }
 }
 
-impl ServeFrom {
-    fn new(concurrency: usize, public_dir: impl AsRef<Path>) -> Self {
-        Self {
-            public_dir: public_dir.as_ref().to_path_buf(),
-            semaphore: Arc::new(Semaphore::new(concurrency)),
-        }
-    }
-}
-
-#[cfg(not(feature = "fs"))]
-impl<T: Send + Sync> Middleware<T> for ServeFrom {
-    fn call(&self, _: Request<T>, _: Next<T>) -> via::BoxFuture {
-        unreachable!()
-    }
-}
-
 #[cfg(feature = "fs")]
-impl<T: Send + Sync> Middleware<T> for ServeFrom {
-    fn call(&self, request: Request<T>, _: Next<T>) -> via::BoxFuture {
-        use std::ffi::OsStr;
-        use via::response::File;
+async fn serve_dir(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
+    use std::ffi::OsStr;
+    use via::response::File;
 
-        let semaphore = self.semaphore.clone();
-        let mut path = match request.param("path").ok() {
-            Err(error) => return Box::pin(async { Err(error) }),
-            Ok(option) => self
-                .public_dir
-                .join(option.as_deref().unwrap_or("index.html")),
-        };
+    let semaphore = request.app().semaphore.clone();
+    let permit = semaphore.acquire_owned().await?;
 
-        Box::pin(async move {
-            let permit = semaphore.acquire_owned().await?;
+    let mut path = {
+        let path_param = request
+            .param("path")
+            .into_result()
+            .unwrap_or("index.html".into());
 
-            let mime_type = if let Some(ext) = path.extension().and_then(OsStr::to_str) {
-                mime_guess::from_ext(ext).first_or_octet_stream()
-            } else {
-                path.set_extension("html");
-                mime_guess::mime::TEXT_HTML_UTF_8
-            };
+        request.app().public_dir.join(path_param.as_ref())
+    };
 
-            let response = File::open(path)
-                .content_type(&mime_type)
-                .with_last_modified()
-                .permit(permit)
-                .serve(MAX_ALLOC_SIZE) // stream files > 1 MB
-                .await?;
+    let mime_type = if let Some(ext) = path.extension().and_then(OsStr::to_str) {
+        mime_guess::from_ext(ext).first_or_octet_stream()
+    } else {
+        path.set_extension("html");
+        mime_guess::mime::TEXT_HTML_UTF_8
+    };
 
-            Ok(response)
-        })
-    }
+    File::open(path)
+        .content_type(&mime_type)
+        .with_last_modified()
+        .permit(permit)
+        .serve(1024 * 1024) // stream files > 1 MB
+        .await
 }
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Error> {
-    let mut app = via::app(());
-    let public_dir = resolve_public_dir();
     let (max_concurrency, max_connections) = cfg_select! {
         // On Windows, sockets are not files.
-        windows => (MAX_CONNECTIONS, MAX_CONNECTIONS),
+        windows => (MAX_CONNECTIONS.div_ceil(2), MAX_CONNECTIONS),
 
         // On POSIX, max_concurrency affects the max_connections budget.
         //
@@ -104,20 +89,32 @@ async fn main() -> Result<ExitCode, Error> {
         // amount of concurrent file streams should not exceed the number of
         // worker process in the tokio runtime.
         _ => {{
-            let concurrency = std::thread::available_parallelism()?.get();
-            let adjusted = ((13isize - concurrency as isize) + MAX_CONNECTIONS as isize) as usize;
+            let concurrency = thread::available_parallelism()?.get();
+            let adjusted_max = MAX_CONNECTIONS - RT_FD_REQUIREMENT - concurrency;
 
-            (concurrency, adjusted)
+            (concurrency, adjusted_max)
         }}
     };
+
+    let public_dir = resolve_public_dir();
 
     if cfg!(not(feature = "fs")) {
         panic!("the \"fs\" feature must be enabled in order to serve files.");
     }
 
-    println!("serving files from: {:?}", &public_dir);
+    if cfg!(debug_assertions) {
+        println!("serving files from: {:?}", &public_dir);
+        println!(
+            "  max concurrency = {}, max connections = {}",
+            max_concurrency, max_connections
+        );
+    }
 
-    let serve_dir = ServeFrom::new(max_concurrency, &public_dir);
+    let mut app = via::app(Unicorn {
+        public_dir: public_dir.into(),
+        semaphore: Arc::new(Semaphore::new(max_concurrency)),
+    });
+
     app.route("/*path").to(via::get(serve_dir));
 
     Server::new(app)

@@ -3,7 +3,10 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::{env, thread};
 use tokio::sync::Semaphore;
-use via::{Error, Next, Request, ResultExt, Server};
+use via::{Error, Server};
+
+#[cfg(feature = "fs")]
+use via::{Next, Request, ResultExt};
 
 /// The maximum number of connections we are willing to accept before
 /// accounting for resources other than TCP connections.
@@ -17,7 +20,6 @@ const MAX_CONNECTIONS: usize = 1024;
 /// trigger an EMFILE.
 const RT_FD_REQUIREMENT: usize = 13;
 
-#[allow(dead_code)]
 struct Unicorn {
     /// The directory from which files can be served.
     public_dir: Arc<Path>,

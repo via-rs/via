@@ -26,9 +26,10 @@ pub struct Deny {
 ///
 /// # Example
 ///
-/// ```
+/// ```no_run
 /// use http::Method;
-/// use via::{Next, Request, Response, ResultExt};
+/// use std::process::ExitCode;
+/// use via::{Error, Next, Request, Response, ResultExt, Server};
 ///
 /// async fn update(request: Request, _: Next) -> via::Result {
 ///     let id = request.param("user-id").parse::<u64>().or_bad_request()?;

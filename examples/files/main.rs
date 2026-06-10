@@ -1,12 +1,13 @@
+#![cfg(feature = "fs")]
+
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::{env, thread};
 use tokio::sync::Semaphore;
-use via::{Error, Server};
-
-#[cfg(feature = "fs")]
-use via::{Next, Request, ResultExt};
+use via::response::File;
+use via::{Error, Next, Request, ResultExt, Server};
 
 /// The maximum number of connections we are willing to accept before
 /// accounting for resources other than TCP connections.
@@ -47,21 +48,18 @@ fn resolve_public_dir() -> PathBuf {
     }
 }
 
-#[cfg(feature = "fs")]
 async fn serve_dir(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
-    use std::ffi::OsStr;
-    use via::response::File;
-
     let semaphore = request.app().semaphore.clone();
     let permit = semaphore.acquire_owned().await?;
 
     let mut path = {
+        let public_dir = request.app().public_dir.as_ref();
         let path_param = request
             .param("path")
             .into_result()
             .unwrap_or("index.html".into());
 
-        request.app().public_dir.join(path_param.as_ref())
+        public_dir.join(path_param.as_ref())
     };
 
     let mime_type = if let Some(ext) = path.extension().and_then(OsStr::to_str) {
@@ -99,10 +97,6 @@ async fn main() -> Result<ExitCode, Error> {
     };
 
     let public_dir = resolve_public_dir();
-
-    if cfg!(not(feature = "fs")) {
-        panic!("the \"fs\" feature must be enabled in order to serve files.");
-    }
 
     if cfg!(debug_assertions) {
         println!("serving files from: {:?}", &public_dir);

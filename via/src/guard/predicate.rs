@@ -23,10 +23,12 @@ pub struct Wildcard;
 
 /// An inexpensive comparison operation that can fail with context.
 pub trait Predicate<Input: ?Sized> {
+    /// The error type returned if the predicate fails.
     type Error<'a>
     where
         Self: 'a;
 
+    /// Compares `self` against `input`.
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>>;
 }
 

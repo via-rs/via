@@ -1,3 +1,5 @@
+// #![deny(missing_docs)]
+
 //! An async multi-threaded web framework for people who appreciate simplicity.
 //!
 //! Documentation is sparse at the moment, but the code is well-commented for

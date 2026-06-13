@@ -1,15 +1,7 @@
-#[cfg(not(feature = "file"))]
-compile_error!(concat!(
-    "the \"file\" feature must be enabled to run this example.\n",
-    "re-run this example with: cargo run --example files --features=\"file\""
-));
-
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
-use via::response::File;
 use via::{Error, Next, Request, Server};
 
 /// The maximum number of connections we are willing to accept before
@@ -24,6 +16,7 @@ const MAX_CONNECTIONS: usize = 1024;
 /// trigger an EMFILE.
 const RT_FD_REQUIREMENT: usize = 13;
 
+#[cfg_attr(not(feature = "file"), allow(dead_code))]
 struct Unicorn {
     /// The directory from which files can be served.
     public_dir: Box<Path>,
@@ -33,6 +26,7 @@ struct Unicorn {
     semaphore: Arc<Semaphore>,
 }
 
+#[cfg_attr(not(feature = "file"), allow(dead_code))]
 impl Unicorn {
     fn public_dir(&self) -> &Path {
         &self.public_dir
@@ -65,6 +59,7 @@ fn determine_resource_usage() -> via::Result<(usize, usize)> {
 }
 
 /// Extracts the relative path to the requested file from the request.
+#[cfg(feature = "file")]
 fn extract_file_path(request: &Request<Unicorn>) -> via::Result<PathBuf> {
     let public_dir = request.app().public_dir();
 
@@ -86,7 +81,11 @@ fn resolve_public_dir() -> PathBuf {
     }
 }
 
+#[cfg(feature = "file")]
 async fn serve_dir(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
+    use std::ffi::OsStr;
+    use via::response::File;
+
     let permit = request.app().semaphore().clone().acquire_owned().await?;
     let mut path = extract_file_path(&request)?;
     let content_type = if let Some(extension) = path.extension().and_then(OsStr::to_str) {
@@ -104,6 +103,11 @@ async fn serve_dir(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
         .await
 }
 
+#[cfg(not(feature = "file"))]
+async fn serve_dir(_: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
+    panic!("");
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode, Error> {
     let (max_open_files, max_connections) = determine_resource_usage()?;
@@ -113,6 +117,12 @@ async fn main() -> Result<ExitCode, Error> {
     });
 
     app.route("/*path").to(via::get(serve_dir));
+
+    if cfg!(not(feature = "file")) {
+        eprintln!("    the \"file\" feature flag is required in order to run the files example.");
+        eprintln!("    re-run this example with cargo run --example files --feature=\"file\"");
+        return Ok(ExitCode::FAILURE);
+    }
 
     Server::new(app)
         .max_connections(max_connections)

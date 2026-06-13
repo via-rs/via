@@ -11,7 +11,6 @@ use tokio::fs::File as TokioFile;
 use tokio::io::AsyncReadExt;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::io::ReaderStream;
-// use tokio_util::io::poll_read_buf;
 
 use super::{Finalize, Response, ResponseBuilder};
 use crate::{Error, deny};

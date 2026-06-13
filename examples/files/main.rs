@@ -17,7 +17,7 @@ const MAX_CONNECTIONS: usize = 1024;
 #[cfg(unix)]
 const RT_FD_REQUIREMENT: usize = 13;
 
-#[cfg_attr(not(feature = "file"), allow(dead_code))]
+#[cfg_attr(not(feature = "fs"), allow(dead_code))]
 struct Unicorn {
     /// The directory from which files can be served.
     public_dir: Box<Path>,
@@ -27,7 +27,7 @@ struct Unicorn {
     semaphore: Arc<Semaphore>,
 }
 
-#[cfg_attr(not(feature = "file"), allow(dead_code))]
+#[cfg_attr(not(feature = "fs"), allow(dead_code))]
 impl Unicorn {
     fn public_dir(&self) -> &Path {
         &self.public_dir
@@ -60,7 +60,7 @@ fn determine_resource_usage() -> via::Result<(usize, usize)> {
 }
 
 /// Extracts the relative path to the requested file from the request.
-#[cfg(feature = "file")]
+#[cfg(feature = "fs")]
 fn extract_file_path(request: &Request<Unicorn>) -> via::Result<PathBuf> {
     let public_dir = request.app().public_dir();
 
@@ -82,7 +82,7 @@ fn resolve_public_dir() -> PathBuf {
     }
 }
 
-#[cfg(feature = "file")]
+#[cfg(feature = "fs")]
 async fn serve_dir(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
     use std::ffi::OsStr;
     use via::response::File;
@@ -104,9 +104,9 @@ async fn serve_dir(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
         .await
 }
 
-#[cfg(not(feature = "file"))]
+#[cfg(not(feature = "fs"))]
 async fn serve_dir(_: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
-    panic!("the \"file\" feature flag is required in order to run the files example.");
+    panic!("the \"fs\" feature flag is required in order to run the files example.");
 }
 
 #[tokio::main]
@@ -119,9 +119,9 @@ async fn main() -> Result<ExitCode, Error> {
 
     app.route("/*path").to(via::get(serve_dir));
 
-    if cfg!(not(feature = "file")) {
-        eprintln!("    the \"file\" feature flag is required in order to run the files example.");
-        eprintln!("    re-run this example with cargo run --example files --feature=\"file\"");
+    if cfg!(not(feature = "fs")) {
+        eprintln!("    the \"fs\" feature flag is required in order to run the files example.");
+        eprintln!("    re-run this example with cargo run --example files --feature=\"fs\"");
         return Ok(ExitCode::FAILURE);
     }
 

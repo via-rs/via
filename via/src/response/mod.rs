@@ -2,7 +2,7 @@ mod body;
 mod builder;
 mod redirect;
 
-#[cfg(feature = "file")]
+#[cfg(feature = "fs")]
 mod file;
 
 pub use body::ResponseBody;
@@ -10,7 +10,7 @@ pub use builder::{Finalize, ResponseBuilder};
 use delegate::delegate;
 pub use redirect::Redirect;
 
-#[cfg(feature = "file")]
+#[cfg(feature = "fs")]
 pub use file::File;
 
 use cookie::CookieJar;

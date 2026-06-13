@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [features]
-file = ["via/file"]
+fs = ["via/fs"]
 
 aws-lc-rs = ["via/aws-lc-rs"]
 ring = ["via/ring"]
@@ -19,7 +19,7 @@ tokio-websockets = ["via/tokio-websockets"]
 
 # Internal
 
-__test = ["file", "ring", "tokio-tungstenite"]
+__test = ["fs", "ring", "tokio-tungstenite"]
 
 [[example]]
 name = "cookies"

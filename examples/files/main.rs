@@ -14,6 +14,7 @@ const MAX_CONNECTIONS: usize = 1024;
 /// This is used to provide padding for the runtime so we can deterministically
 /// calculate the number of file descriptors required for the server to never
 /// trigger an EMFILE.
+#[cfg(unix)]
 const RT_FD_REQUIREMENT: usize = 13;
 
 #[cfg_attr(not(feature = "file"), allow(dead_code))]

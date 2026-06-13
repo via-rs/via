@@ -56,13 +56,13 @@ struct FileStream {
 /// If the file size is less than `max_alloc_size`, the contents will be
 /// eagerly read into memory.
 ///
-async fn maybe_read(path: &Path, max_alloc_size: u64) -> Result<MaybeRead, Error> {
+async fn maybe_read(path: impl AsRef<Path>, max_alloc_size: u64) -> Result<MaybeRead, Error> {
     let mut file = open_async(path).await?;
     let metadata = file.metadata().await.map_err(Error::from_io_error)?;
     let capacity = metadata.len();
 
     if metadata.is_dir() {
-        deny!(403, "{:?} is a directory.", path);
+        deny!(403);
     }
 
     if capacity > max_alloc_size {

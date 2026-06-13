@@ -56,16 +56,16 @@ struct FileStream {
 /// If the file size is less than `max_alloc_size`, the contents will be
 /// eagerly read into memory.
 ///
-async fn maybe_read(path: impl AsRef<Path>, max_alloc_size: u64) -> Result<MaybeRead, Error> {
+async fn maybe_read(path: &Path, max_alloc_size: u64) -> Result<MaybeRead, Error> {
     let mut file = open_async(path).await?;
     let metadata = file.metadata().await.map_err(Error::from_io_error)?;
     let capacity = metadata.len();
 
-    if capacity > max_alloc_size {
-        if metadata.is_dir() {
-            deny!(403, "Forbidden");
-        }
+    if metadata.is_dir() {
+        deny!(403, "{:?} is a directory.", path);
+    }
 
+    if capacity > max_alloc_size {
         file.set_max_buf_size(BUFFER_SIZE);
         Ok(MaybeRead::Lazy(capacity, metadata, file))
     } else {
@@ -73,10 +73,10 @@ async fn maybe_read(path: impl AsRef<Path>, max_alloc_size: u64) -> Result<Maybe
         //                                ^^^^^^^^
         // capacity is guaranteed to be < max_alloc_size <= isize::MAX
 
-        file.read_to_end(&mut data).await.map_or_else(
-            |error| Err(Error::from_io_error(error)),
-            |len| Ok(MaybeRead::Eager(len, metadata, data)),
-        )
+        match file.read_to_end(&mut data).await {
+            Ok(len) => Ok(MaybeRead::Eager(len, metadata, data)),
+            Err(error) => Err(Error::from_io_error(error)),
+        }
     }
 }
 
@@ -139,7 +139,7 @@ impl File {
     /// Respond with a stream of the file contents in chunks.
     ///
     pub async fn stream(self) -> crate::Result {
-        let mut file = open_async(&self.path).await?;
+        let mut file = open_async(&*self.path).await?;
         let metadata = file.metadata().await.map_err(Error::from_io_error)?;
         let response = self.set_headers(&metadata)?;
 

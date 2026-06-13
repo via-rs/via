@@ -106,7 +106,7 @@ async fn serve_dir(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
 
 #[cfg(not(feature = "file"))]
 async fn serve_dir(_: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
-    panic!("");
+    panic!("the \"file\" feature flag is required in order to run the files example.");
 }
 
 #[tokio::main]

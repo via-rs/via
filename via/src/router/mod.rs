@@ -1,10 +1,10 @@
-mod allow;
 mod route;
+mod switch;
 
-pub use allow::*;
 pub use route::{Index, Resource, ResourceBuilder, Route};
+pub use switch::*;
 
-pub(crate) use allow::MethodNotAllowed;
+pub(crate) use switch::MethodNotAllowed;
 
 use std::sync::Arc;
 use via_router::Traverse;

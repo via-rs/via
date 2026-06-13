@@ -78,7 +78,7 @@ impl<T: Send + Sync> Middleware<T> for ServeFrom {
                 mime_guess::mime::TEXT_HTML_UTF_8
             };
 
-            let response = File::open(&path)
+            let response = File::open(path)
                 .content_type(&mime_type)
                 .with_last_modified()
                 .permit(permit)

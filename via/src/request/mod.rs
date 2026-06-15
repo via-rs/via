@@ -31,11 +31,15 @@ use params::PathParam;
 ///
 /// # Example
 ///
-/// ```
+/// ```no_run
+/// use serde::{Deserialize, Serialize};
 /// use std::process::ExitCode;
-/// use via::request::{Envelope, Request};
-/// use via::{Error, Next, Payload, Response, ResultExt};
-/// use zeroize::Zeroize;
+/// use via::request::{Envelope, Payloadz};
+/// use via::{Error, Response, ResultExt, Server};
+/// use zeroize::Zeroizing;
+///
+/// type Request = via::Request<Unicorn>;
+/// type Next = via::Next<Unicorn>;
 ///
 /// /// A generic JSON payload.
 /// #[derive(Deserialize, Serialize)]
@@ -53,7 +57,7 @@ use params::PathParam;
 /// #[derive(Deserialize)]
 /// struct LoginParams {
 ///     username: String,
-///     password: Zeroize<String>,
+///     password: Zeroizing<String>,
 /// }
 ///
 /// /// Authenticate with a username and password.
@@ -126,7 +130,7 @@ use params::PathParam;
 /// # }
 /// #
 /// #
-/// # #[derive(Serialize)]
+/// # #[derive(Clone, Serialize)]
 /// # struct ActiveUser {
 /// #     id: u64,
 /// #     username: String,
@@ -135,7 +139,7 @@ use params::PathParam;
 /// #
 /// # impl Database {
 /// #     // Friendly reminder: never store a password as plain text!
-/// #     async fn authenticate(_: LoginParams) -> via::Result<ActiveUser> {
+/// #     async fn authenticate(&self, _: LoginParams) -> via::Result<ActiveUser> {
 /// #         todo!("implement username + password authentication.")
 /// #     }
 /// # }

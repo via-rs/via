@@ -26,7 +26,7 @@ use params::PathParam;
 /// request body should be consumed as quickly as possible.
 ///
 /// Retaining the request head and its derived metadata allows them to be used
-/// tangentially to the fullfilment of the request, for example when populating
+/// tangentially to the fulfillment of the request, for example when populating
 /// an audit log as an asynchronous post-processing step.
 ///
 /// # Example

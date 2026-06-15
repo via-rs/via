@@ -505,6 +505,15 @@ impl Future for WithTrailers {
 }
 
 impl RequestBody {
+    /// Aggregate the frames of the request body into a contiguous block of
+    /// memory.
+    #[inline]
+    pub fn coalesce(self) -> Coalesce {
+        Coalesce { body: self }
+    }
+}
+
+impl RequestBody {
     pub(crate) fn new(remaining: usize, body: Incoming, frames: Vec<Bytes>) -> Self {
         Self {
             remaining,

@@ -42,7 +42,7 @@ tokio-websockets = [
 
 # Internal
 
-__test = ["fs", "ring", "tokio-tungstenite"]
+__test = ["fs", "ring", "tokio-tungstenite", "zeroize/serde"]
 
 [dependencies]
 aws-lc-rs = { version = "1", optional = true }

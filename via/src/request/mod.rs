@@ -162,8 +162,8 @@ pub struct Envelope {
 /// [`Envelope`], the [`RequestBody`], and a [`Shared`] handle to your
 /// application.
 ///
-/// The shared handle to your app provides a form of dependency injection.
-/// Permitting per-request ownership of singleton resources such as a database
+/// The shared handle to your app provides a form of dependency injection,
+/// permitting per-request access to singleton resources such as a database
 /// pool. The argument passed to [`via::app`](crate::app::app) defines the
 /// resources that are made available to each request as the generic `App` type
 /// parameter. Connections tasks are processed asynchronously across worker

@@ -18,12 +18,153 @@ use crate::error::Error;
 use crate::response::{Finalize, Response, ResponseBuilder};
 use params::PathParam;
 
+/// The component parts of an HTTP request head and their derivatives.
+///
+/// `Envelope` allows the request head and derived metadata to outlive the
+/// request container. This is particularly useful for long-lived connections
+/// (such as WebSocket upgrades) and security-sensitive endpoints where the
+/// request body should be consumed as quickly as possible.
+///
+/// Retaining the request head and its derived metadata allows them to be used
+/// tangentially to the fullfilment of the request, for example when populating
+/// an audit log as an asynchronous post-processing step.
+///
+/// # Example
+///
+/// ```
+/// use std::process::ExitCode;
+/// use via::request::{Envelope, Request};
+/// use via::{Error, Next, Payload, Response, ResultExt};
+/// use zeroize::Zeroize;
+///
+/// /// A generic JSON payload.
+/// #[derive(Deserialize, Serialize)]
+/// struct Json<T> {
+///     data: T,
+/// }
+///
+/// /// Our billion dollar application.
+/// struct Unicorn {
+///     database: Database,
+///     telemetry: Telemetry,
+/// }
+///
+/// /// The arguments deserialized from a request to POST /auth.
+/// #[derive(Deserialize)]
+/// struct LoginParams {
+///     username: String,
+///     password: Zeroize<String>,
+/// }
+///
+/// /// Authenticate with a username and password.
+/// async fn login(request: Request, _: Next) -> via::Result {
+///     // Get a tuple containing the fields of `request`.
+///     let (envelope, body, app) = request.into_parts();
+///
+///     // Aggregate the frames of the request body into a
+///     // contiguous block of memory. Timeout after 5s.
+///     let body = body.coalesce().timeout_after_secs(5).await?;
+///
+///     // Find an existing user matching the params in `body`.
+///     let me = {
+///         // Deserialize `LoginParams` from JSON. Then, zeroize
+///         // the bytes in `body`.
+///         let params = body.be_z_json::<Json<LoginParams>>()?;
+///         //                                 ^^^^^^^^^^^
+///         // Password zeroization is enforced by the type.
+///         app.database.authenticate(params.data).await?
+///     };
+///
+///     // Spawn a detached task that takes ownership of the request
+///     // envelope, a cloned copy of the active user, and a shared
+///     // handle to your application.
+///     tokio::spawn({
+///         // Prepare the telemetry task dependencies.
+///         let action = Action::Login {
+///             request: envelope,
+///             user: me.clone(),
+///         };
+///
+///         // Then, report to your favorite telemetry service.
+///         async move {
+///             app.telemetry.notify(action).await;
+///         }
+///     });
+///
+///     // Only `me` needs drop at this point. The password is
+///     // zeroed and is no longer a risk.
+///     //
+///     // Respond with the active user serialized to JSON.
+///     Response::build().json(&Json { data: me })
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<ExitCode, Error> {
+///     // Define our application.
+///     let mut app = via::app(Unicorn {
+///         database: Database,
+///         telemetry: Telemetry,
+///     });
+///
+///     // Accept POST requests to /auth with the login fn.
+///     app.route("/auth").to(via::post(login).or_deny());
+///
+///     // Listen for incoming connections at http://localhost:8080/.
+///     // We recommend enabling a TLS-backend in production.
+///     Server::new(app).listen(("127.0.0.1", 8080)).await
+/// }
+/// #
+/// # /// A placeholder type for your favorite database pool.
+/// # struct Database;
+/// #
+/// # /// A placeholder type for your favorite telemetry service.
+/// # struct Telemetry;
+/// #
+/// # /// Represents an auditable action.
+/// # enum Action {
+/// #     Login { request: Envelope, user: ActiveUser },
+/// # }
+/// #
+/// #
+/// # #[derive(Serialize)]
+/// # struct ActiveUser {
+/// #     id: u64,
+/// #     username: String,
+/// # }
+/// #
+/// #
+/// # impl Database {
+/// #     // Friendly reminder: never store a password as plain text!
+/// #     async fn authenticate(_: LoginParams) -> via::Result<ActiveUser> {
+/// #         todo!("implement username + password authentication.")
+/// #     }
+/// # }
+/// #
+/// # impl Telemetry {
+/// #     async fn notify(&self, action: Action) {
+/// #         todo!("integrate with your favorite telemetry service.")
+/// #     }
+/// # }
+/// ```
 pub struct Envelope {
     parts: Parts,
     params: Vec<via_router::PathParam>,
     cookies: CookieJar,
 }
 
+/// Represents an HTTP request to your application.
+///
+/// A `Request` consists of the request head and derived metadata stored in an
+/// [`Envelope`], the [`RequestBody`], and a [`Shared`] handle to your
+/// application.
+///
+/// The shared handle to your app provides a form of dependency injection.
+/// Permitting per-request ownership of singleton resources such as a database
+/// pool. The argument passed to [`via::app`](crate::app::app) defines the
+/// resources that are made available to each request as the generic `App` type
+/// parameter. Connections tasks are processed asynchronously across worker
+/// threads with work-stealing scheduler. Therefore, `App` must be both
+/// [`Send`] and [`Sync`].
 pub struct Request<App = ()> {
     envelope: Envelope,
     body: RequestBody,
@@ -95,6 +236,9 @@ impl Envelope {
         PathParam::new(self.uri().path(), param, name)
     }
 
+    /// Parse the query string in the request [`Uri`] into key-value pairs
+    /// where values are spans of the query string. Then, attempt to convert
+    /// the [`QueryParams`] into type `T`.
     pub fn query<'a, T>(&'a self) -> crate::Result<T>
     where
         T: TryFrom<QueryParams<'a>, Error = Error>,
@@ -102,6 +246,12 @@ impl Envelope {
         T::try_from(QueryParams::new(self.uri().query()))
     }
 
+    /// Attempt to convert references to the path params in the request [`Uri`]
+    /// into type `T`.
+    ///
+    /// This method borrows a `str` to a the path in the request uri once
+    /// as opposed to once per param, it is the preferred method of
+    /// deserializing params for requests with more than one dynamic parameter.
     pub fn params<'a, T>(&'a self) -> crate::Result<T>
     where
         T: TryFrom<PathParams<'a>>,
@@ -152,11 +302,14 @@ impl<App> Request<App> {
         }
     }
 
+    /// Returns a reference to the argument passed to [`via::app`](crate::app).
     #[inline]
     pub fn app(&self) -> &App {
         &self.app
     }
 
+    /// Returns an owned, reference-counting pointer to the argument passed to
+    /// [`via::app`](crate::app).
     pub fn app_owned(&self) -> Shared<App> {
         self.app.clone()
     }
@@ -190,10 +343,20 @@ impl<App> Request<App> {
             /// Returns reference to the cookies associated with the request.
             pub fn param<'b>(&self, name: &'b str) -> PathParam<'_, 'b>;
 
+            /// Parse the query string in the request [`Uri`] into key-value pairs
+            /// where values are spans of the query string. Then, attempt to convert
+            /// the [`QueryParams`] into type `T`.
             pub fn query<'a, T>(&'a self) -> crate::Result<T>
             where
                 T: TryFrom<QueryParams<'a>, Error = Error>;
 
+            /// Attempt to convert references to the path params in the request
+            /// [`Uri`] into type `T`.
+            ///
+            /// This method borrows a `str` to a the path in the request uri
+            /// once as opposed to once per param, it is the preferred method
+            /// of deserializing params for requests with more than one dynamic
+            /// parameter.
             pub fn params<'a, T>(&'a self) -> crate::Result<T>
             where
                 T: TryFrom<PathParams<'a>>,

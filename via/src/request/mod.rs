@@ -376,8 +376,7 @@ impl<App> Request<App> {
         (Coalesce::new(self.body), self.app)
     }
 
-    /// Consumes the request and returns a tuple containing it's parts.
-    ///
+    /// Consumes the request and returns a tuple containing its parts.
     #[inline]
     pub fn into_parts(self) -> (Envelope, RequestBody, Shared<App>) {
         (self.envelope, self.body, self.app)

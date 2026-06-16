@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use via_router::RouteMut;
 
-use super::allow::{Branch, Deny};
+use super::switch::{Deny, Switch};
 use crate::middleware::Middleware;
 
 /// A reborrow of a `&mut Route<App>` that can define a "responder" middleware.
@@ -351,11 +351,11 @@ impl<'a, App> Route<'a, App> {
     }
 }
 
-impl<T, U, X, Y> Resource<Branch<T, X>, Branch<U, Y>> {
+impl<T, U, X, Y> Resource<Switch<T, X>, Switch<U, Y>> {
     /// Returns a `405 Method Not Allowed` response if the request method is
     /// not supported by the resource.
     #[allow(clippy::type_complexity)]
-    pub fn or_deny(self) -> Resource<Branch<Branch<T, X>, Deny>, Branch<Branch<U, Y>, Deny>> {
+    pub fn or_deny(self) -> Resource<Switch<Switch<T, X>, Deny>, Switch<Switch<U, Y>, Deny>> {
         Resource {
             collection: WithPath {
                 path: self.collection.path,

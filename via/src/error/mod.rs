@@ -66,12 +66,14 @@ where
 }
 
 impl Error {
-    /// Returns a new error with the provided status and message.
+    /// Returns an `Error` with the message provided.
     ///
     pub fn new(message: String) -> Self {
         Self::new_with_status(StatusCode::INTERNAL_SERVER_ERROR, message)
     }
 
+    /// Returns an `Error` with the status code and message provided.
+    ///
     pub fn new_with_status(status: StatusCode, message: String) -> Self {
         Self {
             status,
@@ -79,8 +81,8 @@ impl Error {
         }
     }
 
-    /// Returns a new error with the provided source a status code derived from
-    /// the [`ErrorKind`](io::ErrorKind).
+    /// A specialized implementation of `From<std::io::Error>` that uses the
+    /// relevant status code for the [error kind](std::io::ErrorKind).
     ///
     pub fn from_io_error(error: IoError) -> Self {
         let status = match error.kind() {
@@ -116,10 +118,14 @@ impl Error {
         Self::from_source_with_status(status, Box::new(error))
     }
 
+    /// Returns an `Error` from a boxed [`Error` trait](std::error::Error)
+    /// object.
     pub fn from_source(source: BoxError) -> Self {
         Self::from_source_with_status(StatusCode::INTERNAL_SERVER_ERROR, source)
     }
 
+    /// Returns an `Error` with the status code provided from a boxed
+    /// [`Error` trait](std::error::Error) object.
     pub fn from_source_with_status(status: StatusCode, source: BoxError) -> Self {
         Self {
             status,
@@ -127,8 +133,7 @@ impl Error {
         }
     }
 
-    /// Returns a reference to the error source.
-    ///
+    /// Returns a reference to the source error.
     pub fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self.as_source() {
             ErrorSourceRef::AllowMethod(source) => Some(source),
@@ -138,6 +143,7 @@ impl Error {
         }
     }
 
+    /// Returns the status code associated with the error.
     pub fn status(&self) -> StatusCode {
         self.status
     }

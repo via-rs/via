@@ -1,6 +1,6 @@
 [package]
 name = "via"
-version = "2.0.0-gm.52"
+version = "2.0.0-gm.54"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -16,7 +16,7 @@ default = []
 aws-lc-rs = ["dep:aws-lc-rs", "rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
 ring = ["dep:ring", "rustls/ring", "tokio-rustls/ring"]
 
-file = ["dep:httpdate", "tokio/fs", "tokio-util"]
+fs = ["dep:httpdate", "tokio/fs", "tokio/io-util", "tokio-util"]
 
 mime = ["dep:mime"]
 
@@ -42,7 +42,7 @@ tokio-websockets = [
 
 # Internal
 
-__test = ["ring", "tokio-tungstenite", "tokio/io-util"]
+__test = ["fs", "ring", "tokio-tungstenite", "zeroize/serde"]
 
 [dependencies]
 aws-lc-rs = { version = "1", optional = true }
@@ -112,4 +112,4 @@ features = ["io"]
 default-features = false
 
 [package.metadata.docs.rs]
-features = ["file", "ring", "tokio-tungstenite"]
+features = ["fs", "ring", "tokio-tungstenite"]

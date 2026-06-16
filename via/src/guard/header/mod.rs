@@ -108,6 +108,8 @@ where
 }
 
 impl<'a> DenyHeader<'a> {
+    /// Returns a reference to the name of the header associated with the
+    /// predicate error.
     pub fn name(&self) -> &'a HeaderName {
         match *self {
             Self::Predicate(name) | Self::Missing(name) => name,

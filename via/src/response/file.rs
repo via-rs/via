@@ -7,16 +7,17 @@ use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::fs::{self, File as TokioFile};
+use tokio::fs::File as TokioFile;
+use tokio::io::AsyncReadExt;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::io::ReaderStream;
 
 use super::{Finalize, Response, ResponseBuilder};
-use crate::Error;
+use crate::{Error, deny};
 
-/// The maximum amount of data that can be buffered in memory.
+/// The amount of data that can be buffered in memory when streaming a file.
 ///
-const MAX_BUFFER_SIZE: usize = 64 * 1024; // 64KB
+const BUFFER_SIZE: usize = 64 * 1024; // 64KB
 
 /// A function pointer used to generate an etag.
 ///
@@ -25,32 +26,28 @@ type GenerateEtag = fn(&Metadata) -> Result<Option<String>, Error>;
 /// A specialized response builder used to serve a single file from disk.
 ///
 pub struct File {
-    path: PathBuf,
+    path: Box<Path>,
     etag: Option<GenerateEtag>,
     permit: Option<OwnedSemaphorePermit>,
     content_type: Option<String>,
     with_last_modified: bool,
 }
 
-/// The possible outcomes from attempting to open a file.
-///
-enum Open {
-    /// The file was small enough to be read in to memory.
-    ///
-    Eager(Metadata, Vec<u8>),
+/// Represents a file that may or may not have been eagerly read into memory.
+enum MaybeRead {
+    /// The entire contents of the file are ready to be sent to the client.
+    Eager(usize, Metadata, Vec<u8>),
 
-    /// The file should be streamed over the socket with chunked
-    /// `Transfer-Encoding`.
-    ///
-    Stream(Metadata, TokioFile),
+    /// The file is too large to read into memory.
+    Lazy(u64, Metadata, TokioFile),
 }
 
 /// A stream that wraps the `AsyncRead` impl for `TokioFile`.
-///
 #[must_use = "streams do nothing unless polled"]
 struct FileStream {
-    reader: ReaderStream<TokioFile>,
+    file: ReaderStream<TokioFile>,
     permit: Option<OwnedSemaphorePermit>,
+    remaining: u64,
 }
 
 /// Attempt to open the file and access the metadata at the provided path.
@@ -58,31 +55,56 @@ struct FileStream {
 /// If the file size is less than `max_alloc_size`, the contents will be
 /// eagerly read into memory.
 ///
-async fn open(path: &Path, max_alloc_size: u64) -> Result<Open, Error> {
-    let metadata = fs::metadata(path).await.map_err(Error::from_io_error)?;
+async fn maybe_read(path: impl AsRef<Path>, max_alloc_size: u64) -> Result<MaybeRead, Error> {
+    let mut file = open_async(path).await?;
+    let metadata = file.metadata().await.map_err(Error::from_io_error)?;
+    let capacity = metadata.len();
 
-    if metadata.len() > max_alloc_size {
-        let mut file = TokioFile::open(path).await.map_err(Error::from_io_error)?;
-        file.set_max_buf_size(0); // Buffering occurs in ReaderStream.
-        Ok(Open::Stream(metadata, file))
+    if metadata.is_dir() {
+        deny!(403);
+    }
+
+    if capacity > max_alloc_size {
+        file.set_max_buf_size(BUFFER_SIZE);
+        Ok(MaybeRead::Lazy(capacity, metadata, file))
     } else {
-        match fs::read(path).await {
-            Ok(data) => Ok(Open::Eager(metadata, data)),
+        let mut data = Vec::with_capacity(capacity as usize);
+        //                                ^^^^^^^^
+        // capacity is guaranteed to be < max_alloc_size <= isize::MAX
+
+        match file.read_to_end(&mut data).await {
+            Ok(len) => Ok(MaybeRead::Eager(len, metadata, data)),
             Err(error) => Err(Error::from_io_error(error)),
         }
     }
 }
 
+/// Asynchronously open a file. If an error occurs, map it to a via::Error.
+#[inline]
+async fn open_async(path: impl AsRef<Path>) -> Result<TokioFile, Error> {
+    TokioFile::open(path).await.map_err(Error::from_io_error)
+}
+
 impl File {
     /// Specify the path at which the file we want to serve is located.
     ///
-    pub fn open(path: impl AsRef<Path>) -> Self {
+    pub fn open(path: PathBuf) -> Self {
         Self {
-            path: path.as_ref().to_owned(),
+            path: path.into_boxed_path(),
             etag: None,
             permit: None,
             content_type: None,
             with_last_modified: false,
+        }
+    }
+
+    /// Set the value of the `Content-Type` header that will be included in the
+    /// response.
+    ///
+    pub fn content_type(self, mime_type: impl AsRef<str>) -> Self {
+        Self {
+            content_type: Some(mime_type.as_ref().to_owned()),
+            ..self
         }
     }
 
@@ -96,22 +118,12 @@ impl File {
         }
     }
 
-    // Assign a semaphore permit to the file. This is used to limit the number
-    // of files that are open concurrently.
-    //
+    /// Assign a semaphore permit to the file. This is used to limit the number
+    /// of files that are open concurrently.
+    ///
     pub fn permit(mut self, permit: OwnedSemaphorePermit) -> Self {
         self.permit = Some(permit);
         self
-    }
-
-    /// Set the value of the `Content-Type` header that will be included in the
-    /// response.
-    ///
-    pub fn content_type(self, mime_type: impl AsRef<str>) -> Self {
-        Self {
-            content_type: Some(mime_type.as_ref().to_owned()),
-            ..self
-        }
     }
 
     /// Include a `Last-Modified` header in the response.
@@ -126,7 +138,12 @@ impl File {
     /// Respond with a stream of the file contents in chunks.
     ///
     pub async fn stream(self) -> crate::Result {
-        self.serve(0).await
+        let mut file = open_async(&*self.path).await?;
+        let metadata = file.metadata().await.map_err(Error::from_io_error)?;
+        let response = self.set_headers(&metadata)?;
+
+        file.set_max_buf_size(BUFFER_SIZE);
+        FileStream::new(file, self.permit, metadata.len()).finalize(response)
     }
 
     /// Respond with the contents of the file.
@@ -135,38 +152,36 @@ impl File {
     /// will be streamed over the socket with chunked transfer encoding.
     ///
     pub async fn serve(mut self, max_alloc_size: u64) -> crate::Result {
-        match open(&self.path, max_alloc_size.min(isize::MAX as u64)).await? {
-            Open::Eager(meta, data) => {
-                let response = Response::build().header(CONTENT_LENGTH, data.len());
+        let max_alloc_size = max_alloc_size.min(isize::MAX as u64);
+
+        match maybe_read(&self.path, max_alloc_size).await? {
+            MaybeRead::Eager(len, metadata, data) => {
+                let response = self.set_headers(&metadata)?;
                 self.permit = None;
-                self.set_headers(&meta, response)?.body(data.into())
+                response.header(CONTENT_LENGTH, len).body(data.into())
             }
-            Open::Stream(meta, file) => {
-                let response = self.set_headers(&meta, Response::build())?;
-                FileStream::new(self.permit, file).finalize(response)
+            MaybeRead::Lazy(len, metadata, file) => {
+                let response = self.set_headers(&metadata)?;
+                FileStream::new(file, self.permit, len).finalize(response)
             }
         }
     }
 
-    fn set_headers(
-        &self,
-        meta: &Metadata,
-        builder: ResponseBuilder,
-    ) -> Result<ResponseBuilder, Error> {
-        let mut response = builder;
+    fn set_headers(&self, metadata: &Metadata) -> Result<ResponseBuilder, Error> {
+        let mut response = Response::build();
 
         if let Some(mime_type) = self.content_type.as_ref() {
             response = response.header(CONTENT_TYPE, mime_type);
         }
 
         if let Some(f) = self.etag.as_ref()
-            && let Some(etag) = f(meta)?
+            && let Some(etag) = f(metadata)?
         {
             response = response.header(ETAG, etag);
         }
 
         if self.with_last_modified {
-            let last_modified = HttpDate::from(meta.modified()?);
+            let last_modified = HttpDate::from(metadata.modified()?);
             response = response.header(LAST_MODIFIED, last_modified.to_string());
         }
 
@@ -175,10 +190,11 @@ impl File {
 }
 
 impl FileStream {
-    fn new(permit: Option<OwnedSemaphorePermit>, file: TokioFile) -> Self {
+    fn new(file: TokioFile, permit: Option<OwnedSemaphorePermit>, remaining: u64) -> Self {
         Self {
-            reader: ReaderStream::with_capacity(file, MAX_BUFFER_SIZE),
+            file: ReaderStream::with_capacity(file, BUFFER_SIZE),
             permit,
+            remaining,
         }
     }
 }
@@ -187,18 +203,32 @@ impl Stream for FileStream {
     type Item = Result<Frame<Bytes>, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.reader)
-            .poll_next(context)
-            .map(|next| match next {
-                Some(Ok(chunk)) => Some(Ok(Frame::data(chunk))),
-                Some(Err(error)) => {
-                    self.permit = None;
-                    Some(Err(Error::from_io_error(error)))
+        match Pin::new(&mut self.file).poll_next(context) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => {
+                self.permit = None;
+                self.remaining = 0;
+                Poll::Ready(None)
+            }
+            Poll::Ready(Some(Ok(next))) => {
+                match self.remaining.checked_sub(next.len() as u64) {
+                    Some(0) | None => {
+                        self.remaining = 0;
+                        // Wake ASAP, we know the stream has ended.
+                        context.waker().wake_by_ref();
+                    }
+                    Some(remaining) => {
+                        self.remaining = remaining;
+                    }
                 }
-                None => {
-                    self.permit = None;
-                    None
-                }
-            })
+
+                Poll::Ready(Some(Ok(Frame::data(next))))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                self.remaining = 0;
+                self.permit = None;
+                Poll::Ready(Some(Err(Error::from_io_error(error))))
+            }
+        }
     }
 }

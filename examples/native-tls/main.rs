@@ -14,6 +14,27 @@ async fn hello(request: Request, _: Next) -> via::Result {
     Response::build().text(format!("Hello, {}! (via TLS)", name))
 }
 
+#[cfg(all(
+    any(feature = "aws-lc-rs", feature = "ring"),
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets")
+))]
+async fn echo(mut channel: via::ws::Channel, _: via::ws::Request) -> via::ws::Result {
+    while let Some(message) = channel.recv().await {
+        if message.is_close() {
+            eprintln!("info: close requested by client");
+            break;
+        }
+
+        if message.is_binary() || message.is_text() {
+            channel.send(message).await?;
+        } else if cfg!(debug_assertions) {
+            eprintln!("warn: ignoring message {:?}", message);
+        }
+    }
+
+    Ok(())
+}
+
 fn load_pkcs12(from: &Path) -> Result<Identity, Error> {
     let p12_path = from.join("localhost.p12");
     let identity = fs::read(&p12_path).unwrap_or_else(|_| {
@@ -51,6 +72,9 @@ async fn main() -> Result<ExitCode, Error> {
 
     // Add our hello responder to the endpoint /hello/:name.
     app.route("/hello/:name").to(via::get(hello));
+
+    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+    app.route("/echo").to(via::get(via::ws(echo)));
 
     Server::new(app)
         .listen_native_tls(("127.0.0.1", 8080), tls_config)

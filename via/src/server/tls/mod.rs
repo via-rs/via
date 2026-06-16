@@ -5,10 +5,24 @@ mod native;
 mod rustls;
 
 #[cfg(feature = "native-tls")]
-pub use native::{NativeTlsAcceptor, NativeTlsStream};
+pub use native::NativeTlsAcceptor;
+
+#[cfg(all(
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
+    not(feature = "rustls-23"),
+    feature = "native-tls",
+))]
+pub use native::NativeTlsStream;
 
 #[cfg(feature = "rustls-23")]
-pub use rustls::{RustlsAcceptor, RustlsStream};
+pub use rustls::RustlsAcceptor;
+
+#[cfg(all(
+    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
+    not(feature = "native-tls"),
+    feature = "rustls-23",
+))]
+pub use rustls::RustlsStream;
 
 use http::Version;
 use std::convert::Infallible;

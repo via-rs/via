@@ -126,7 +126,7 @@ A simple file server with hardcoded mime type resolution.
 ### Running the Example
 
 ```sh
-cargo run --example files --features="fs"
+cargo run --example files --features="file"
 ```
 
 Visit http://localhost:8080/ in your browser to see a nostalgic web page with

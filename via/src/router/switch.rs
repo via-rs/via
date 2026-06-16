@@ -6,21 +6,63 @@ use crate::middleware::{BoxFuture, Middleware};
 use crate::next::{Continue, Next};
 use crate::{Error, Request};
 
+/// The left-hand side of a discrete switch middleware.
 pub struct Allow<T> {
     middleware: T,
     mask: Mask,
 }
 
-pub struct Branch<T, U> {
+/// Stop processing the request and respond with `405` Method Not Allowed.
+pub struct Deny {
+    allow: Mask,
+}
+
+/// A higher order middleware that selects the middleware based on the request
+/// method.
+///
+/// If self does not contain a matching middleware for the request method, a
+/// fallback middleware is called instead. The default fallback simply forwards
+/// the request to the next middleware.
+///
+/// # Example
+///
+/// ```no_run
+/// use http::Method;
+/// use std::process::ExitCode;
+/// use via::{Error, Next, Request, Response, ResultExt, Server};
+///
+/// async fn update(request: Request, _: Next) -> via::Result {
+///     let id = request.param("user-id").parse::<u64>().or_bad_request()?;
+///
+///     if request.method() == Method::PUT {
+///         // Replace the record matching the id parameter with the data in
+///         // the request payload.
+///     } else {
+///         // Patch the fields of the record matching the id parameter with
+///         // those found in the request payload.
+///     }
+///
+///     todo!("update for user with id \"{}\" is not yet implemented.", id);
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<ExitCode, Error> {
+///     let mut app = via::app(());
+///
+///     // Define a route that listens for `PATCH` and `PUT` request to /users/:user-id.
+///     app.route("/users/:user-id").to(
+///         via::patch(update)
+///             .put(update)
+///             .or_deny() // All other methods are a 405 Method Not Allowed.
+///     );
+///
+///     Server::new(app).listen(("127.0.0.1", 8080)).await
+/// }
+/// ```
+pub struct Switch<T, U> {
     middleware: T,
     or_else: U,
     mask: Mask,
-}
-
-/// Stop processing the request and respond with `405` Method Not Allowed.
-///
-pub struct Deny {
-    allow: Mask,
 }
 
 #[derive(Debug)]
@@ -51,10 +93,10 @@ macro_rules! methods {
                 stringify!($method),
                 "` requests to the provided middleware."
             )]
-            $vis fn $name<T>(middleware: T) -> Branch<Allow<T>, Continue> {
+            $vis fn $name<T>(middleware: T) -> Switch<Allow<T>, Continue> {
                 let mask = Mask::$method;
 
-                Branch {
+                Switch {
                     middleware: Allow { middleware, mask },
                     or_else: Continue,
                     mask,
@@ -63,15 +105,22 @@ macro_rules! methods {
         )+
     };
     ($($vis:vis fn $name:ident($self:ident, $method:ident));+ $(;)?) => {
-        $($vis fn $name<F>($self, middleware: F) -> Branch<Allow<F>, Self> {
+        $(
+            #[doc = concat!(
+                "Route `",
+                stringify!($method),
+                "` requests to the provided middleware."
+            )]
+            $vis fn $name<F>($self, middleware: F) -> Switch<Allow<F>, Self> {
             let mask = Mask::$method;
 
-            Branch {
+            Switch {
                 mask: $self.mask | mask,
                 or_else: $self,
                 middleware: Allow { middleware, mask },
             }
-        })+
+        }
+        )+
     };
 }
 
@@ -86,7 +135,7 @@ methods! {
     pub fn trace(TRACE);
 }
 
-impl<T, U> Branch<T, U> {
+impl<T, U> Switch<T, U> {
     methods! {
         pub fn delete(self, DELETE);
         pub fn get(self, GET);
@@ -119,10 +168,10 @@ impl<T, U> Branch<T, U> {
     /// # }
     /// ```
     ///
-    pub fn or_deny(self) -> Branch<Self, Deny> {
+    pub fn or_deny(self) -> Switch<Self, Deny> {
         let allow = self.mask;
 
-        Branch {
+        Switch {
             middleware: self,
             or_else: Deny { allow },
             mask: allow,
@@ -181,7 +230,7 @@ where
     }
 }
 
-impl<T, U> Predicate<Mask> for Branch<T, U>
+impl<T, U> Predicate<Mask> for Switch<T, U>
 where
     for<'a> T: 'a,
     for<'a> U: 'a,
@@ -207,7 +256,7 @@ where
     }
 }
 
-impl<T, OrElse, App> Middleware<App> for Branch<T, OrElse>
+impl<T, OrElse, App> Middleware<App> for Switch<T, OrElse>
 where
     T: Middleware<App> + Predicate<Mask>,
     OrElse: Middleware<App>,

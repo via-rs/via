@@ -79,7 +79,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// Examples of higher-order middleware include:
 ///
-/// - Authentication middleware that decides whether a request can continue
+/// - Authentication middleware that decides whether a request can continue.
 ///
 /// - Request guards conditionally call middleware based on request metadata.
 ///

@@ -75,6 +75,11 @@ This project is inspired by:
 -   [Rocket](https://github.com/rwf2/Rocket) This project wouldn't exist if I hadn't tried to create [Rocket with classes](https://github.com/zacharygolba/via/blob/f44a3e8eeaee74cadfa2dd48cb60db5ef301aa01/docs/examples/advanced-blog/src/services/api/posts.rs).
 -   [warp](https://github.com/seanmonstar/warp) Via is built on top of hyper. Without warp, Via wouldn't exist! Also, warp has the coolest API I've ever used to write a web server.
 
+## Dedication
+
+For Chester and Kristina. Make them smile. Build something that you are
+proud of.
+
 ## License
 
 Licensed under either of

@@ -38,7 +38,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// but eventually some terminal middleware will generate a response.
 ///
 /// ```
-/// use via::{Next, Request, ResultExt};
+/// use via::{Next, Request, Response, ResultExt};
 ///
 /// async fn hello(request: Request, _: Next) -> via::Result {
 ///     //                           ^^^^^^^
@@ -107,9 +107,14 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// implementation of the [`FlatMap`](crate::guard::FlatMap) guard.
 ///
 /// ```
-/// # use crate::{BoxFuture, Error, Middleware, Next, Request};
-/// # use crate::guard::Predicate;
-/// #
+/// use via::{BoxFuture, Error, Middleware, Next, Request};
+/// use via::guard::Predicate;
+///
+/// struct FlatMap<T, U> {
+///     predicate: T,
+///     middleware: U,
+/// }
+///
 /// impl<T, U, App> Middleware<App> for FlatMap<T, U>
 /// where
 ///     T: Predicate<Request<App>> + Send + Sync,
@@ -163,12 +168,16 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// future and drive the next middleware from the inside.
 ///
 /// ```rust
-/// # use crate::{BoxFuture, Middleware, Next, Request};
-/// #
-/// # struct RequestLogger;
-/// #
-/// impl<App> Middleware<App> for RequestLogger {
-///     fn call(&self, request: Request, next: Next) -> BoxFuture {
+/// use std::io::Write;
+/// use via::{BoxFuture, Middleware, Next, Request};
+///
+/// struct RequestLogger;
+///
+/// impl<App> Middleware<App> for RequestLogger
+/// where
+///     App: Send + Sync + 'static,
+/// {
+///     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
 ///         // Clone the dependencies of our logger task.
 ///         let path = request.uri().path().to_owned();
 ///         let method = request.method().clone();

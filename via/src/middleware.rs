@@ -73,7 +73,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// Therefore, we suggest implementing "higher-order middleware" or middleware
 /// that occurs before a terminal middleware with the [`middleware`] fn or as
-/// an explicit impl for a concrete type if it must be named.
+/// an explicit impl for a concrete type if it must be nameable.
 ///
 /// # Higher-Order Middleware
 ///

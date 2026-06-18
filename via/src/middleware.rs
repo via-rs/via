@@ -41,13 +41,17 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// async fn hello(request: Request, _: Next) -> via::Result {
 ///     //                           ^^^^^^^
-///     // The `next` argument is ignored. This is a terminal middleware.
+///     // The `next` argument is ignored. This is a terminal
+///     // middleware.
 ///     //
 ///     // Get a reference to `name` from the request uri path.
-///     let name = request.param("name").percent_decode().into_result()?;
+///     let name = request.param("name").into_result()?;
+///
+///     // Build a personalized greeting with the name parameter.
+///     let greeting = format!("Hello, {}!", name.as_ref());
 ///
 ///     // Send a plain text response with our greeting message.
-///     Response::build().text(format!("Hello, {}!", name.as_ref()))
+///     Response::build().text(greeting)
 /// }
 /// ```
 ///
@@ -68,8 +72,8 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// indirection.
 ///
 /// Therefore, we suggest implementing "higher-order middleware" or middleware
-/// that occurs before a terminal middleware with a combinator API or as a
-/// discrete, explicit impl for a concrete type.
+/// that occurs before a terminal middleware with the [`middleware`] fn or as
+/// an explicit impl for a concrete type if it must be named.
 ///
 /// # Higher-Order Middleware
 ///
@@ -211,33 +215,38 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///     // Cookies are parsed and managed for every request.
 ///     app.middleware(cookies([session::COOKIE]));
 ///
-///     // Define the /api namespace. Middleware attached to `api` only runs
-///     // for requests to a nested resource (i.e /api/users).
+///     // Define the /api namespace. Middleware attached to
+///     // `api` only runs for requests to a nested resource
+///     // (i.e /api/users).
 ///     let mut api = app.route("/api");
 ///
-///     // Errors originating from the /api namespace generate a JSON response.
+///     // Errors originating from the /api namespace generate a
+///     // JSON response.
 ///     api.middleware(rescue(|error| error.use_json()));
 ///
-///     // Confirm the client speaks JSON. Then, restore their session.
+///     // Confirm the client speaks JSON. Then, restore their
+///     // session.
 ///     //
-///     // We call this pattern a "side car". A guard paired with middleware
-///     // that only executes when the guard succeeds.
+///     // We call this pattern a "side car". A guard paired with
+///     // middleware that only executes when the guard succeeds.
 ///     //
-///     // In addition to eliminating the cost of the business logic in the
-///     // subsequent middleware when the guard fails, the framework over head
-///     // of the attached middleware is completely erased.
+///     // In addition to eliminating the cost of the business
+///     // logic in the subsequent middleware when the guard
+///     // fails, the framework over head of the attached
+///     // middleware is completely erased.
 ///     //
-///     // It is a best practice to give a guard a side car when it makes sense
-///     // For example, we wouldn't want to restore a user's session to our
-///     // JSON API if they cannot send and receive JSON.
+///     // It is a best practice to give a guard a side car when
+///     // it makes sense. For example, we wouldn't want to
+///     // restore a user's session to our JSON API if they cannot
+///     // send and receive JSON.
 ///     api.middleware(guard::flat_map(
 ///         content(media::json(), media::json()),
 ///         session::restore(),
 ///     ));
 ///
-///     // If the request method cannot be cached or the session has not been
-///     // verified in the past hour, confirm that the user exists and has an
-///     // active account.
+///     // If the request method cannot be cached or the session
+///     // has not been verified in the past hour, confirm that
+///     // the user exists and has an active account.
 ///     api.middleware(guard::filter(
 ///         or((not(method::is_safe()), session::is_expired)),
 ///         session::verify(),
@@ -372,6 +381,10 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// - Use stateful middleware when work must cross an `.await` boundary, when
 ///   you need to inspect the response produced by downstream middleware
+///
+/// - Prefer explicitly implementing `Middleware` for a type when you need a
+///   type name to support composition or have an opinion about the memory
+///   layout of captured state
 ///
 /// [guards]: mod@crate::guard
 pub trait Middleware<App>: Send + Sync {

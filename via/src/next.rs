@@ -15,7 +15,26 @@ use crate::request::Request;
 /// where a concrete fallback is required.
 pub struct Continue;
 
-/// The next middleware in the logical call stack of a request.
+/// A linear, single-use execution cursor over middleware.
+///
+/// Middleware receives ownership of `next` and may either delegate to the
+/// subsequent middleware in the deque or build a response and terminate
+/// execution altogether.
+///
+/// `Next` has strict ownership semantics with a consuming API. When the "next"
+/// middleware is called, ownership of `self` and `request` are transferred to
+/// the middleware popped from the front of the deque. If the deque is empty,
+/// `Next` returns a `404 Not Found` error.
+///
+/// Because `Next` owns the remaining middleware chain, choosing not to call it
+/// is how middleware terminates or rejects a request. This makes control flow
+/// explicit: downstream middleware only execute when an upstream middleware
+/// delegates to them.
+///
+/// `Next` cannot be cloned or reused. This prevents middleware from executing
+/// the same downstream chain more than once, speculatively observing rejected
+/// requests, or continuing execution after a terminal middleware has already
+/// produced a response.
 pub struct Next<App = ()> {
     deque: VecDeque<Arc<dyn Middleware<App>>>,
 }
@@ -32,18 +51,16 @@ impl<App> Next<App> {
         Self { deque }
     }
 
-    /// Calls the next middleware in the logical call stack of the request.
+    /// Call the "next" middleware in the logical call stack for the request.
     ///
     /// # Example
     ///
     /// ```
-    /// use via::{Request, Next};
+    /// use via::{Middleware, middleware};
     ///
-    /// async fn logger(request: Request, next: Next) -> via::Result {
-    ///     println!("{} -> {}", request.method(), request.uri().path());
-    ///     next.call(request).await.inspect(|response| {
-    ///         println!("<- {}", response.status());
-    ///     })
+    /// /// Forwards `request` to the "next" middleware.
+    /// fn forward<App>() -> impl Middleware<App> + 'static {
+    ///     middleware(|request, next| next.call(request))
     /// }
     /// ```
     pub fn call(mut self, request: Request<App>) -> BoxFuture {
@@ -57,7 +74,7 @@ impl<App> Next<App> {
     }
 }
 
-// Explicitly impl Drop to make a supply-chain risk a build-time error.
+/// Explicitly implement Drop to make a supply-chain risk a build-time error.
 //
 // Rationale:
 //

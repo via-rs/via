@@ -29,7 +29,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// `next` argument and unconditionally build a response or return an error as
 /// "terminal middleware".
 ///
-/// ## Terminal Middleware
+/// # Terminal Middleware
 ///
 /// Every non-empty route stack contains at least one terminal middleware.
 ///
@@ -72,7 +72,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// that occurs before a terminal middleware with a combinator API or as a
 /// discrete, explicit impl for a concrete type.
 ///
-/// ## Higher-Order Middleware
+/// # Higher-Order Middleware
 ///
 /// Higher-order middleware modifies how subsequent middleware behaves or
 /// decorates the response built by a terminal middleware.
@@ -98,7 +98,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// middleware that does not introduce an additional layer of indirection as
 /// "stateless".
 ///
-/// ### Stateless Middleware
+/// ## Stateless Middleware
 ///
 /// Some higher-order middleware can performs all of its work synchronously and
 /// the delegate directly to the next middleware in the chain. Request guards
@@ -149,7 +149,124 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// to one. This means one layer of pointer indirect, one dynamic dispatch call,
 /// and atomic operation with two discrete middlewares.
 ///
-/// ### Stateful Middleware
+/// ### Guard-Amortized Middleware Execution
+///
+/// Some middleware compositions allow request processing cost to be amortized
+/// across guard boundaries, rather than paid unconditionally for every
+/// request.
+///
+/// In these cases, [guards] act as compile-time-like selectors over runtime
+/// request metadata, determining whether downstream middleware is even
+/// entered. This allows entire middleware layers to be skipped without
+/// allocation or asynchronous suspension.
+///
+/// Consider the following pattern:
+///
+/// - A guard evaluates request metadata (headers, method, authentication state)
+/// - If the guard succeeds, execution continues into a nested middleware stack
+/// - If the guard fails, the nested middleware is never constructed or polled
+///
+/// This means the effective cost of middleware is no longer strictly additive
+/// across the route stack. Instead, cost becomes path-dependent, and can
+/// collapse depending on early guard evaluation.
+///
+/// ```no_run
+/// use std::process::ExitCode;
+/// use via::{Error, Server, cookies, guard, rescue};
+/// use via::guard::{content, header::media, or, method, not};
+///
+/// mod session {
+///     // Implementations elided...
+/// #   use via::{BoxFuture, Next, Middleware, Request, Response};
+/// #
+/// #   pub const COOKIE: &str = "via-session";
+/// #
+/// #   /// Returns `true` if the active user session needs verification.
+/// #   pub fn is_expired(request: &Request) -> bool { todo!() }
+/// #
+/// #   /// Extract the active user session from the session cookie.
+/// #   pub fn restore() -> impl Middleware<()> { Restore }
+/// #
+/// #   /// Confirms that the active user exists and has a valid account.
+/// #   pub fn verify() -> impl Middleware<()> { Verify }
+/// #
+/// #   struct Restore;
+/// #   struct Verify;
+/// #
+/// #   impl Middleware<()> for Restore {
+/// #       fn call(&self, request: Request, next: Next) -> BoxFuture { todo!() }
+/// #   }
+/// #
+/// #   impl Middleware<()> for Verify {
+/// #       fn call(&self, request: Request, next: Next) -> BoxFuture { todo!() }
+/// #   }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<ExitCode, Error> {
+///     // Create a new application.
+///     let mut app = via::app(());
+///
+///     // Cookies are parsed and managed for every request.
+///     app.middleware(cookies([session::COOKIE]));
+///
+///     // Define the /api namespace. Middleware attached to `api` only runs
+///     // for requests to a nested resource (i.e /api/users).
+///     let mut api = app.route("/api");
+///
+///     // Errors originating from the /api namespace generate a JSON response.
+///     api.middleware(rescue(|error| error.use_json()));
+///
+///     // Confirm the client speaks JSON. Then, restore their session.
+///     //
+///     // We call this a "side car" because it collapses two atomic ops and
+///     // two dynamically dispatched box futures into one.
+///     //
+///     // It is a best practice to give a guard a side car when it makes sense
+///     // For example, we wouldn't want to restore a user's session to our
+///     // JSON API if they cannot send and receive JSON.
+///     api.middleware(guard::flat_map(
+///         content(media::json(), media::json()),
+///         session::restore(),
+///     ));
+///
+///     // If the request method cannot be cached or the session has not been
+///     // verified in the past hour, confirm that the user exists and has an
+///     // active account.
+///     api.middleware(guard::filter(
+///         or((not(method::is_safe()), session::is_expired)),
+///         session::verify(),
+///     ));
+///
+///     // Serve the application at http://localhost:8080/.
+///     Server::new(app).listen(("127.0.0.1", 8080)).await
+/// }
+/// ```
+///
+/// In the example above downstream middleware may never observe session state
+/// at all if guards fail early.
+///
+/// - `session::restore` is only executed if content negotiation succeeds
+/// - `session::verify` is skipped for safe requests with fresh sessions
+///
+/// This pattern is especially powerful when composing multiple stateless
+/// guards, since each guard can eliminate not just itself, but all nested
+/// middleware beneath it. Middleware stacks can be expressed declaratively
+/// while still achieving branch-local execution costs.
+///
+/// In practice, this means:
+///
+/// - fewer allocations in request hot paths
+/// - fewer futures constructed per request (less dynamic dispatch)
+/// - early rejection of work before async boundaries are crossed (the
+///   adverserial window of opportunity is reduced)
+///
+/// However, this should not be used as a substitute for correctness or
+/// clarity. Guards should be chosen primarily for expressiveness of request
+/// constraints, with performance benefits treated as a consequence of correct
+/// structure rather than the primary design goal.
+///
+/// ## Stateful Middleware
 ///
 /// Sometimes middleware needs to perform asynchronous work before the request
 /// is forwarded to the next middleware in the chain or after a response is
@@ -238,7 +355,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// ## Security Through Obscurity
 ///
-/// We advise our to prefer generating noise rather than worrying about
+/// We advise our users to prefer generating noise rather than worrying about
 /// obfuscation via pointer indirection. However, it is sometimes beneficial to
 /// obfuscate business logic in a terminal middleware with pointer indirection.
 /// It is a best practice to not let this be a deciding factor in chosing a
@@ -250,6 +367,8 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// built-in [`cookies`](crate::Cookies) middleware in combination with the
 /// [`rescue`](crate::error::rescue) middleware at root of your application is
 /// enough to shift your focus from obscurity to performance.
+///
+/// [guards]: mod@crate::guard
 pub trait Middleware<App>: Send + Sync {
     /// Respond to `request` or call the `next` middleware.
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture;

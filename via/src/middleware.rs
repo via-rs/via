@@ -20,14 +20,13 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// An asynchronous step in the request processing pipeline.
 ///
 /// Middleware is executed in the order it appears in the resolved route stack.
-/// Each implementation of `Middleware` in the resolved route stack receives
-/// ownership of `request` and `next`. At which point, the implementation can
-/// decide to build a response, return an error, or call `next`.
+/// Each middleware in the resolved route stack receives ownership of `request`
+/// and `next`, allowing it to build a response, return an error, or delegate
+/// with `next.call(request)`.
 ///
-/// When an implementation of middleware decides not to call `next`, the rest
-/// of the chain is skipped permanently. We refer middleware that ignore the
-/// `next` argument and unconditionally build a response or return an error as
-/// "terminal middleware".
+/// When an implementation of middleware decides not to call `next`, the
+/// remaining middleware are not executed. We refer to middleware that ignore
+/// the `next` argument entirely as "terminal middleware".
 ///
 /// # Terminal Middleware
 ///
@@ -89,19 +88,19 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///   response with `set-cookie` headers generated from the delta of cookies
 ///   that change in subsequent middleware
 ///
-/// Higher-order middleware can be either synchronous or asynchronous. If a the
+/// Higher-order middleware can be either synchronous or asynchronous. If the
 /// work performed by a middleware can be done synchronously, you can avoid a
 /// layer of pointer indirection by delegating directly to the next middleware
-/// in the chain. If a middleware can perform all of it's work synchronously,
-/// it is likely that it does not transfer ownership of state to the box future
+/// in the chain. If a middleware can perform all of its work synchronously, it
+/// is likely that it does not transfer ownership of state to the box future
 /// returned from [`Middleware::call`]. Therefore, we refer to higher-order
 /// middleware that does not introduce an additional layer of indirection as
 /// "stateless".
 ///
 /// ## Stateless Middleware
 ///
-/// Some higher-order middleware can performs all of its work synchronously and
-/// the delegate directly to the next middleware in the chain. Request guards
+/// Some higher-order middleware can perform all of its work synchronously and
+/// then delegate directly to the next middleware in the chain. Request guards
 /// are a common example. A guard examines the request and either forwards it
 /// to another middleware or rejects it immediately. Let's take a look at the
 /// implementation of the [`FlatMap`](crate::guard::FlatMap) guard.
@@ -146,8 +145,8 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// is usually preferred. It avoids an additional layer of pointer indirection.
 /// You can further optimize a route stack by composing a stateless middleware
 /// with a terminal middleware to collapse the cost of 2 middleware dispatches
-/// to one. This means one layer of pointer indirect, one dynamic dispatch call,
-/// and atomic operation with two discrete middlewares.
+/// to one. This means one layer of pointer indirection, one dynamic dispatch
+/// call, and single `Arc::clone` for two discrete middlewares.
 ///
 /// ### Guard-Amortized Middleware Execution
 ///
@@ -155,15 +154,17 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// across guard boundaries, rather than paid unconditionally for every
 /// request.
 ///
-/// In these cases, [guards] act as compile-time-like selectors over runtime
-/// request metadata, determining whether downstream middleware is even
-/// entered. This allows entire middleware layers to be skipped without
-/// allocation or asynchronous suspension.
+/// In these cases, [guards] can eliminate the cost of downstream middleware by
+/// rejecting requests before additional middleware is entered. This allows
+/// entire middleware layers to be skipped without allocation or asynchronous
+/// suspension.
 ///
 /// Consider the following pattern:
 ///
 /// - A guard evaluates request metadata (headers, method, authentication state)
+///
 /// - If the guard succeeds, execution continues into a nested middleware stack
+///
 /// - If the guard fails, the nested middleware is never constructed or polled
 ///
 /// This means the effective cost of middleware is no longer strictly additive
@@ -219,8 +220,12 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 ///     // Confirm the client speaks JSON. Then, restore their session.
 ///     //
-///     // We call this a "side car" because it collapses two atomic ops and
-///     // two dynamically dispatched box futures into one.
+///     // We call this pattern a "side car". A guard paired with middleware
+///     // that only executes when the guard succeeds.
+///     //
+///     // In addition to eliminating the cost of the business logic in the
+///     // subsequent middleware when the guard fails, the framework over head
+///     // of the attached middleware is completely erased.
 ///     //
 ///     // It is a best practice to give a guard a side car when it makes sense
 ///     // For example, we wouldn't want to restore a user's session to our
@@ -247,6 +252,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// at all if guards fail early.
 ///
 /// - `session::restore` is only executed if content negotiation succeeds
+///
 /// - `session::verify` is skipped for safe requests with fresh sessions
 ///
 /// This pattern is especially powerful when composing multiple stateless
@@ -257,9 +263,11 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// In practice, this means:
 ///
 /// - fewer allocations in request hot paths
+///
 /// - fewer futures constructed per request (less dynamic dispatch)
+///
 /// - early rejection of work before async boundaries are crossed (the
-///   adverserial window of opportunity is reduced)
+///   adversarial window of opportunity is reduced)
 ///
 /// However, this should not be used as a substitute for correctness or
 /// clarity. Guards should be chosen primarily for expressiveness of request
@@ -274,14 +282,14 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// - A request logger that includes the status code of the response
 ///
-/// - Authentication middleware that queries a database to confirm that a users
-///   account is active
+/// - Authentication middleware that queries a database to confirm that a
+///   user's account is active
 ///
 /// - Cookie middleware parses request cookies and tracks changes to generate
 ///   `set-cookie` headers from the delta
 ///
 /// In these examples, the middleware needs to `.await` at least one other
-/// future. To acheive this, we must return our own async block inside a box
+/// future. To achieve this, we must return our own async block inside a box
 /// future and drive the next middleware from the inside.
 ///
 /// ```rust
@@ -340,9 +348,10 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// ## Choosing a Style
 ///
 /// The distinction is more about structure than capability. Stateless
-/// middleware decides whether or not a request should continue. Stateful
-/// middleware is code that would otherwise be in a terminal middleware that
-/// should be applied to an entire subtree of your application's router.
+/// middleware performs all of its work before delegating to downstream
+/// middleware. Stateful middleware retains state across an asynchronous
+/// boundary, allowing it to observe or modify the result produced by
+/// downstream middleware.
 ///
 /// As a general rule of thumb:
 ///
@@ -352,21 +361,6 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// - Use stateful middleware when work must cross an `.await` boundary, when
 ///   you need to inspect the response produced by downstream middleware
-///
-/// ## Security Through Obscurity
-///
-/// We advise our users to prefer generating noise rather than worrying about
-/// obfuscation via pointer indirection. However, it is sometimes beneficial to
-/// obfuscate business logic in a terminal middleware with pointer indirection.
-/// It is a best practice to not let this be a deciding factor in chosing a
-/// style of middleware when implementing a feature for a subtree of your
-/// application's router.
-///
-/// Instead prefer using built-in stateful higher-order middleware to provide
-/// the minimum amount necessary. For example, an application that uses the
-/// built-in [`cookies`](crate::Cookies) middleware in combination with the
-/// [`rescue`](crate::error::rescue) middleware at root of your application is
-/// enough to shift your focus from obscurity to performance.
 ///
 /// [guards]: mod@crate::guard
 pub trait Middleware<App>: Send + Sync {

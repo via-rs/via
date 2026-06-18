@@ -39,6 +39,11 @@
 //! }
 //! ```
 //!
+//! # Dedication
+//!
+//! For Chester and Kristina. Make them smile. Build something that you are
+//! proud of.
+//!
 
 pub mod error;
 pub mod guard;

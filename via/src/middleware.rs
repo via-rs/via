@@ -294,36 +294,47 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// ```rust
 /// use std::io::Write;
+/// use std::sync::Arc;
+/// use tokio::task::spawn_blocking;
 /// use via::{BoxFuture, Middleware, Next, Request};
 ///
-/// struct RequestLogger;
+/// /// Logs the method, path, and status to an `impl Write`.
+/// struct Tap<T> {
+///     io: Arc<T>,
+/// }
 ///
-/// impl<App> Middleware<App> for RequestLogger
+/// impl<T, Io, App> Middleware<App> for Tap<T>
 /// where
+///     T: Fn() -> Io + Send + Sync + 'static,
+///     Io: Write,
 ///     App: Send + Sync + 'static,
 /// {
 ///     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {
-///         // Clone the dependencies of our logger task.
-///         let path = request.uri().path().to_owned();
-///         let method = request.method().clone();
+///         // Clone `io` so it can move into the log task.
+///         let io = Arc::clone(&self.io);
 ///
 ///         // Return our own future so we can await the response.
-///         Box::pin(async move {
+///         Box::pin(async {
+///             // Clone the log task dependencies from request.
+///             let path = request.uri().path().to_owned();
+///             let method = request.method().clone();
+///
 ///             // Call the next middleware to get a response.
 ///             let response = next.call(request).await?;
-///             //                                ^^^^^^
-///             // If an error occurs, it will be logged by our error handler.
+///             //                                     ^
+///             // The try operator is safe so long as `rescue`
+///             // occurs after `tap` in the main fn of your app.
 ///
-///             // Get an owned copy of the response status to move into the
-///             // logger task.
-///             let status = response.status().clone();
+///             // Get a copy of the response status code.
+///             let status = response.status();
 ///
-///             // Spawn a task to log the request after the response is sent.
-///             tokio::task::spawn_blocking(move || {
-///                 let stdout = std::io::stdout();
-///                 let mut io = stdout.lock();
-///
-///                 writeln!(&mut io, "{} {} ~> {}", method, path, status)
+///             // Log in a detached background task.
+///             spawn_blocking(move || {
+///                 let _ = writeln!(
+///                     &mut io(),
+///                     "{} {} ~> {}",
+///                     method, path, status
+///                 );
 ///             });
 ///
 ///             // Send the response to the client.

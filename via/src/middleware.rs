@@ -399,10 +399,10 @@ pub trait Middleware<App>: Send + Sync {
 /// while preventing accidental captures from becoming long-lived state.
 ///
 /// Unlike the blanket implementation, the closure passed to middleware may
-/// capture state from it's environment and it must return a [`BoxFuture`]
+/// capture state from its environment and it must return a [`BoxFuture`]
 /// directly. This means the closure decides where the future is boxed. If the
-/// `call` argument can delegate directly to `next`, it may do so without
-/// wrapping downstream execution in an additional future.
+/// closure can delegate directly to `next`, it may do so without wrapping
+/// downstream execution in an additional future.
 ///
 /// # Example
 ///

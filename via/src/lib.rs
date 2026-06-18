@@ -61,7 +61,7 @@ pub use app::{Shared, Via, app};
 pub use cookies::{Cookies, cookies};
 pub use error::{Error, ResultExt, rescue};
 pub use guard::guard;
-pub use middleware::{BoxFuture, Middleware, Result};
+pub use middleware::{BoxFuture, Middleware, Result, middleware};
 pub use next::{Continue, Next};
 pub use request::{Payload, Request};
 pub use response::{Finalize, Response};

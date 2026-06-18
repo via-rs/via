@@ -301,7 +301,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// future. To achieve this, we must return our own async block inside a box
 /// future and drive the next middleware from the inside.
 ///
-/// ```rust
+/// ```
 /// use std::io::Write;
 /// use std::sync::Arc;
 /// use tokio::task::spawn_blocking;

@@ -79,15 +79,15 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// Examples of higher-order middleware include:
 ///
-/// - Authentication middleware that decides whether a request can continue.
+/// - Authentication middleware that decides whether a request can continue
 ///
-/// - Request guards conditionally call middleware based on request metadata.
+/// - Request guards conditionally call middleware based on request metadata
 ///
-/// - Logging middleware that records metadata about the request and response.
+/// - Logging middleware that records metadata about the request and response
 ///
 /// - Cookie middleware that decorate the request with parsed cookies and the
 ///   response with `set-cookie` headers generated from the delta of cookies
-///   that change in subsequent middleware.
+///   that change in subsequent middleware
 ///
 /// Higher-order middleware can be either synchronous or asynchronous. If a the
 /// work performed by a middleware can be done synchronously, you can avoid a
@@ -272,13 +272,13 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// is forwarded to the next middleware in the chain or after a response is
 /// built by a terminal middleware. Examples of stateful middleware include:
 ///
-/// - A request logger that includes the status code of the response.
+/// - A request logger that includes the status code of the response
 ///
 /// - Authentication middleware that queries a database to confirm that a users
-///   account is active.
+///   account is active
 ///
 /// - Cookie middleware parses request cookies and tracks changes to generate
-///   `set-cookie` headers from the delta.
+///   `set-cookie` headers from the delta
 ///
 /// In these examples, the middleware needs to `.await` at least one other
 /// future. To acheive this, we must return our own async block inside a box
@@ -346,12 +346,12 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// As a general rule of thumb:
 ///
-/// - Use terminal middleware to generate responses with an `async fn`.
+/// - Use terminal middleware to generate responses with an `async fn`
 ///
-/// - Use stateless middleware when all work can be performed synchronously.
+/// - Use stateless middleware when all work can be performed synchronously
 ///
 /// - Use stateful middleware when work must cross an `.await` boundary, when
-///   you need to inspect the response produced by downstream middleware.
+///   you need to inspect the response produced by downstream middleware
 ///
 /// ## Security Through Obscurity
 ///

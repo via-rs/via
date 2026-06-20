@@ -16,10 +16,10 @@
 //!
 //! The predicates in this module are not routing primitives.
 //!
-//! A method predicate classifies a request by method. When used with [`guard`]
-//! [`filter`], or [`flat_map`], it acts as stateless higher-order middleware
-//! that decides whether the remaining subtree should be entered, skipped, or
-//! denied.
+//! A method predicate classifies a request by method. When used with
+//! [`guard`], [`filter`], or [`flat_map`], it acts as stateless higher-order
+//! middleware that decides whether the remaining subtree should be entered,
+//! skipped, or denied.
 //!
 //! In contrast, the router's method [`Switch`] selects between terminal
 //! middleware branches. Functions such as [`get`], [`post`], and [`put`] build
@@ -74,7 +74,7 @@ use super::predicate::{Not, Predicate, not};
 use crate::{Error, err, request::Request};
 
 /// Match request methods that are
-/// ["idempotent"](https://tools.ietf.org/html/rfc7231#section-4.2.2).
+/// ["idempotent"](https://www.rfc-editor.org/rfc/rfc9110.html#name-idempotent-methods).
 ///
 /// This predicate succeeds when [`Method::is_idempotent`] returns `true`.
 ///
@@ -88,8 +88,8 @@ pub struct IsIdempotent;
 /// Match `GET`, `HEAD`, `OPTIONS`, and `TRACE` requests.
 ///
 /// This predicate succeeds when [`Method::is_safe`] returns `true`.
-/// ["Safe"](https://tools.ietf.org/html/rfc7231#section-4.2.1) methods are
-/// read-only by convention.
+/// ["Safe"](https://www.rfc-editor.org/rfc/rfc9110.html#name-safe-methods)
+/// methods are read-only by convention.
 ///
 /// [`Method::is_safe`]: http::Method::is_safe
 pub struct IsSafe;
@@ -111,7 +111,7 @@ pub struct Allow {
 /// `Deny` borrows the method allowed by the predicate. It does not
 /// borrow the method supplied by the request.
 pub struct Deny<'a> {
-    allows: &'a Method,
+    allow: &'a Method,
 }
 
 /// Succeeds for requests made with the provided method argument.
@@ -134,7 +134,7 @@ pub fn allow(method: Method) -> Allow {
 }
 
 /// Succeeds for request methods that are
-/// ["idempotent"](https://tools.ietf.org/html/rfc7231#section-4.2.2).
+/// ["idempotent"](https://www.rfc-editor.org/rfc/rfc9110.html#name-idempotent-methods).
 ///
 /// This predicate succeeds for methods where [`Method::is_idempotent`] returns
 /// `true`.
@@ -157,7 +157,7 @@ pub fn is_idempotent() -> IsIdempotent {
 }
 
 /// Succeeds for request methods that are not
-/// ["safe"](https://tools.ietf.org/html/rfc7231#section-4.2.1).
+/// ["safe"](https://www.rfc-editor.org/rfc/rfc9110.html#name-safe-methods).
 ///
 /// # Example
 ///
@@ -178,8 +178,8 @@ pub fn is_mutation() -> Not<IsSafe> {
 
 /// Succeeds for `GET`, `HEAD`, `OPTIONS`, and `TRACE` requests.
 ///
-/// ["Safe"](https://tools.ietf.org/html/rfc7231#section-4.2.1) methods are
-/// read-only by convention.
+/// ["Safe"](https://www.rfc-editor.org/rfc/rfc9110.html#name-safe-methods)
+/// methods are read-only by convention.
 ///
 /// # Example
 ///
@@ -213,14 +213,14 @@ impl<App> Predicate<Request<App>> for Allow {
 
     fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
         self.cmp(request.method()).map_err(|_| Deny {
-            allows: &self.method,
+            allow: &self.method,
         })
     }
 }
 
 impl From<Deny<'_>> for Error {
     fn from(error: Deny<'_>) -> Self {
-        err!(405, "expected request method to be {}", &error.allows)
+        err!(405, "expected request method to be {}", &error.allow)
     }
 }
 

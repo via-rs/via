@@ -320,12 +320,14 @@ macro_rules! impl_or_predicate {
 /// ```
 /// use http::Version;
 /// use via::guard::{self, map_err};
-/// #
-/// # let mut app = via::app(());
+/// use via::{err, Request};
+///
+/// // Create a new application.
+/// let mut app = via::app(());
 ///
 /// // Only support request made with HTTP versions >= 1.1.
 /// app.middleware(guard::barrier(map_err(
-///     |_| via::err!(400, "http version not supported"),
+///     |_| err!(400, "http version not supported"),
 ///     |request: &Request| request.version() > Version::HTTP_10,
 /// )));
 /// ```

@@ -22,6 +22,211 @@ pub struct When<T, U>(T, U);
 pub struct Wildcard;
 
 /// An inexpensive comparison operation that can fail with context.
+///
+/// A predicate compares itself against some input and returns `Ok(())` when
+/// the input matches. If the input does not match, the predicate returns an
+/// associated error. Predicates come in two flavors:
+///
+/// - Boolean predicates return `Result<(), ()>`. These behave like ordinary
+///   boolean comparisons, but use `Result` so they compose with predicates
+///   that provide richer error information.
+///
+/// - Contextual predicates return an error that describes why the comparison
+///   failed. These errors may borrow from the predicate itself.
+///
+/// # Contextual Errors
+///
+/// Contextual predicate errors are deliberately allowed to borrow from `self`.
+/// This lets a predicate return known or pre-validated context about the rule
+/// that failed without allowing arbitrary user input to flow into an error
+/// response.
+///
+/// For example, a header predicate may return an error containing the
+/// [`HeaderName`] associated with the failed predicate. The header name
+/// belongs to the predicate, not to the request. The failed request value is
+/// examined, but not retained by the error. When that error is converted into
+/// an [`Error`], the response is selected from the known set of header rules
+/// supported by the application rather than being derived from the raw header
+/// value supplied by the client.
+///
+/// This is especially important for byte-oriented inputs such as HTTP header
+/// values. An invalid header value may not be valid UTF-8, and should not be
+/// implicitly written into a response body. By tying contextual errors to the
+/// lifetime of the predicate, custom predicates can provide useful failure
+/// information while keeping untrusted input out of generated error messages.
+///
+/// If a predicate needs to expose request-derived data in an error, it should
+/// do so explicitly by validating, normalizing, and owning that data before it
+/// is converted into a response.
+///
+/// ## Error Lifetimes
+///
+/// Predicate errors do not cross asynchronous boundaries.
+///
+/// Guard middleware evaluates predicates synchronously. If a predicate fails,
+/// its error is converted into an owned [`Error`] before the guard returns a
+/// future. This means a contextual predicate error may borrow from the
+/// predicate itself without moving into the future returned by middleware.
+///
+/// ```
+/// # use via::guard::Predicate;
+/// #
+/// /// A predicate that requires the input string to match `expected`.
+/// struct Equals {
+///     expected: Box<str>,
+/// }
+///
+/// /// The failed input did not match `expected`.
+/// struct NotEqual<'a> {
+///     expected: &'a str,
+/// }
+///
+/// impl Predicate<str> for Equals {
+///     type Error<'a> = NotEqual<'a>;
+///
+///     fn cmp<'a>(&'a self, input: &str) -> Result<(), Self::Error<'a>> {
+///         let expected = &*self.expected;
+///
+///         if input == expected {
+///             Ok(())
+///         } else {
+///             Err(NotEqual { expected })
+///         }
+///     }
+/// }
+/// ```
+///
+/// In this example, `input` is examined but never retained by `NotEqual`.
+/// The error borrows `expected` from the predicate, so the error can describe
+/// the rule that failed without borrowing from the input value.
+///
+/// In other words, borrowed predicate errors describe why synchronous
+/// classification failed; owned framework errors describe the response that
+/// should be generated.
+///
+/// This distinction is intentional. Contextual predicate errors are designed
+/// to describe the rule that failed, not the input that caused it to fail.
+///
+/// Allowing arbitrary input to flow into a predicate's error type would make
+/// it easy to accidentally reflect untrusted data into logs, diagnostics, or
+/// HTTP responses. For example, an invalid HTTP header value may contain
+/// arbitrary bytes that are not valid UTF-8.
+///
+/// By tying the lifetime of a contextual error to the predicate rather than
+/// the input, Via encourages predicates to report known, trusted context about
+/// the failed rule. Input-derived data must be explicitly validated,
+/// normalized, and owned before it can become part of an error that is later
+/// converted into a response.
+///
+/// This makes the ownership boundary visible in the type system: predicates
+/// may inspect untrusted input, but contextual errors describe trusted rules.
+///
+/// # Input Specialization
+///
+/// Predicates may be implemented for more than one input type.
+///
+/// Prefer implementing a predicate for the smallest input that gives the
+/// predicate its meaning. For example, a method predicate can be implemented
+/// for [`Method`], while a request-level implementation can delegate to the
+/// method implementation.
+///
+/// ```
+/// use http::Method;
+/// use via::guard::Predicate;
+/// use via::{Error, Request, err};
+///
+/// pub struct Allow {
+///     method: Method,
+/// }
+///
+/// pub struct Deny<'a> {
+///     allow: &'a Method,
+/// }
+///
+/// pub fn allow(method: Method) -> Allow {
+///     Allow { method }
+/// }
+///
+/// impl Predicate<Method> for Allow {
+///     type Error<'a> = ();
+///
+///     fn cmp<'a>(&'a self, input: &Method) -> Result<(), Self::Error<'a>> {
+///         if self.method == input {
+///             Ok(())
+///         } else {
+///             Err(())
+///         }
+///     }
+/// }
+///
+/// impl<App> Predicate<Request<App>> for Allow {
+///     type Error<'a> = Deny<'a>;
+///
+///     fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
+///         self.cmp(request.method()).map_err(|_| Deny {
+///             allow: &self.method,
+///         })
+///     }
+/// }
+///
+/// impl From<Deny<'_>> for Error {
+///     fn from(error: Deny<'_>) -> Self {
+///         err!(405, "expected request method to be {}", &error.allow)
+///     }
+/// }
+/// ```
+///
+/// This keeps the predicate reusable with a projected input while still
+/// allowing composite input types to provide richer contextual errors.
+///
+/// To demonstrate this, let's reimplement the [`method::is_safe`] predicate
+/// using combinators rather than [the fn](http::Method::is_safe) defined in
+/// `impl Method` from the [`http`] crate. The [`on`] combinator works great
+/// for this type of projection:
+///
+/// ```no_run
+/// use http::Method;
+/// use std::process::ExitCode;
+/// use via::guard::method::allow;
+/// use via::guard::{self, on, or};
+/// use via::{Error, Request, Server};
+///
+/// #[tokio::main]
+/// async fn main() -> Result<ExitCode, Error> {
+///     // Create a new application.
+///     let mut app = via::app(());
+///
+///     // If the request method is safe, cache the response.
+///     app.middleware(guard::filter(
+///         on(
+///             Request::method,
+///             or((
+///                 allow(Method::GET),
+///                 allow(Method::HEAD),
+///                 allow(Method::OPTIONS),
+///                 allow(Method::TRACE)
+///             )),
+///         ),
+///         async |request, next| {
+///             todo!("implement response caching");
+///         },
+///     ));
+///
+///     // Serve the application at http://localhost:8080/.
+///     Server::new(app).listen(("127.0.0.1", 8080)).await
+/// }
+/// ```
+///
+/// However, avoid adding specialized implementations solely to avoid repeated
+/// accessor calls or short-lived borrows. Prefer the implementation that best
+/// describes the predicate's input. In optimized builds, ordinary repeated
+/// field access and simple projections are generally good candidates for
+/// compiler optimization.
+///
+/// [`Error`]: crate::Error
+/// [`HeaderName`]: http::HeaderName
+/// [`Method`]: http::Method
+/// [`method::is_safe`]: crate::guard::method::is_safe
 pub trait Predicate<Input: ?Sized> {
     /// The error type returned if the predicate fails.
     type Error<'a>
@@ -116,7 +321,13 @@ pub fn not<T>(predicate: T) -> Not<T> {
 }
 
 /// Project a field on the lhs before testing `predicate`.
-pub fn on<T, U>(project: T, predicate: U) -> On<T, U> {
+pub fn on<T, U, Input, Project>(project: T, predicate: U) -> On<T, U>
+where
+    for<'a> T: Fn(&Input) -> &Project + Copy + 'a,
+    for<'a> U: Predicate<Project> + 'a,
+    Project: ?Sized,
+    Input: ?Sized,
+{
     On(project, predicate)
 }
 

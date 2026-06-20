@@ -177,8 +177,9 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// ```no_run
 /// use std::process::ExitCode;
-/// use via::{Error, Server, cookies, guard, rescue};
-/// use via::guard::{content, header::media, or, method, not};
+/// use via::guard::header::media;
+/// use via::guard::{self, content, or, method};
+/// use via::{Error, Server, cookies, rescue};
 ///
 /// mod session {
 ///     // Implementations elided...
@@ -248,7 +249,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///     // has not been verified in the past hour, confirm that
 ///     // the user exists and has an active account.
 ///     api.middleware(guard::filter(
-///         or((not(method::is_safe()), session::is_expired)),
+///         or((method::is_mutation(), session::is_expired)),
 ///         session::verify(),
 ///     ));
 ///

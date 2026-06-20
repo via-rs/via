@@ -65,7 +65,6 @@ mod util;
 pub use app::{Shared, Via, app};
 pub use cookies::{Cookies, cookies};
 pub use error::{Error, ResultExt, rescue};
-pub use guard::guard;
 pub use middleware::{BoxFuture, Middleware, Result, middleware};
 pub use next::{Continue, Next};
 pub use request::{Payload, Request};

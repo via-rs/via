@@ -17,7 +17,7 @@
 //! The predicates in this module are not routing primitives.
 //!
 //! A method predicate classifies a request by method. When used with
-//! [`guard`], [`filter`], or [`flat_map`], it acts as stateless higher-order
+//! [`barrier`], [`filter`], or [`flat_map`], it acts as stateless higher-order
 //! middleware that decides whether the remaining subtree should be entered,
 //! skipped, or denied.
 //!
@@ -60,10 +60,10 @@
 //! [`Method`]: http::Method
 //! [`Request`]: crate::Request
 //! [`Switch`]: crate::router::Switch
+//! [`barrier`]: crate::guard::barrier
 //! [`filter`]: crate::guard::filter
 //! [`flat_map`]: crate::guard::flat_map
 //! [`get`]: crate::get
-//! [`guard`]: crate::guard::guard
 //! [`on`]: crate::guard::on
 //! [`post`]: crate::post
 //! [`put`]: crate::put

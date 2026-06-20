@@ -310,7 +310,25 @@ macro_rules! impl_or_predicate {
 
 /// Map the provided predicate's error to a different type.
 ///
-/// The returned error type must erase the lifetime of the original error.
+/// The returned error type must erase the lifetime of the original error. This
+/// combinator is particularlly useful when using a closure as a top-level
+/// predicate that must return an `Error` type that can be converted to a
+/// [`via::Error`](crate::Error).
+///
+/// # Example
+///
+/// ```
+/// use http::Version;
+/// use via::guard::{self, map_err};
+/// #
+/// # let mut app = via::app(());
+///
+/// // Only support request made with HTTP versions >= 1.1.
+/// app.middleware(guard::barrier(map_err(
+///     |_| via::err!(400, "http version not supported"),
+///     |request: &Request| request.version() > Version::HTTP_10,
+/// )));
+/// ```
 pub fn map_err<F, T>(f: F, predicate: T) -> MapErr<F, T> {
     MapErr(f, predicate)
 }

@@ -131,25 +131,27 @@ pub struct Wildcard;
 /// method implementation.
 ///
 /// ```
-/// # use via::{Error, Request, err, guard::Predicate};
-/// #
+/// use http::Method;
+/// use via::guard::Predicate;
+/// use via::{Error, Request, err};
+///
 /// pub struct Allow {
-///     method: http::Method,
+///     method: Method,
 /// }
 ///
 /// pub struct Deny<'a> {
-///     allow: &'a http::Method,
+///     allow: &'a Method,
 /// }
 ///
-/// pub fn allow(method: http::Method) -> Allow {
+/// pub fn allow(method: Method) -> Allow {
 ///     Allow { method }
 /// }
 ///
-/// impl Predicate<http::Method> for Allow {
+/// impl Predicate<Method> for Allow {
 ///     type Error<'a> = ();
 ///
-///     fn cmp<'a>(&'a self, input: &http::Method) -> Result<(), Self::Error<'a>> {
-///         if input == &self.method {
+///     fn cmp<'a>(&'a self, input: &Method) -> Result<(), Self::Error<'a>> {
+///         if self.method == input {
 ///             Ok(())
 ///         } else {
 ///             Err(())
@@ -161,8 +163,9 @@ pub struct Wildcard;
 ///     type Error<'a> = Deny<'a>;
 ///
 ///     fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
-///         self.cmp(request.method())
-///             .map_err(|_| Deny { allow: &self.method })
+///         self.cmp(request.method()).map_err(|_| Deny {
+///             allow: &self.method,
+///         })
 ///     }
 /// }
 ///
@@ -173,40 +176,41 @@ pub struct Wildcard;
 /// }
 /// ```
 ///
-/// This keeps the predicate reusable with projected inputs while still
-/// allowing composite input types to provide richer contextual errors. Let's
-/// reimplement the [`method::is_safe`] predicate using combinators rather than
-/// the fn for `Method` in the `http` crate. The [`on`] combinator is useful
+/// This keeps the predicate reusable with a projected input while still
+/// allowing composite input types to provide richer contextual errors.
+///
+/// To demonstrate this, let's reimplement the [`method::is_safe`] predicate
+/// using combinators rather than [the fn](http::Method::is_safe) defined in
+/// `impl Method` from the [`http`] crate. The [`on`] combinator works great
 /// for this type of projection:
 ///
 /// ```no_run
 /// use http::Method;
 /// use std::process::ExitCode;
-/// use via::guard::{self, method::allow, or};
-/// use via::{Error, Next, Request, Server, err};
-///
-/// async fn cache(request: Request, next: Next) -> via::Result {
-///     todo!("implement response caching for safe requests.");
-/// }
+/// use via::guard::method::allow;
+/// use via::guard::{self, on, or};
+/// use via::{Error, Request, Server};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
 ///     // Create a new application.
 ///     let mut app = via::app(());
 ///
-///     // A predicate that matches "safe" requests.
-///     let is_safe = guard::on(
-///         Request::method,
-///         or((
-///             allow(Method::GET),
-///             allow(Method::HEAD),
-///             allow(Method::OPTIONS),
-///             allow(Method::TRACE)
-///         )),
-///     );
-///
 ///     // If the request method is safe, cache the response.
-///     app.middleware(guard::filter(is_safe, cache));
+///     app.middleware(guard::filter(
+///         on(
+///             Request::method,
+///             or((
+///                 allow(Method::GET),
+///                 allow(Method::HEAD),
+///                 allow(Method::OPTIONS),
+///                 allow(Method::TRACE)
+///             )),
+///         ),
+///         async |request, next| {
+///             todo!("implement response caching");
+///         },
+///     ));
 ///
 ///     // Serve the application at http://localhost:8080/.
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
@@ -222,9 +226,7 @@ pub struct Wildcard;
 /// [`Error`]: crate::Error
 /// [`HeaderName`]: http::HeaderName
 /// [`Method`]: http::Method
-/// [`Method::is_safe`]: http::Method::is_safe
 /// [`method::is_safe`]: crate::guard::method::is_safe
-///
 pub trait Predicate<Input: ?Sized> {
     /// The error type returned if the predicate fails.
     type Error<'a>

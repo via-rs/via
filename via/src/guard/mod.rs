@@ -51,24 +51,6 @@ pub struct FlatMap<T, U> {
     middleware: U,
 }
 
-/// Call `middleware` if `predicate` matches the request.
-pub fn filter<T, U>(predicate: T, middleware: U) -> Filter<T, U> {
-    Filter {
-        predicate,
-        middleware,
-    }
-}
-
-/// Confirm that the request matches `predicate` before calling `middleware`.
-///
-/// Unlike [`guard`], the provided predicate only applies to `middleware`.
-pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
-    FlatMap {
-        predicate,
-        middleware,
-    }
-}
-
 /// Deny the request if it does not match `predicate`.
 ///
 /// The `guard` fn is preferred when you want every request to a subtree of
@@ -77,14 +59,13 @@ pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
 /// # Example
 ///
 /// ```rust
-/// use via::guard::{content, header::media};
-/// use via::guard;
+/// use via::guard::{self, content, header::media};
 ///
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");
 ///
 /// // If the client does not speak JSON, deny the request.
-/// api.middleware(guard(content(media::json(), media::json())));
+/// api.middleware(guard::barrier(content(media::json(), media::json())));
 ///
 /// // Subsequent routes defined from `api` require:
 /// //   - Accept: application/json, */*
@@ -95,8 +76,28 @@ pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
 ///     // Define the /api/users resource.
 /// });
 /// ```
-pub fn guard<T>(predicate: T) -> FlatMap<T, Continue> {
+pub fn barrier<T>(predicate: T) -> FlatMap<T, Continue> {
     flat_map(predicate, Continue)
+}
+
+/// Call `middleware` if `predicate` matches the request.
+///
+/// Unlike [`barrier`], the predicate provided only applies to `middleware`.
+pub fn filter<T, U>(predicate: T, middleware: U) -> Filter<T, U> {
+    Filter {
+        predicate,
+        middleware,
+    }
+}
+
+/// Confirm that the request matches `predicate` before calling `middleware`.
+///
+/// Unlike [`barrier`], the predicate provided only applies to `middleware`.
+pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
+    FlatMap {
+        predicate,
+        middleware,
+    }
 }
 
 /// Require that the header associated with `key` matches `predicate`.

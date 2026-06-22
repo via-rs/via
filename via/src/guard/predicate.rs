@@ -4,7 +4,7 @@ use std::convert::Infallible;
 pub struct And<T>(T);
 
 /// Map a predicate's error to a different type.
-pub struct MapErr<F, T>(F, T);
+pub struct MapErr<T, F>(T, F);
 
 /// Coerce a predicate to a boolean expression and negate it.
 pub struct Not<T>(T);
@@ -327,12 +327,12 @@ macro_rules! impl_or_predicate {
 ///
 /// // Only support request made with HTTP versions >= 1.1.
 /// app.middleware(guard::barrier(map_err(
-///     |_| err!(400, "http version not supported"),
 ///     |request: &Request| request.version() > Version::HTTP_10,
+///     |_| err!(400, "http version not supported"),
 /// )));
 /// ```
-pub fn map_err<F, T>(f: F, predicate: T) -> MapErr<F, T> {
-    MapErr(f, predicate)
+pub fn map_err<T, F>(predicate: T, map: F) -> MapErr<T, F> {
+    MapErr(predicate, map)
 }
 
 /// Coerce `predicate` to a boolean expression and negate it.

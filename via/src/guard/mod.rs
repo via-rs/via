@@ -82,7 +82,7 @@ pub struct Filter<T, U> {
 ///     let mut api = app.route("/api");
 ///
 ///     api.route("/admin/graphql").to(flat_map(
-///         map_err(|_| err!(403, "insufficient permissions"), Request::is_admin),
+///         map_err(Request::is_admin, |_| err!(403, "insufficient permissions")),
 ///         via::post(admin::graphql).get(admin::graphql).or_deny(),
 ///     ));
 ///

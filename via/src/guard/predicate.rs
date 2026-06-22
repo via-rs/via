@@ -372,16 +372,16 @@ pub fn wildcard() -> Wildcard {
 and_impls!(A B C D E F G H I J);
 or_impls!(A B C D E F G H I J);
 
-impl<E, F, T, Input> Predicate<Input> for MapErr<F, T>
+impl<T, E, F, Input> Predicate<Input> for MapErr<T, F>
 where
-    for<'a> F: Fn(T::Error<'_>) -> E + Copy + 'a,
     for<'a> T: Predicate<Input> + 'a,
+    for<'a> F: Fn(T::Error<'_>) -> E + Copy + 'a,
     Input: ?Sized,
 {
     type Error<'a> = E;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        self.1.cmp(input).map_err(&self.0)
+        self.0.cmp(input).map_err(&self.1)
     }
 }
 

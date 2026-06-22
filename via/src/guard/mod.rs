@@ -57,7 +57,7 @@ pub struct Filter<T, U> {
 ///
 /// use http::Method;
 /// use std::process::ExitCode;
-/// use via::guard::{filter, flat_map, map_err, on};
+/// use via::guard::{flat_map, map_err, on};
 /// use via::{Request, Server, err};
 ///
 /// trait Session {
@@ -76,19 +76,14 @@ pub struct Filter<T, U> {
 /// #       fn session(&self) -> Option<&Identity> { todo!() }
 /// # }
 ///
-/// fn post_or_get() -> impl Predicate<Method> {
-///     use via::guard::{method::allow, or};
-///     or((allow(Method::POST), allow(Method::GET)))
-/// }
-///
 /// #[tokio::main]
 /// async fn main() -> via::Result<ExitCode> {
 ///     let mut app = via::app(());
 ///     let mut api = app.route("/api");
 ///
 ///     api.route("/admin/graphql").to(flat_map(
-///         map_err(|_| err!(403), Request::is_admin),
-///         filter(on(Request::method, post_or_get()), admin::graphql),
+///         map_err(|_| err!(403, "insufficient permissions"), Request::is_admin),
+///         via::post(admin::graphql).get(admin::graphql).or_deny(),
 ///     ));
 ///
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await

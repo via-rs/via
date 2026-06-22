@@ -46,6 +46,54 @@ pub struct Filter<T, U> {
 }
 
 /// Apply a guard's predicate to an individual middleware.
+///
+/// # Example
+///
+/// ```no_run
+/// mod admin {
+///     // Implementations elided...
+///     # pub async fn graphql(_: via::Request, _: via::Next) -> via::Result { todo!() }
+/// }
+///
+/// use http::Method;
+/// use std::process::ExitCode;
+/// use via::guard::{filter, flat_map, map_err, on};
+/// use via::{Request, Server, err};
+///
+/// trait Session {
+///     fn session(&self) -> Option<&Identity>;
+///     fn is_admin(&self) -> bool {
+///         self.session().is_some_and(|identity| identity.is_admin)
+///     }
+/// }
+///
+/// struct Identity {
+///     user_id: u64,
+///     is_admin: bool,
+/// }
+/// #
+/// # impl Session for Request {
+/// #       fn session(&self) -> Option<&Identity> { todo!() }
+/// # }
+///
+/// fn post_or_get() -> impl Predicate<Method> {
+///     use via::guard::{method::allow, or};
+///     or((allow(Method::POST), allow(Method::GET)))
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> via::Result<ExitCode> {
+///     let mut app = via::app(());
+///     let mut api = app.route("/api");
+///
+///     api.route("/admin/graphql").to(flat_map(
+///         map_err(|_| err!(403), Request::is_admin),
+///         filter(on(Request::method, post_or_get()), admin::graphql),
+///     ));
+///
+///     Server::new(app).listen(("127.0.0.1", 8080)).await
+/// }
+/// ```
 pub struct FlatMap<T, U> {
     predicate: T,
     middleware: U,

@@ -6,8 +6,7 @@
 #[macro_export]
 macro_rules! content {
     ($accepts:expr, $provides:expr) => {
-        (
-            via::guard::header::accept($provides()),
+        via::guard::or((
             via::guard::when(
                 via::guard::method::is_mutation(),
                 via::guard::on::headers((
@@ -16,7 +15,8 @@ macro_rules! content {
                     via::guard::header::content_length(),
                 )),
             ),
-        )
+            via::guard::header::accept($provides()),
+        ))
     };
     ($accepts:expr) => {
         $crate::content!($accepts, $accepts)

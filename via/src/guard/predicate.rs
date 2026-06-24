@@ -12,9 +12,6 @@ pub struct Not<T>(T);
 /// One of the predicates in self must match the input.
 pub struct Or<T>(T);
 
-/// Project the input from one type to another for a predicate.
-pub struct On<T, U>(T, U);
-
 /// Require a predicate to match if the first matches.
 pub struct When<T, U>(T, U);
 
@@ -188,7 +185,7 @@ pub struct Wildcard;
 /// use http::Method;
 /// use std::process::ExitCode;
 /// use via::guard::method::allow;
-/// use via::guard::{self, on, or};
+/// use via::guard::{self, on};
 /// use via::{Error, Request, Server};
 ///
 /// #[tokio::main]
@@ -198,15 +195,12 @@ pub struct Wildcard;
 ///
 ///     // If the request method is safe, cache the response.
 ///     app.middleware(guard::filter(
-///         on(
-///             Request::method,
-///             or((
-///                 allow(Method::GET),
-///                 allow(Method::HEAD),
-///                 allow(Method::OPTIONS),
-///                 allow(Method::TRACE)
-///             )),
-///         ),
+///         on::method(guard::or((
+///             allow(Method::GET),
+///             allow(Method::HEAD),
+///             allow(Method::OPTIONS),
+///             allow(Method::TRACE),
+///         ))),
 ///         async |request, next| {
 ///             todo!("implement response caching");
 ///         },
@@ -227,6 +221,7 @@ pub struct Wildcard;
 /// [`HeaderName`]: http::HeaderName
 /// [`Method`]: http::Method
 /// [`method::is_safe`]: crate::guard::method::is_safe
+/// [`on`]: fn@crate::guard::on
 pub trait Predicate<Input: ?Sized> {
     /// The error type returned if the predicate fails.
     type Error<'a>
@@ -340,17 +335,6 @@ pub fn not<T>(predicate: T) -> Not<T> {
     Not(predicate)
 }
 
-/// Project a field on the lhs before testing `predicate`.
-pub fn on<T, U, Input, Project>(project: T, predicate: U) -> On<T, U>
-where
-    for<'a> T: Fn(&Input) -> &Project + Copy + 'a,
-    for<'a> U: Predicate<Project> + 'a,
-    Project: ?Sized,
-    Input: ?Sized,
-{
-    On(project, predicate)
-}
-
 /// One of the predicates in `tuple` must match the input.
 pub fn or<T>(tuple: T) -> Or<T> {
     Or(tuple)
@@ -398,20 +382,6 @@ where
         } else {
             Err(())
         }
-    }
-}
-
-impl<T, U, Input, Project> Predicate<Input> for On<T, U>
-where
-    for<'a> T: Fn(&Input) -> &Project + Copy + 'a,
-    for<'a> U: Predicate<Project> + 'a,
-    Project: ?Sized,
-    Input: ?Sized,
-{
-    type Error<'a> = U::Error<'a>;
-
-    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        self.1.cmp((self.0)(input))
     }
 }
 

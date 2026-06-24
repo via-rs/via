@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
-use via::guard::{self, content, header::media};
+use via::guard::{self, header::media};
 use via::{Next, Payload, Request, Response, Server, rescue};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -41,7 +41,7 @@ async fn main() -> via::Result<ExitCode> {
     app.middleware(rescue(|error| error.use_json()));
 
     // If the client does not speak JSON, deny the request.
-    app.middleware(guard::barrier(content(media::json(), media::json())));
+    app.middleware(guard::barrier(guard::content!(media::json)));
 
     // Define a route that responds to POST /hello.
     app.route("/hello").to(via::post(hello).or_deny());

@@ -1,0 +1,11 @@
+[package]
+name = "via-macros"
+version = "0.1.0"
+edition = "2024"
+authors = ["Zachary Golba <zachary.golba@postlight.com>"]
+license = "MIT OR Apache-2.0"
+description = "A fast and flexible http router."
+homepage = "https://github.com/via-rs/via"
+repository = "https://github.com/via-rs/via"
+
+[dependencies]

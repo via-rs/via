@@ -232,6 +232,12 @@ pub trait Predicate<Input: ?Sized> {
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>>;
 }
 
+pub struct IfElse<P, T, E> {
+    predicate: P,
+    if_true: T,
+    or_else: E,
+}
+
 // Macros adapted for our use case from the nom crate:
 // https://github.com/rust-bakery/nom/blob/main/src/branch/mod.rs
 
@@ -303,6 +309,14 @@ macro_rules! impl_or_predicate {
     };
 }
 
+pub fn if_else<P, T, E>(predicate: P, if_true: T, or_else: E) -> IfElse<P, T, E> {
+    IfElse {
+        predicate,
+        if_true,
+        or_else,
+    }
+}
+
 /// Map the provided predicate's error to a different type.
 ///
 /// The returned error type must erase the lifetime of the original error. This
@@ -355,6 +369,24 @@ pub fn wildcard() -> Wildcard {
 
 and_impls!(A B C D E F G H I J);
 or_impls!(A B C D E F G H I J);
+
+impl<P, T, E, Input> Predicate<Input> for IfElse<P, T, E>
+where
+    for<'a> P: Predicate<Input> + 'a,
+    for<'a> T: Predicate<Input> + 'a,
+    for<'a> E: Predicate<Input, Error<'a> = T::Error<'a>> + 'a,
+    Input: ?Sized,
+{
+    type Error<'a> = E::Error<'a>;
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
+        if self.predicate.cmp(input).is_ok() {
+            self.if_true.cmp(input)
+        } else {
+            self.or_else.cmp(input)
+        }
+    }
+}
 
 impl<T, E, F, Input> Predicate<Input> for MapErr<T, F>
 where

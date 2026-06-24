@@ -64,7 +64,7 @@
 //! [`filter`]: crate::guard::filter
 //! [`flat_map`]: crate::guard::flat_map
 //! [`get`]: crate::get
-//! [`on`]: crate::guard::on
+//! [`on`]: fn@crate::guard::on
 //! [`post`]: crate::post
 //! [`put`]: crate::put
 

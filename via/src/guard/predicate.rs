@@ -1,10 +1,7 @@
 use std::convert::Infallible;
 
-/// All of the predicates in self must match the input.
-pub struct And<T>(T);
-
-/// Map a predicate's error to a different type.
-pub struct MapErr<T, F>(T, F);
+use super::error::MapError;
+use crate::Error;
 
 /// Coerce a predicate to a boolean expression and negate it.
 pub struct Not<T>(T);
@@ -12,11 +9,11 @@ pub struct Not<T>(T);
 /// One of the predicates in self must match the input.
 pub struct Or<T>(T);
 
-/// Require a predicate to match if the first matches.
+/// Conditionally execute the second predicate if the first succeeds.
 pub struct When<T, U>(T, U);
 
-/// Match any input.
-pub struct Wildcard;
+/// A predicate that succeeds for any input.
+pub struct Any;
 
 /// An inexpensive comparison operation that can fail with context.
 ///
@@ -232,10 +229,18 @@ pub trait Predicate<Input: ?Sized> {
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>>;
 }
 
+/// Conditionally execute either the second or third predicate based on the
+/// first.
 pub struct IfElse<P, T, E> {
     predicate: P,
     if_true: T,
     or_else: E,
+}
+
+/// Map a predicate's error to a different type.
+pub struct MapErr<T, F> {
+    predicate: T,
+    op: F,
 }
 
 // Macros adapted for our use case from the nom crate:
@@ -309,6 +314,13 @@ macro_rules! impl_or_predicate {
     };
 }
 
+/// Returns a predicate that succeeds for any input.
+pub fn any() -> Any {
+    Any
+}
+
+/// Conditionally execute either the second or third predicate based on the
+/// first.
 pub fn if_else<P, T, E>(predicate: P, if_true: T, or_else: E) -> IfElse<P, T, E> {
     IfElse {
         predicate,
@@ -340,8 +352,8 @@ pub fn if_else<P, T, E>(predicate: P, if_true: T, or_else: E) -> IfElse<P, T, E>
 ///     |_| err!(400, "http version not supported"),
 /// )));
 /// ```
-pub fn map_err<T, F>(predicate: T, map: F) -> MapErr<T, F> {
-    MapErr(predicate, map)
+pub fn map_err<T, F>(predicate: T, op: F) -> MapErr<T, F> {
+    MapErr { predicate, op }
 }
 
 /// Coerce `predicate` to a boolean expression and negate it.
@@ -354,14 +366,9 @@ pub fn or<T>(tuple: T) -> Or<T> {
     Or(tuple)
 }
 
-/// Apply the second predicate when the first matches the input.
+/// Conditionally execute the second predicate if the first succeeds.
 pub fn when<T, U>(first: T, second: U) -> When<T, U> {
     When(first, second)
-}
-
-/// Match any input.
-pub fn wildcard() -> Wildcard {
-    Wildcard
 }
 
 // The maximum length of a tuple is 10.
@@ -388,16 +395,18 @@ where
     }
 }
 
-impl<T, E, F, Input> Predicate<Input> for MapErr<T, F>
+impl<T, F, Input> Predicate<Input> for MapErr<T, F>
 where
     for<'a> T: Predicate<Input> + 'a,
-    for<'a> F: Fn(T::Error<'_>) -> E + Copy + 'a,
+    for<'a> F: Fn(T::Error<'_>) -> Error + Copy + 'a,
     Input: ?Sized,
 {
-    type Error<'a> = E;
+    type Error<'a> = MapError<'a, F, T::Error<'a>>;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        self.0.cmp(input).map_err(&self.1)
+        self.predicate
+            .cmp(input)
+            .map_err(|error| MapError::new(&self.op, error))
     }
 }
 
@@ -430,7 +439,7 @@ where
     }
 }
 
-impl<Input> Predicate<Input> for Wildcard
+impl<Input> Predicate<Input> for Any
 where
     Input: ?Sized,
 {

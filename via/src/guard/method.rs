@@ -68,10 +68,9 @@
 //! [`post`]: crate::post
 //! [`put`]: crate::put
 
-use http::Method;
-
+use super::error::MethodNotAllowed;
 use super::predicate::{Not, Predicate, not};
-use crate::{Error, err, request::Request};
+use crate::request::Request;
 
 /// Match request methods that are
 /// ["idempotent"](https://www.rfc-editor.org/rfc/rfc9110.html#name-idempotent-methods).
@@ -102,35 +101,8 @@ pub struct IsSafe;
 ///
 /// [`Method`]: http::Method
 /// [`Request`]: crate::Request
-pub struct Allow {
-    method: Method,
-}
-
-/// A contextual, `405 Method Not Allowed` error.
-///
-/// `Deny` borrows the method allowed by the predicate. It does not
-/// borrow the method supplied by the request.
-pub struct Deny<'a> {
-    allow: &'a Method,
-}
-
-/// Succeeds for requests made with the provided method argument.
-///
-/// The returned predicate succeeds when the input method is equal to `method`.
-///
-/// # Example
-///
-/// ```
-/// use http::Method;
-/// use via::guard::{Predicate, method::allow};
-///
-/// let predicate = allow(Method::POST);
-///
-/// assert!(predicate.cmp(&Method::POST).is_ok());
-/// assert!(predicate.cmp(&Method::GET).is_err());
-/// ```
-pub fn allow(method: Method) -> Allow {
-    Allow { method }
+pub struct Method {
+    allow: http::Method,
 }
 
 /// Succeeds for request methods that are
@@ -196,38 +168,51 @@ pub fn is_safe() -> IsSafe {
     IsSafe
 }
 
-impl Predicate<Method> for Allow {
-    type Error<'a> = ();
+/// Succeeds for requests made with the provided method argument.
+///
+/// The returned predicate succeeds when the input method is equal to `method`.
+///
+/// # Example
+///
+/// ```
+/// use http::Method;
+/// use via::guard::{Predicate, method::allow};
+///
+/// let predicate = allow(Method::POST);
+///
+/// assert!(predicate.cmp(&Method::POST).is_ok());
+/// assert!(predicate.cmp(&Method::GET).is_err());
+/// ```
+pub fn method(allow: http::Method) -> Method {
+    Method { allow }
+}
 
-    fn cmp<'a>(&'a self, input: &Method) -> Result<(), Self::Error<'a>> {
-        if self.method == input {
+impl Predicate<http::Method> for Method {
+    type Error<'a> = MethodNotAllowed<'a>;
+
+    fn cmp<'a>(&'a self, input: &http::Method) -> Result<(), Self::Error<'a>> {
+        let method = &self.allow;
+
+        if method == input {
             Ok(())
         } else {
-            Err(())
+            Err(MethodNotAllowed::new(method))
         }
     }
 }
 
-impl<App> Predicate<Request<App>> for Allow {
-    type Error<'a> = Deny<'a>;
+impl<App> Predicate<Request<App>> for Method {
+    type Error<'a> = MethodNotAllowed<'a>;
 
     fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
-        self.cmp(request.method()).map_err(|_| Deny {
-            allow: &self.method,
-        })
+        self.cmp(request.method())
     }
 }
 
-impl From<Deny<'_>> for Error {
-    fn from(error: Deny<'_>) -> Self {
-        err!(405, "expected request method to be {}", &error.allow)
-    }
-}
-
-impl Predicate<Method> for IsIdempotent {
+impl Predicate<http::Method> for IsIdempotent {
     type Error<'a> = ();
 
-    fn cmp<'a>(&'a self, input: &Method) -> Result<(), Self::Error<'a>> {
+    fn cmp<'a>(&'a self, input: &http::Method) -> Result<(), Self::Error<'a>> {
         if input.is_idempotent() {
             Ok(())
         } else {
@@ -244,10 +229,10 @@ impl<App> Predicate<Request<App>> for IsIdempotent {
     }
 }
 
-impl Predicate<Method> for IsSafe {
+impl Predicate<http::Method> for IsSafe {
     type Error<'a> = ();
 
-    fn cmp<'a>(&'a self, input: &Method) -> Result<(), Self::Error<'a>> {
+    fn cmp<'a>(&'a self, input: &http::Method) -> Result<(), Self::Error<'a>> {
         if input.is_safe() { Ok(()) } else { Err(()) }
     }
 }

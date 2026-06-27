@@ -16,8 +16,8 @@ use tokio_websockets::WebSocketStream;
 use super::run::RunTask;
 use super::util::{Base64EncodedDigest, sha1};
 use super::{Channel, Request};
-use crate::guard::header::{CaseSensitive, Contains, Header};
-use crate::guard::{Predicate, header};
+use crate::guard::bytes::{self, CaseSensitive, Contains};
+use crate::guard::{Header, Predicate, header};
 use crate::server::IoStream;
 use crate::ws::error::UpgradeError;
 use crate::{BoxFuture, Error, Middleware, Next, Response, ResultExt};
@@ -123,9 +123,9 @@ impl<T> Ws<T> {
                 },
             }),
             guard: (
-                header(h::SEC_WEBSOCKET_VERSION, header::case_sensitive(b"13")),
-                header(h::CONNECTION, header::contains(header::tag(b"upgrade"))),
-                header(h::UPGRADE, header::contains(header::tag(b"websocket"))),
+                header(h::SEC_WEBSOCKET_VERSION, bytes::case_sensitive(b"13")),
+                header(h::CONNECTION, bytes::contains(bytes::tag(b"upgrade"), b',')),
+                header(h::UPGRADE, bytes::contains(bytes::tag(b"websocket"), b',')),
             ),
         }
     }

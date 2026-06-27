@@ -13,7 +13,7 @@ macro_rules! content {
                 via::guard::header::content_type($accepts()),
                 via::guard::header::content_length(),
             )),
-            via::guard::header::accept($provides()),
+            via::guard::on::headers(via::guard::header::accept($provides())),
         )
     };
     ($accepts:expr) => {

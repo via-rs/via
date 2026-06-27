@@ -56,43 +56,15 @@
 //!
 //! [`HeaderMap`]: http::HeaderMap
 
-pub mod project;
+mod project;
 
-pub use project::Project;
+pub use project::*;
 
 use super::Predicate;
+use super::error::{OnError, OnErrorKind};
 
-/// A predicate that projects a request's headers before evaluation.
-///
-/// `Headers<T>` adapts a predicate over [`http::HeaderMap`] so that it may be
-/// evaluated directly against a [`Request`].
-///
-/// # Example
-///
-/// ```
-/// use via::guard::header::media;
-/// use via::guard::{on, header};
-///
-/// let predicate = on::headers(header::accept(media::json()));
-/// ```
-pub type Headers<T> = On<project::Headers, T>;
-
-/// A predicate that projects a request's method before evaluation.
-///
-/// `Method<T>` adapts a predicate over [`http::Method`] so that it may be
-/// evaluated directly against a [`Request`].
-///
-/// # Example
-///
-/// ```
-/// use http::Method;
-/// use via::guard::method::allow;
-/// use via::guard::{self, on};
-///
-/// let patch_or_put = guard::or((allow(Method::PATCH), allow(Method::PUT)));
-/// let predicate = on::method(patch_or_put);
-/// ```
-pub type Method<T> = On<project::Method, T>;
+/// Make a predicate's projected input optional.
+pub struct Opt<T, U>(On<T, U>);
 
 /// Apply a predicate to a projected field.
 ///
@@ -105,8 +77,8 @@ pub type Method<T> = On<project::Method, T>;
 /// Most applications should prefer the helper functions in the [`on`] module
 /// rather than constructing `On` directly.
 pub struct On<T, U> {
-    projector: T,
-    predicate: U,
+    predicate: T,
+    projector: U,
 }
 
 /// Project a field before evaluating a predicate.
@@ -123,10 +95,10 @@ pub struct On<T, U> {
 ///
 /// let predicate = on(project::Headers, header::accept(media::json()));
 /// ```
-pub fn on<T, U>(projector: T, predicate: U) -> On<T, U> {
+pub fn on<T, U>(predicate: T, projector: U) -> On<T, U> {
     On {
-        projector,
         predicate,
+        projector,
     }
 }
 
@@ -147,8 +119,8 @@ pub fn on<T, U>(projector: T, predicate: U) -> On<T, U> {
 ///     header::content_type(media::json()),
 /// ));
 /// ```
-pub fn headers<T>(predicate: T) -> Headers<T> {
-    on(project::Headers, predicate)
+pub fn headers<T>(predicate: T) -> On<T, Headers> {
+    on(predicate, project::Headers)
 }
 
 /// Evaluate a predicate against a request's method.
@@ -166,19 +138,57 @@ pub fn headers<T>(predicate: T) -> Headers<T> {
 /// let patch_or_put = guard::or((allow(Method::PATCH), allow(Method::PUT)));
 /// let predicate = on::method(patch_or_put);;
 /// ```
-pub fn method<T>(predicate: T) -> Method<T> {
-    on(project::Method, predicate)
+pub fn method<T>(predicate: T) -> On<T, Method> {
+    on(predicate, Method)
+}
+
+pub fn path<T>(predicate: T) -> On<T, Path> {
+    on(predicate, Path)
+}
+
+pub fn query<T>(predicate: T) -> On<T, Query> {
+    on(predicate, Query)
+}
+
+pub fn uri<T>(predicate: T) -> On<T, Uri> {
+    on(predicate, Uri)
+}
+
+impl<T, U> On<T, U> {
+    /// Make the predicate's projected input optional.
+    ///
+    /// If the field projection fails, the predicate returns `Ok(())`.
+    pub fn opt(self) -> Opt<T, U> {
+        Opt(self)
+    }
 }
 
 impl<T, U, Input> Predicate<Input> for On<T, U>
 where
-    for<'a> T: Project<Input> + 'a,
-    for<'a> U: Predicate<T::Output> + 'a,
+    for<'a> T: Predicate<U::Output> + 'a,
+    for<'a> U: Project<Input> + 'a,
 {
-    type Error<'a> = U::Error<'a>;
+    type Error<'a> = OnError<T::Error<'a>, U::Error>;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        let project = self.projector.project(input);
-        self.predicate.cmp(project)
+        self.projector
+            .project(input)
+            .map_err(OnError::project)
+            .and_then(|input| self.predicate.cmp(input).map_err(OnError::predicate))
+    }
+}
+
+impl<T, U, Input> Predicate<Input> for Opt<T, U>
+where
+    for<'a> T: Predicate<U::Output> + 'a,
+    for<'a> U: Project<Input> + 'a,
+{
+    type Error<'a> = T::Error<'a>;
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
+        self.0.cmp(input).or_else(|error| match error.kind {
+            OnErrorKind::Predicate(error) => Err(error),
+            OnErrorKind::Project(_) => Ok(()),
+        })
     }
 }

@@ -1,16 +1,10 @@
-//! Match on a header.
-
-pub mod media;
-
-mod value;
-
-pub use media::Media;
-pub use value::*;
+//! Well-known request header combinators and predicates.
 
 use http::header::{self as h, HeaderMap, HeaderName};
 use std::fmt::Debug;
 
-use super::{Predicate, Wildcard, header, or, wildcard};
+use super::bytes::{Contains, contains};
+use super::{Any, Predicate, any, media, or};
 use crate::request::Request;
 use crate::{Error, err};
 
@@ -33,18 +27,9 @@ pub struct Header<T> {
     pub(super) key: HeaderName,
 }
 
-/// The header associated with `key` must be present in the request.
-pub fn exists<K>(key: K) -> Header<Wildcard>
-where
-    K: TryInto<HeaderName>,
-    K::Error: Debug,
-{
-    header(key, wildcard())
-}
-
 /// The value of `Accept` must include `"*/*"` or match `predicate`.
 pub fn accept<T>(predicate: T) -> Header<Contains<media::AllOr<T>>> {
-    header(h::ACCEPT, contains(or((media::all(), predicate))))
+    header(h::ACCEPT, contains(or((media::all(), predicate)), b','))
 }
 
 /// The value of `Content-Type` must match `predicate`.
@@ -53,8 +38,29 @@ pub fn content_type<T>(predicate: T) -> Header<T> {
 }
 
 /// The `Content-Length` header must be present in the request.
-pub fn content_length() -> Header<Wildcard> {
+pub fn content_length() -> Header<Any> {
     exists(h::CONTENT_LENGTH)
+}
+
+/// The header associated with `key` must be present in the request.
+pub fn exists<K>(key: K) -> Header<Any>
+where
+    K: TryInto<HeaderName>,
+    K::Error: Debug,
+{
+    header(key, any())
+}
+
+/// Require that the header associated with `key` matches `predicate`.
+pub fn header<K, V>(key: K, value: V) -> Header<V>
+where
+    K: TryInto<http::HeaderName>,
+    K::Error: Debug,
+{
+    Header {
+        value,
+        key: key.try_into().expect("invalid header name."),
+    }
 }
 
 impl<T> Header<T> {

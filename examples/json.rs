@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
-use via::guard::{self, header::media};
+use via::guard::{self, media};
 use via::{Next, Payload, Request, Response, Server, rescue};
 
 #[derive(Debug, Deserialize, Serialize)]

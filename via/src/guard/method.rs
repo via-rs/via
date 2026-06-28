@@ -177,9 +177,9 @@ pub fn is_safe() -> IsSafe {
 ///
 /// ```
 /// use http::Method;
-/// use via::guard::{Predicate, method::allow};
+/// use via::guard::{Predicate, method};
 ///
-/// let predicate = allow(Method::POST);
+/// let predicate = method(Method::POST);
 ///
 /// assert!(predicate.cmp(&Method::POST).is_ok());
 /// assert!(predicate.cmp(&Method::GET).is_err());

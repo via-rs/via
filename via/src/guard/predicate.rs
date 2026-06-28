@@ -181,8 +181,7 @@ pub struct Any;
 /// ```no_run
 /// use http::Method;
 /// use std::process::ExitCode;
-/// use via::guard::method::allow;
-/// use via::guard::{self, on};
+/// use via::guard::{self, method, on};
 /// use via::{Error, Request, Server};
 ///
 /// #[tokio::main]
@@ -193,10 +192,10 @@ pub struct Any;
 ///     // If the request method is safe, cache the response.
 ///     app.middleware(guard::filter(
 ///         on::method(guard::or((
-///             allow(Method::GET),
-///             allow(Method::HEAD),
-///             allow(Method::OPTIONS),
-///             allow(Method::TRACE),
+///             method(Method::GET),
+///             method(Method::HEAD),
+///             method(Method::OPTIONS),
+///             method(Method::TRACE),
 ///         ))),
 ///         async |request, next| {
 ///             todo!("implement response caching");

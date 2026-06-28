@@ -59,7 +59,7 @@ pub struct FlatMap<T, U> {
 /// # Example
 ///
 /// ```rust
-/// use via::guard::{self, header::media};
+/// use via::guard::{self, media};
 ///
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");

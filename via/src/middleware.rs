@@ -177,8 +177,8 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// ```no_run
 /// use std::process::ExitCode;
-/// use via::guard::{header::media, method};
-/// use via::{Error, Server, cookies, guard, rescue};
+/// use via::guard::{self, media, method};
+/// use via::{Error, Server, cookies, rescue};
 ///
 /// mod session {
 ///     // Implementations elided...

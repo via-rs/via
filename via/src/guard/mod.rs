@@ -61,12 +61,9 @@ pub struct Filter<T, U> {
 ///     # pub async fn graphql(_: via::Request, _: via::Next) -> via::Result { todo!() }
 /// }
 ///
-/// use http::Method;
 /// use std::process::ExitCode;
 /// use via::guard::{self, on};
 /// use via::{Error, Request, Server, err};
-///
-/// struct AdminAccessDenied;
 ///
 /// trait Session {
 ///     fn session(&self) -> Option<&Identity>;
@@ -79,27 +76,26 @@ pub struct Filter<T, U> {
 ///     user_id: u64,
 ///     is_admin: bool,
 /// }
-///
-/// impl From<&'_ AccessDenied> for Error {
-///     fn from(_: &AccessDenied) -> Error {
-///         err!(403, "admin permissions are required.")
-///     }
-/// }
-///
-/// impl Session for Request {
-///     fn session(&self) -> Option<&Identity> {
-///         todo!("implement session restoration and accessors");
-///     }
-/// }
+/// #
+/// # impl Session for Request {
+/// #     fn session(&self) -> Option<&Identity> {
+/// #         todo!("implement session restoration and accessors");
+/// #     }
+/// # }
 ///
 /// #[tokio::main]
-/// async fn main() -> via::Result<ExitCode> {
+/// async fn main() -> Result<ExitCode, Error> {
 ///     let mut app = via::app(());
 ///     let mut api = app.route("/api");
 ///
 ///     api.route("/admin/graphql").to(guard::flat_map(
-///         guard::ok_or(Request::is_admin, AdminAccessDenied),
-///         via::post(admin::graphql).get(admin::graphql).or_deny(),
+///         guard::into_error(
+///             |request: &Request| request.is_admin(),
+///             |_| err!(403, "admin permissions are required."),
+///         ),
+///         via::post(admin::graphql)
+///             .get(admin::graphql)
+///             .or_deny(),
 ///     ));
 ///
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await

@@ -7,10 +7,9 @@
 //! [`on`], while the implementations for request make the common case
 //! straightforward.
 //!
-//! [`Allow`] is the only contextual predicate in this module. When evaluated
-//! against a method, it behaves like a boolean predicate. When evaluated
-//! against a request, it returns a [contextual error](Deny) that can be
-//! converted into a `405 Method Not Allowed` response.
+//! [`Method`] is the only contextual predicate in this module. When evaluated
+//! against an input type, it returns a [contextual error] that can be into a
+//! response with a `405` status code.
 //!
 //! ## Method Predicates and Method Switches
 //!
@@ -61,6 +60,7 @@
 //! [`Request`]: crate::Request
 //! [`Switch`]: crate::router::Switch
 //! [`barrier`]: crate::guard::barrier
+//! [contextual error]: crate::guard::error::MethodNotAllowed
 //! [`filter`]: crate::guard::filter
 //! [`flat_map`]: crate::guard::flat_map
 //! [`get`]: crate::get
@@ -97,10 +97,11 @@ pub struct IsSafe;
 ///
 /// When evaluated against a [`Method`] this predicate behaves like a boolean.
 /// When evaluated against a [`Request`], this predicate can return a
-/// [contextual error](Deny) when the request method does not match.
+/// [contextual error] when the request method does not match.
 ///
 /// [`Method`]: http::Method
 /// [`Request`]: crate::Request
+/// [contextual error]: crate::guard::error::MethodNotAllowed
 pub struct Method {
     allow: http::Method,
 }

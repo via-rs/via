@@ -2,8 +2,10 @@
 
 use std::convert::Infallible;
 
+use http::{HeaderMap, HeaderName};
+
 use crate::Request;
-use crate::guard::error::EmptyQuery;
+use crate::guard::error::MissingUriQuery;
 
 /// Project the request headers.
 pub struct Headers;
@@ -45,82 +47,115 @@ pub struct Uri;
 ///     }
 /// }
 /// ```
+///
+/// [`headers`]: super::headers
+/// [`method`]: super::method
 pub trait Project<Input> {
-    type Error;
+    /// The error type returned when projection fails.
+    type Error<'a>
+    where
+        Self: 'a;
 
     /// The projected value type.
     type Output: ?Sized;
 
     /// Returns a reference to the projected value.
-    fn project<'a>(&self, input: &'a Input) -> Result<&'a Self::Output, Self::Error>;
+    fn project<'a, 'b>(&'a self, input: &'b Input) -> Result<&'b Self::Output, Self::Error<'a>>;
+}
+
+pub(crate) struct Header {
+    pub(super) name: HeaderName,
 }
 
 impl<App> Project<Request<App>> for Headers {
-    type Error = Infallible;
+    type Error<'a> = Infallible;
     type Output = http::HeaderMap;
 
-    #[inline]
-    fn project<'a>(&self, request: &'a Request<App>) -> Result<&'a Self::Output, Self::Error> {
+    fn project<'a, 'b>(
+        &'a self,
+        request: &'b Request<App>,
+    ) -> Result<&'b Self::Output, Self::Error<'a>> {
         Ok(request.headers())
     }
 }
 
+impl Project<HeaderMap> for Header {
+    type Error<'a> = &'a HeaderName;
+    type Output = [u8];
+
+    fn project<'a, 'b>(
+        &'a self,
+        headers: &'b HeaderMap,
+    ) -> Result<&'b Self::Output, Self::Error<'a>> {
+        headers
+            .get(&self.name)
+            .map(|value| value.as_bytes())
+            .ok_or_else(|| &self.name)
+    }
+}
+
 impl<App> Project<Request<App>> for Method {
-    type Error = Infallible;
+    type Error<'a> = Infallible;
     type Output = http::Method;
 
-    #[inline]
-    fn project<'a>(&self, request: &'a Request<App>) -> Result<&'a Self::Output, Self::Error> {
+    fn project<'a, 'b>(
+        &'a self,
+        request: &'b Request<App>,
+    ) -> Result<&'b Self::Output, Self::Error<'a>> {
         Ok(request.method())
     }
 }
 
 impl Project<http::Uri> for Query {
-    type Error = EmptyQuery;
+    type Error<'a> = MissingUriQuery;
     type Output = [u8];
 
-    #[inline]
-    fn project<'a>(&self, uri: &'a http::Uri) -> Result<&'a Self::Output, Self::Error> {
-        uri.query().map(str::as_bytes).ok_or(EmptyQuery)
+    fn project<'a, 'b>(&'a self, uri: &'b http::Uri) -> Result<&'b Self::Output, Self::Error<'a>> {
+        uri.query().map(str::as_bytes).ok_or(MissingUriQuery)
     }
 }
 
 impl<App> Project<Request<App>> for Query {
-    type Error = EmptyQuery;
+    type Error<'a> = MissingUriQuery;
     type Output = [u8];
 
-    #[inline]
-    fn project<'a>(&self, request: &'a Request<App>) -> Result<&'a Self::Output, Self::Error> {
-        self.project(request.uri())
+    fn project<'a, 'b>(
+        &'a self,
+        request: &'b Request<App>,
+    ) -> Result<&'b Self::Output, Self::Error<'a>> {
+        <Self as Project<http::Uri>>::project(self, request.uri())
     }
 }
 
 impl Project<http::Uri> for Path {
-    type Error = Infallible;
+    type Error<'a> = Infallible;
     type Output = [u8];
 
-    #[inline]
-    fn project<'a>(&self, uri: &'a http::Uri) -> Result<&'a Self::Output, Self::Error> {
+    fn project<'a, 'b>(&'a self, uri: &'b http::Uri) -> Result<&'b Self::Output, Self::Error<'a>> {
         Ok(uri.path().as_bytes())
     }
 }
 
 impl<App> Project<Request<App>> for Path {
-    type Error = Infallible;
+    type Error<'a> = Infallible;
     type Output = [u8];
 
-    #[inline]
-    fn project<'a>(&self, request: &'a Request<App>) -> Result<&'a Self::Output, Self::Error> {
-        self.project(request.uri())
+    fn project<'a, 'b>(
+        &'a self,
+        request: &'b Request<App>,
+    ) -> Result<&'b Self::Output, Self::Error<'a>> {
+        <Self as Project<http::Uri>>::project(self, request.uri())
     }
 }
 
 impl<App> Project<Request<App>> for Uri {
-    type Error = Infallible;
+    type Error<'a> = Infallible;
     type Output = http::Uri;
 
-    #[inline]
-    fn project<'a>(&self, request: &'a Request<App>) -> Result<&'a Self::Output, Self::Error> {
+    fn project<'a, 'b>(
+        &'a self,
+        request: &'b Request<App>,
+    ) -> Result<&'b Self::Output, Self::Error<'b>> {
         Ok(request.uri())
     }
 }

@@ -1,15 +1,19 @@
 //! Contextual errors and error helper types.
 
-use http::Method;
+use http::{HeaderName, Method};
 
 use crate::{Error, err};
 
-/// The request URI query is empty or None.
-pub struct EmptyQuery;
+/// The request URI query is required.
+pub struct MissingUriQuery;
+
+pub struct InvalidHeader<'a> {
+    source: OnError<&'a HeaderName, &'a HeaderName>,
+}
 
 /// The error type returned by the [`map_err`](super::map_err) predicate.
 pub struct MapError<'a, F, E> {
-    convert: &'a F,
+    op: &'a F,
     error: E,
 }
 
@@ -20,20 +24,14 @@ pub struct MethodNotAllowed<'a> {
 
 /// An error originating from a field projection or predicate.
 #[derive(Debug)]
-pub struct OnError<T, U> {
-    pub(super) kind: OnErrorKind<T, U>,
-}
-
-/// Represents a field projection or predicate that failed.
-#[derive(Debug)]
-pub(super) enum OnErrorKind<T, U> {
+pub enum OnError<T, U> {
     Predicate(T),
     Project(U),
 }
 
 impl<'a, F, E> MapError<'a, F, E> {
-    pub(super) fn new(convert: &'a F, error: E) -> Self {
-        Self { convert, error }
+    pub(super) fn new(op: &'a F, error: E) -> Self {
+        Self { op, error }
     }
 }
 
@@ -42,7 +40,7 @@ where
     F: Fn(E) -> Error,
 {
     fn from(into: MapError<'_, F, E>) -> Self {
-        (into.convert)(into.error)
+        (into.op)(into.error)
     }
 }
 
@@ -58,34 +56,75 @@ impl From<MethodNotAllowed<'_>> for Error {
     }
 }
 
-impl<T, U> OnError<T, U> {
-    pub(super) fn predicate(error: T) -> Self {
-        Self {
-            kind: OnErrorKind::Predicate(error),
-        }
-    }
-
-    pub(super) fn project(error: U) -> Self {
-        Self {
-            kind: OnErrorKind::Project(error),
-        }
-    }
-}
-
 impl<T, U> From<OnError<T, U>> for Error
 where
     Error: From<T> + From<U>,
 {
     fn from(error: OnError<T, U>) -> Self {
-        match error.kind {
-            OnErrorKind::Predicate(error) => error.into(),
-            OnErrorKind::Project(error) => error.into(),
+        match error {
+            OnError::Predicate(error) => error.into(),
+            OnError::Project(error) => error.into(),
         }
     }
 }
 
-impl From<EmptyQuery> for Error {
-    fn from(_: EmptyQuery) -> Self {
+impl From<MissingUriQuery> for Error {
+    fn from(_: MissingUriQuery) -> Self {
         err!(400, "request uri query cannot be empty.")
+    }
+}
+
+impl<'a> InvalidHeader<'a> {
+    pub(super) fn new(source: OnError<&'a HeaderName, &'a HeaderName>) -> Self {
+        Self { source }
+    }
+
+    pub fn name(&self) -> &HeaderName {
+        match self.source {
+            OnError::Predicate(name) | OnError::Project(name) => name,
+        }
+    }
+}
+
+impl From<InvalidHeader<'_>> for Error {
+    fn from(error: InvalidHeader<'_>) -> Self {
+        match error.source {
+            // The header was present but the predicate failed.
+            OnError::Predicate(name) => match name.as_str() {
+                "accept" => {
+                    err!(406, "response media type not supported.")
+                }
+                "authorization" => {
+                    err!(401, "unauthorized.")
+                }
+                "content-type" => {
+                    err!(415, "request media type not supported.")
+                }
+                "range" => {
+                    err!(416, "unsatisfiable range request.")
+                }
+                "upgrade" => {
+                    err!(426, "protocol upgrade is not supported.")
+                }
+                name => {
+                    err!(400, "invalid header value: {}.", name)
+                }
+            },
+            // The header is required but was not present in the request.
+            OnError::Project(project) => match project.as_str() {
+                "content-length" => {
+                    err!(411, "length required.")
+                }
+                name @ ("if-match"
+                | "if-none-match"
+                | "if-modified-since"
+                | "if-unmodified-since") => {
+                    err!(428, "missing required precondition: {}.", name)
+                }
+                name => {
+                    err!(400, "missing required header: {}.", name)
+                }
+            },
+        }
     }
 }

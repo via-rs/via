@@ -4,27 +4,19 @@ use http::header::{self as h, HeaderMap, HeaderName};
 use std::fmt::Debug;
 
 use super::bytes::{Contains, contains};
-use super::{Any, Predicate, any, media, or};
-use crate::request::Request;
-use crate::{Error, err};
-
-/// Treat the predicate as match if the header is `None`.
-pub struct Optional<T>(T);
-
-/// A header predicate does not match the request.
-#[derive(Debug)]
-pub enum DenyHeader<'a> {
-    /// The predicate does not match the header value.
-    Predicate(&'a HeaderName),
-
-    /// The header is not present on the request.
-    Missing(&'a HeaderName),
-}
+use super::error::{InvalidHeader, OnError};
+use super::on::{self, On};
+use super::{Any, OkOr, Predicate, any, media, ok_or, or};
+use crate::Request;
 
 /// Require that a header associated with a key matches a predicate.
 pub struct Header<T> {
-    pub(super) value: T,
-    pub(super) key: HeaderName,
+    predicate: On<OkOr<T, HeaderName>, on::Header>,
+}
+
+/// When present, require that the header value for `key` matches `value`.
+pub struct Opt<T> {
+    predicate: on::Opt<OkOr<T, HeaderName>, on::Header>,
 }
 
 /// The value of `Accept` must include `"*/*"` or match `predicate`.
@@ -57,16 +49,20 @@ where
     K: TryInto<http::HeaderName>,
     K::Error: Debug,
 {
+    let key = key.try_into().expect("invalid header name");
+    let value = ok_or(value, key.clone());
+
     Header {
-        value,
-        key: key.try_into().expect("invalid header name."),
+        predicate: on::header(value, key),
     }
 }
 
 impl<T> Header<T> {
-    /// If the header associated with  the predicate as match if the header is `None`.
-    pub fn optional(self) -> Optional<Self> {
-        Optional(self)
+    /// Make the header associated with `key`, optional.
+    pub fn opt(self) -> Opt<T> {
+        Opt {
+            predicate: self.predicate.opt(),
+        }
     }
 }
 
@@ -74,17 +70,10 @@ impl<T> Predicate<HeaderMap> for Header<T>
 where
     for<'a> T: Predicate<[u8]> + 'a,
 {
-    type Error<'a> = DenyHeader<'a>;
+    type Error<'a> = InvalidHeader<'a>;
 
     fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), Self::Error<'a>> {
-        let key = &self.key;
-        let Some(value) = headers.get(key) else {
-            return Err(DenyHeader::Missing(key));
-        };
-
-        self.value
-            .cmp(value.as_bytes().trim_ascii())
-            .map_err(|_| DenyHeader::Predicate(key))
+        self.predicate.cmp(headers).map_err(InvalidHeader::new)
     }
 }
 
@@ -92,62 +81,33 @@ impl<T, App> Predicate<Request<App>> for Header<T>
 where
     for<'a> T: Predicate<[u8]> + 'a,
 {
-    type Error<'a> = DenyHeader<'a>;
+    type Error<'a> = InvalidHeader<'a>;
 
     fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
         self.cmp(request.headers())
     }
 }
 
-impl<T, Input> Predicate<Input> for Optional<T>
+impl<T> Predicate<HeaderMap> for Opt<T>
 where
-    for<'a> T: Predicate<Input, Error<'a> = DenyHeader<'a>> + 'a,
+    for<'a> T: Predicate<[u8]> + 'a,
 {
-    type Error<'a> = DenyHeader<'a>;
+    type Error<'a> = InvalidHeader<'a>;
 
-    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        self.0.cmp(input).or_else(|error| match error {
-            DenyHeader::Missing(_) => Ok(()),
-            error => Err(error),
-        })
+    fn cmp<'a>(&'a self, headers: &HeaderMap) -> Result<(), Self::Error<'a>> {
+        self.predicate
+            .cmp(headers)
+            .map_err(|error| InvalidHeader::new(OnError::Predicate(error)))
     }
 }
 
-impl<'a> DenyHeader<'a> {
-    /// Returns a reference to the name of the header associated with the
-    /// predicate error.
-    pub fn name(&self) -> &'a HeaderName {
-        match *self {
-            Self::Predicate(name) | Self::Missing(name) => name,
-        }
-    }
-}
+impl<T, App> Predicate<Request<App>> for Opt<T>
+where
+    for<'a> T: Predicate<[u8]> + 'a,
+{
+    type Error<'a> = InvalidHeader<'a>;
 
-impl From<DenyHeader<'_>> for Error {
-    fn from(error: DenyHeader<'_>) -> Self {
-        match error {
-            DenyHeader::Predicate(name) => match name.as_str() {
-                "accept" => err!(406, "response media type not supported."),
-                "authorization" => err!(401, "unauthorized."),
-                "content-type" => err!(415, "request media type not supported."),
-                "range" => err!(416, "unsatisfiable range request."),
-                "upgrade" => err!(426, "protocol upgrade is not supported."),
-                n => err!(400, "invalid value for header: {}.", n),
-            },
-            DenyHeader::Missing(name) => match name.as_str() {
-                "content-length" => err!(411, "length required."),
-
-                if_ @ ("if-match"
-                | "if-none-match"
-                | "if-modified-since"
-                | "if-unmodified-since") => {
-                    err!(428, "missing required precondition: {}.", if_)
-                }
-
-                n => {
-                    err!(400, "invalid value for header: {}.", n)
-                }
-            },
-        }
+    fn cmp<'a>(&'a self, request: &Request<App>) -> Result<(), Self::Error<'a>> {
+        self.cmp(request.headers())
     }
 }

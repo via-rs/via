@@ -243,6 +243,12 @@ pub struct MapErr<T, F> {
     op: F,
 }
 
+/// If the predicate fails, error with a reference to `E`.
+pub struct OkOr<T, E> {
+    predicate: T,
+    error: E,
+}
+
 // Macros adapted for our use case from the nom crate:
 // https://github.com/rust-bakery/nom/blob/main/src/branch/mod.rs
 
@@ -361,6 +367,11 @@ pub fn not<T>(predicate: T) -> Not<T> {
     Not(predicate)
 }
 
+/// If `predicate` fails, error with a reference to `E`.
+pub fn ok_or<T, E>(predicate: T, error: E) -> OkOr<T, E> {
+    OkOr { predicate, error }
+}
+
 /// One of the predicates in `tuple` must match the input.
 pub fn or<T>(tuple: T) -> Or<T> {
     Or(tuple)
@@ -376,6 +387,17 @@ pub fn when<T, U>(first: T, second: U) -> When<T, U> {
 
 and_impls!(A B C D E F G H I J);
 or_impls!(A B C D E F G H I J);
+
+impl<Input> Predicate<Input> for Any
+where
+    Input: ?Sized,
+{
+    type Error<'a> = Infallible;
+
+    fn cmp<'a>(&'a self, _: &Input) -> Result<(), Self::Error<'a>> {
+        Ok(())
+    }
+}
 
 impl<P, T, E, Input> Predicate<Input> for IfElse<P, T, E>
 where
@@ -426,6 +448,19 @@ where
     }
 }
 
+impl<T, E, Input> Predicate<Input> for OkOr<T, E>
+where
+    for<'a> T: Predicate<Input> + 'a,
+    for<'a> E: 'a,
+    Input: ?Sized,
+{
+    type Error<'a> = &'a E;
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
+        self.predicate.cmp(input).map_err(|_| &self.error)
+    }
+}
+
 impl<T, U, Input> Predicate<Input> for When<T, U>
 where
     for<'a> T: Predicate<Input> + 'a,
@@ -436,17 +471,6 @@ where
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
         self.0.cmp(input).map_or(Ok(()), |_| self.1.cmp(input))
-    }
-}
-
-impl<Input> Predicate<Input> for Any
-where
-    Input: ?Sized,
-{
-    type Error<'a> = Infallible;
-
-    fn cmp<'a>(&'a self, _: &Input) -> Result<(), Self::Error<'a>> {
-        Ok(())
     }
 }
 

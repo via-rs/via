@@ -2,7 +2,7 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::ControlFlow;
 
 use crate::error::Error;
-use crate::guard::header::DenyHeader;
+use crate::guard::error::InvalidHeader;
 
 #[cfg(feature = "tokio-tungstenite")]
 pub use tungstenite::error::Error as WebSocketError;
@@ -68,8 +68,8 @@ impl Display for UpgradeError {
     }
 }
 
-impl From<DenyHeader<'_>> for UpgradeError {
-    fn from(error: DenyHeader<'_>) -> Self {
+impl From<InvalidHeader<'_>> for UpgradeError {
+    fn from(error: InvalidHeader<'_>) -> Self {
         match error.name().as_str() {
             "sec-websocket-version" => UpgradeError::SecWebsocketVersion,
             "connection" => UpgradeError::UpgradeRequired,

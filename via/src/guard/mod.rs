@@ -1,3 +1,9 @@
+//! Synchronous predicates that shape middleware execution.
+//!
+//! Guards are stateless higher-order middleware. They classify a request before
+//! asynchronous work begins and decide whether middleware should be entered or
+//! skipped entirely.
+
 pub mod bytes;
 pub mod error;
 pub mod header;

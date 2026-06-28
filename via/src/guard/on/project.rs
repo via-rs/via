@@ -1,11 +1,15 @@
 //! Nameable, built-in projection types.
 
 use std::convert::Infallible;
+use std::marker::PhantomData;
 
 use http::{HeaderMap, HeaderName};
 
 use crate::Request;
-use crate::guard::error::MissingUriQuery;
+use crate::guard::error::{MissingUriQuery, UnknownExtension};
+
+/// Project the request extensions.
+pub struct Extensions;
 
 /// Project the request headers.
 pub struct Headers;
@@ -16,7 +20,7 @@ pub struct Method;
 /// Project the request URI path.
 pub struct Path;
 
-/// Project the request URI query str.
+/// Project the request URI query.
 pub struct Query;
 
 /// Project the request URI.
@@ -63,8 +67,55 @@ pub trait Project<Input> {
     fn project<'a, 'b>(&'a self, input: &'b Input) -> Result<&'b Self::Output, Self::Error<'a>>;
 }
 
+/// Project the request extension of type `T`.
+pub struct Extension<T> {
+    pub(super) _ty: PhantomData<T>,
+}
+
 pub(crate) struct Header {
     pub(super) name: HeaderName,
+}
+
+impl<App> Project<Request<App>> for Extensions {
+    type Error<'a> = Infallible;
+    type Output = http::Extensions;
+
+    fn project<'a, 'b>(
+        &'a self,
+        request: &'b Request<App>,
+    ) -> Result<&'b Self::Output, Self::Error<'a>> {
+        Ok(request.extensions())
+    }
+}
+
+impl<T> Project<http::Extensions> for Extension<T>
+where
+    T: Send + Sync + 'static,
+{
+    type Error<'a> = UnknownExtension;
+    type Output = T;
+
+    fn project<'a, 'b>(
+        &'a self,
+        extensions: &'b http::Extensions,
+    ) -> Result<&'b Self::Output, Self::Error<'a>> {
+        extensions.get().ok_or(UnknownExtension)
+    }
+}
+
+impl<T, App> Project<Request<App>> for Extension<T>
+where
+    T: Send + Sync + 'static,
+{
+    type Error<'a> = UnknownExtension;
+    type Output = T;
+
+    fn project<'a, 'b>(
+        &'a self,
+        request: &'b Request<App>,
+    ) -> Result<&'b Self::Output, Self::Error<'a>> {
+        self.project(request.extensions())
+    }
 }
 
 impl<App> Project<Request<App>> for Headers {

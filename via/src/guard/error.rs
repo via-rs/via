@@ -7,6 +7,9 @@ use crate::{Error, err};
 /// The request URI query is required.
 pub struct MissingUriQuery;
 
+/// The request is missing an extension.
+pub struct UnknownExtension;
+
 pub struct InvalidHeader<'a> {
     source: OnError<&'a HeaderName, &'a HeaderName>,
 }
@@ -126,5 +129,11 @@ impl From<InvalidHeader<'_>> for Error {
                 }
             },
         }
+    }
+}
+
+impl From<UnknownExtension> for Error {
+    fn from(_: UnknownExtension) -> Self {
+        err!(500, "unknown request extension.")
     }
 }

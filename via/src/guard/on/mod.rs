@@ -2,6 +2,8 @@
 
 mod project;
 
+use std::marker::PhantomData;
+
 use http::HeaderName;
 pub use project::*;
 
@@ -40,12 +42,22 @@ pub fn on<T, U>(predicate: T, projector: U) -> On<T, U> {
     }
 }
 
-/// Evaluate a predicate against a request's headers.
-pub fn headers<T>(predicate: T) -> On<T, Headers> {
-    on(predicate, project::Headers)
+/// Evaluate `predicate` against the request extensions.
+pub fn extensions<T>(predicate: T) -> On<T, Extensions> {
+    on(predicate, Extensions)
 }
 
-/// Evaluate a predicate against a request's method.
+/// Evaluate `predicate` against the request extension of type `U`.
+pub fn extension<T, U>(predicate: T) -> On<T, Extension<U>> {
+    on(predicate, Extension { _ty: PhantomData })
+}
+
+/// Evaluate `predicate` against a request's headers.
+pub fn headers<T>(predicate: T) -> On<T, Headers> {
+    on(predicate, Headers)
+}
+
+/// Evaluate `predicate` against a request's method.
 ///
 /// # Example
 ///
@@ -60,14 +72,17 @@ pub fn method<T>(predicate: T) -> On<T, Method> {
     on(predicate, Method)
 }
 
+/// Evaluate `predicate` against the request URI path.
 pub fn path<T>(predicate: T) -> On<T, Path> {
     on(predicate, Path)
 }
 
+/// Evaluate `predicate` against the request URI query.
 pub fn query<T>(predicate: T) -> On<T, Query> {
     on(predicate, Query)
 }
 
+/// Evaluate `predicate` against the request URI.
 pub fn uri<T>(predicate: T) -> On<T, Uri> {
     on(predicate, Uri)
 }

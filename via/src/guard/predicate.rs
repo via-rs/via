@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use super::error::MapError;
+use super::error::ErrorThunk;
 use crate::Error;
 
 /// Coerce a predicate to a boolean expression and negate it.
@@ -236,13 +236,46 @@ pub struct IfElse<P, T, E> {
     or_else: E,
 }
 
-/// Map a predicate's error to a different type.
-pub struct MapErr<T, F> {
+/// Lazily convert predicate errors into [`Error`].
+///
+/// Unlike ordinary error mapping, this combinator does not eagerly construct a
+/// framework error when predicate evaluation fails. Instead, it stores the
+/// predicate error together with a conversion function. The conversion happens
+/// only if the guard error is later converted into [`Error`].
+///
+/// This keeps synchronous guard evaluation allocation-free while still
+/// allowing contextual errors to produce rich framework responses.
+///
+/// The returned error type must erase the lifetime of the original error. This
+/// combinator is particularlly useful when using a closure as a top-level
+/// predicate that must return an `Error` type that can be converted to a
+/// [`via::Error`](crate::Error).
+///
+/// # Example
+///
+/// ```
+/// use http::Version;
+/// use via::{Request, guard};
+///
+/// // Create a new application.
+/// let mut app = via::app(());
+///
+/// // Only support request made with HTTP versions >= 1.1.
+/// app.middleware(guard::barrier(guard::into_error(
+///     |request: &Request| request.version() > Version::HTTP_10,
+///     |_| via::err!(400, "http version not supported"),
+/// )));
+/// ```
+pub struct IntoError<T, F> {
     predicate: T,
     op: F,
 }
 
-/// If the predicate fails, error with a reference to `E`.
+/// Attach a trusted error context to a predicate.
+///
+/// The returned error borrows `E`. Guard middleware converts that borrow into
+/// an owned `Error` before returning a future. The borrow returned in the
+/// `Err` discriminant of `cmp` only exists for a couple of nanoseconds.
 pub struct OkOr<T, E> {
     predicate: T,
     error: E,
@@ -334,31 +367,25 @@ pub fn if_else<P, T, E>(predicate: P, if_true: T, or_else: E) -> IfElse<P, T, E>
     }
 }
 
-/// Map the provided predicate's error to a different type.
-///
-/// The returned error type must erase the lifetime of the original error. This
-/// combinator is particularlly useful when using a closure as a top-level
-/// predicate that must return an `Error` type that can be converted to a
-/// [`via::Error`](crate::Error).
+/// Lazily convert an error from `predicate` into an [`Error`].
 ///
 /// # Example
 ///
 /// ```
 /// use http::Version;
-/// use via::guard::{self, map_err};
-/// use via::{err, Request};
+/// use via::{Request, guard};
 ///
 /// // Create a new application.
 /// let mut app = via::app(());
 ///
 /// // Only support request made with HTTP versions >= 1.1.
-/// app.middleware(guard::barrier(map_err(
+/// app.middleware(guard::barrier(guard::into_error(
 ///     |request: &Request| request.version() > Version::HTTP_10,
-///     |_| err!(400, "http version not supported"),
+///     |_| via::err!(400, "http version not supported"),
 /// )));
 /// ```
-pub fn map_err<T, F>(predicate: T, op: F) -> MapErr<T, F> {
-    MapErr { predicate, op }
+pub fn into_error<T, F>(predicate: T, op: F) -> IntoError<T, F> {
+    IntoError { predicate, op }
 }
 
 /// Coerce `predicate` to a boolean expression and negate it.
@@ -366,7 +393,11 @@ pub fn not<T>(predicate: T) -> Not<T> {
     Not(predicate)
 }
 
-/// If `predicate` fails, error with a reference to `E`.
+/// Attach trusted error context `E` to `predicate`.
+///
+/// The returned error borrows `E`. Guard middleware converts that borrow into
+/// an owned `Error` before returning a future. The borrow returned in the
+/// `Err` discriminant of `cmp` only exists for a couple of nanoseconds.
 pub fn ok_or<T, E>(predicate: T, error: E) -> OkOr<T, E> {
     OkOr { predicate, error }
 }
@@ -416,18 +447,18 @@ where
     }
 }
 
-impl<T, F, Input> Predicate<Input> for MapErr<T, F>
+impl<T, F, Input> Predicate<Input> for IntoError<T, F>
 where
     for<'a> T: Predicate<Input> + 'a,
     for<'a> F: Fn(T::Error<'_>) -> Error + Copy + 'a,
     Input: ?Sized,
 {
-    type Error<'a> = MapError<'a, F, T::Error<'a>>;
+    type Error<'a> = ErrorThunk<'a, F, T::Error<'a>>;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
         self.predicate
             .cmp(input)
-            .map_err(|error| MapError::new(&self.op, error))
+            .map_err(|error| ErrorThunk::new(&self.op, error))
     }
 }
 

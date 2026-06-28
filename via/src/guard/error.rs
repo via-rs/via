@@ -10,15 +10,17 @@ pub struct MissingUriQuery;
 /// The request is missing an extension.
 pub struct UnknownExtension;
 
+/// The error type returned by the [`into_error`] combinator.
+///
+/// [`into_error`]: super::into_error
+pub struct ErrorThunk<'a, F, E> {
+    op: &'a F,
+    error: E,
+}
+
 /// A request header is either missing or invalid.
 pub struct InvalidHeader<'a> {
     source: OnError<&'a HeaderName, &'a HeaderName>,
-}
-
-/// The error type returned by the [`map_err`](super::map_err) predicate.
-pub struct MapError<'a, F, E> {
-    op: &'a F,
-    error: E,
 }
 
 /// A contextual, `405 Method Not Allowed` error.
@@ -33,17 +35,17 @@ pub enum OnError<T, U> {
     Project(U),
 }
 
-impl<'a, F, E> MapError<'a, F, E> {
+impl<'a, F, E> ErrorThunk<'a, F, E> {
     pub(super) fn new(op: &'a F, error: E) -> Self {
         Self { op, error }
     }
 }
 
-impl<F, E> From<MapError<'_, F, E>> for Error
+impl<F, E> From<ErrorThunk<'_, F, E>> for Error
 where
     F: Fn(E) -> Error,
 {
-    fn from(into: MapError<'_, F, E>) -> Self {
+    fn from(into: ErrorThunk<'_, F, E>) -> Self {
         (into.op)(into.error)
     }
 }

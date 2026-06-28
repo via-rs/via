@@ -1,21 +1,27 @@
+//! Synchronous predicates that shape middleware execution.
+//!
+//! Guards are stateless higher-order middleware. They classify a request before
+//! asynchronous work begins and decide whether middleware should be entered or
+//! skipped entirely.
+
+pub mod bytes;
+pub mod error;
 pub mod header;
+pub mod media;
 pub mod method;
+pub mod on;
 
 mod predicate;
 
-pub use header::Header;
+pub use header::{Header, header};
+pub use method::Method;
+pub use on::{On, Project, on};
 pub use predicate::*;
 
-use std::fmt::Debug;
+pub use via_macros::content;
 
 use crate::request::Request;
 use crate::{BoxFuture, Continue, Error, Middleware, Next};
-
-/// Content negotation as validation.
-pub type Content<T, U> = (
-    Header<header::Contains<Or<(header::Media<header::CaseSensitive>, U)>>>,
-    When<Not<method::IsSafe>, (Header<T>, Header<Wildcard>)>,
-);
 
 /// Skip a middleware if the guard's predicate does not match the request.
 ///
@@ -46,27 +52,58 @@ pub struct Filter<T, U> {
 }
 
 /// Apply a guard's predicate to an individual middleware.
+///
+/// # Example
+///
+/// ```no_run
+/// mod admin {
+///     // Implementations elided...
+///     # pub async fn graphql(_: via::Request, _: via::Next) -> via::Result { todo!() }
+/// }
+///
+/// use std::process::ExitCode;
+/// use via::guard::{self, on};
+/// use via::{Error, Request, Server, err};
+///
+/// trait Session {
+///     fn session(&self) -> Option<&Identity>;
+///     fn is_admin(&self) -> bool {
+///         self.session().is_some_and(|identity| identity.is_admin)
+///     }
+/// }
+///
+/// struct Identity {
+///     user_id: u64,
+///     is_admin: bool,
+/// }
+/// #
+/// # impl Session for Request {
+/// #     fn session(&self) -> Option<&Identity> {
+/// #         todo!("implement session restoration and accessors");
+/// #     }
+/// # }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<ExitCode, Error> {
+///     let mut app = via::app(());
+///     let mut api = app.route("/api");
+///
+///     api.route("/admin/graphql").to(guard::flat_map(
+///         guard::into_error(
+///             |request: &Request| request.is_admin(),
+///             |_| err!(403, "admin permissions are required."),
+///         ),
+///         via::post(admin::graphql)
+///             .get(admin::graphql)
+///             .or_deny(),
+///     ));
+///
+///     Server::new(app).listen(("127.0.0.1", 8080)).await
+/// }
+/// ```
 pub struct FlatMap<T, U> {
     predicate: T,
     middleware: U,
-}
-
-/// Call `middleware` if `predicate` matches the request.
-pub fn filter<T, U>(predicate: T, middleware: U) -> Filter<T, U> {
-    Filter {
-        predicate,
-        middleware,
-    }
-}
-
-/// Confirm that the request matches `predicate` before calling `middleware`.
-///
-/// Unlike [`guard`], the provided predicate only applies to `middleware`.
-pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
-    FlatMap {
-        predicate,
-        middleware,
-    }
 }
 
 /// Deny the request if it does not match `predicate`.
@@ -77,52 +114,45 @@ pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
 /// # Example
 ///
 /// ```rust
-/// use via::guard::{content, header::media};
-/// use via::guard;
+/// use via::guard::{self, media};
 ///
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");
 ///
 /// // If the client does not speak JSON, deny the request.
-/// api.middleware(guard(content(media::json(), media::json())));
+/// api.middleware(guard::barrier(guard::content!(media::json())));
 ///
 /// // Subsequent routes defined from `api` require:
-/// //   - Accept: application/json, */*
-/// //   - Content-Length: * (<= Server::max_request_size)
-/// //   - Content-Type: application/json || application/json; charset=utf-8
+/// //   - accept: application/json [; charset=utf-8], */*
+/// //   - content-type: application/json [; charset=utf-8]
+/// //   - content-length: ^(\d+)$ <= Server::max_request_size
 ///
 /// api.route("/users").scope(|users| {
 ///     // Define the /api/users resource.
 /// });
 /// ```
-pub fn guard<T>(predicate: T) -> FlatMap<T, Continue> {
+pub fn barrier<T>(predicate: T) -> FlatMap<T, Continue> {
     flat_map(predicate, Continue)
 }
 
-/// Require that the header associated with `key` matches `predicate`.
-pub fn header<K, V>(key: K, value: V) -> Header<V>
-where
-    K: TryInto<http::HeaderName>,
-    K::Error: Debug,
-{
-    Header {
-        value,
-        key: key.try_into().expect("invalid header name."),
+/// Call `middleware` if `predicate` matches the request.
+///
+/// Unlike [`barrier`], the predicate provided only applies to `middleware`.
+pub fn filter<T, U>(predicate: T, middleware: U) -> Filter<T, U> {
+    Filter {
+        predicate,
+        middleware,
     }
 }
 
-/// The client and server agree on a media type and payloads have a known length.
+/// Confirm that the request matches `predicate` before calling `middleware`.
 ///
-/// The first argument is what the client is allowed to send. The second
-/// argument is how the server will reply.
-pub fn content<T, U>(accepts: T, provides: U) -> Content<T, U> {
-    (
-        header::accept(provides),
-        when(
-            method::is_mutation(),
-            (header::content_type(accepts), header::content_length()),
-        ),
-    )
+/// Unlike [`barrier`], the predicate provided only applies to `middleware`.
+pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
+    FlatMap {
+        predicate,
+        middleware,
+    }
 }
 
 impl<T, U, App> Middleware<App> for FlatMap<T, U>

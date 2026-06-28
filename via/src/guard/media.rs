@@ -1,6 +1,6 @@
-//! Value combinators for HTTP media types.
+//! Predicate combinators for HTTP media types.
 
-use super::{CaseSensitive, Tag, case_sensitive, tag};
+use crate::guard::bytes::{CaseSensitive, Tag, case_sensitive, tag};
 use crate::guard::{Or, Predicate};
 
 /// Match `"*/*"(; charset=*)?` or predicate `T`.
@@ -19,17 +19,17 @@ pub fn all() -> Media<CaseSensitive> {
 
 /// Match `"text/html"(; charset=utf-8)?`.
 pub fn html() -> Media {
-    media(tag(b"text/html"), Some(b"utf-8"))
+    utf_8(tag(b"text/html"))
 }
 
 /// Match `"application/json"(; charset=utf-8)?`.
 pub fn json() -> Media {
-    media(tag(b"application/json"), Some(b"utf-8"))
+    utf_8(tag(b"application/json"))
 }
 
 /// Match `"text/plain"(; charset=utf-8)?`.
 pub fn text() -> Media {
-    media(tag(b"text/plain"), Some(b"utf-8"))
+    utf_8(tag(b"text/plain"))
 }
 
 /// The `predicate` matches the essence string and optional charset param.
@@ -38,6 +38,11 @@ pub fn text() -> Media {
 /// a case-insensitive match.
 pub fn media<T>(predicate: T, charset: Option<&[u8]>) -> Media<T> {
     Media(predicate, charset.map(tag))
+}
+
+/// The `predicate` matches the essence string and an optional `utf-8` charset.
+pub fn utf_8<T>(predicate: T) -> Media<T> {
+    media(predicate, Some(b"utf-8"))
 }
 
 /// The mime's essence and optional charset param match the input.

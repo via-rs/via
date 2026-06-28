@@ -1,6 +1,6 @@
 [package]
 name = "via"
-version = "2.0.0-gm.54"
+version = "2.0.0-gm.55"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -68,6 +68,7 @@ serde_json = "1"
 smallvec = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
+via-macros = { path = "../via-macros", version = "0.1" }
 via-router = { version = "3.0.0-beta.34" }
 zeroize = "1"
 

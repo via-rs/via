@@ -15,7 +15,7 @@ Add the following to dependencies section of your `Cargo.toml`:
 
 ```toml
 [dependencies]
-via = "=2.0.0-gm.54"
+via = "=2.0.0-gm.55"
 http = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -74,6 +74,11 @@ This project is inspired by:
 -   [Actix Web](https://github.com/actix/actix-web) They paved their own way and I have so much respect for that.
 -   [Rocket](https://github.com/rwf2/Rocket) This project wouldn't exist if I hadn't tried to create [Rocket with classes](https://github.com/zacharygolba/via/blob/f44a3e8eeaee74cadfa2dd48cb60db5ef301aa01/docs/examples/advanced-blog/src/services/api/posts.rs).
 -   [warp](https://github.com/seanmonstar/warp) Via is built on top of hyper. Without warp, Via wouldn't exist! Also, warp has the coolest API I've ever used to write a web server.
+
+## Dedication
+
+For Chester and Kristina. Make them smile. Build something that you are
+proud of.
 
 ## License
 

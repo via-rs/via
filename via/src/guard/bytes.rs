@@ -40,6 +40,11 @@ macro_rules! cmp_bytes {
 }
 
 cmp_bytes! {
+    #[doc = "The input is equal to `predicate`."]
+    pub fn case_sensitive(self: &CaseSensitive, predicate: &[u8]) -> bool {
+        self.0.as_slice() == predicate
+    }
+
     #[doc = "The input is equal to or ends with `suffix`."]
     pub fn ends_with(self: &EndsWith, suffix: &[u8]) -> bool {
         suffix.ends_with(self.0.as_slice())
@@ -48,11 +53,6 @@ cmp_bytes! {
     #[doc = "The input is equal to or starts with `prefix`."]
     pub fn starts_with(self: &StartsWith, prefix: &[u8]) -> bool {
         prefix.starts_with(self.0.as_slice())
-    }
-
-    #[doc = "The input is equal to `predicate`."]
-    pub fn tag_no_case(self: &TagNoCase, predicate: &[u8]) -> bool {
-        self.0.as_slice() == predicate
     }
 
     #[doc = "The input is a case-insensitive match for `predicate`."]

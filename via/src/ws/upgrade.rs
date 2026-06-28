@@ -16,7 +16,7 @@ use tokio_websockets::WebSocketStream;
 use super::run::RunTask;
 use super::util::{Base64EncodedDigest, sha1};
 use super::{Channel, Request};
-use crate::guard::bytes::{Contains, Tag, TagNoCase, Trim};
+use crate::guard::bytes::{CaseSensitive, Contains, Tag, Trim};
 use crate::guard::{Header, Predicate, header};
 use crate::server::IoStream;
 use crate::ws::error::UpgradeError;
@@ -28,7 +28,7 @@ type HasToken = Contains<Trim<Tag>>;
 
 pub struct Ws<T> {
     listener: Arc<Listener<T>>,
-    guard: (Header<TagNoCase>, Header<HasToken>, Header<HasToken>),
+    guard: (Header<CaseSensitive>, Header<HasToken>, Header<HasToken>),
 }
 
 pub(super) struct Listener<T> {
@@ -115,7 +115,7 @@ where
 
 impl<T> Ws<T> {
     pub(super) fn new(listener: T) -> Self {
-        use crate::guard::bytes::{contains, tag, tag_no_case, trim};
+        use crate::guard::bytes::{case_sensitive, contains, tag, trim};
 
         Self {
             listener: Arc::new(Listener {
@@ -127,7 +127,7 @@ impl<T> Ws<T> {
                 },
             }),
             guard: (
-                header(h::SEC_WEBSOCKET_VERSION, tag_no_case(b"13")),
+                header(h::SEC_WEBSOCKET_VERSION, case_sensitive(b"13")),
                 header(h::CONNECTION, contains(trim(tag(b"upgrade")), b',')),
                 header(h::UPGRADE, contains(trim(tag(b"websocket")), b',')),
             ),

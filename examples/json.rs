@@ -41,7 +41,7 @@ async fn main() -> via::Result<ExitCode> {
     app.middleware(rescue(|error| error.use_json()));
 
     // If the client does not speak JSON, deny the request.
-    app.middleware(guard::barrier(guard::content!(media::json)));
+    app.middleware(guard::barrier(guard::content!(media::json())));
 
     // Define a route that responds to POST /hello.
     app.route("/hello").to(via::post(hello).or_deny());

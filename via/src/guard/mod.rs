@@ -71,7 +71,7 @@ pub struct FlatMap<T, U> {
 /// let mut api = app.route("/api");
 ///
 /// // If the client does not speak JSON, deny the request.
-/// api.middleware(guard::barrier(guard::content!(media::json)));
+/// api.middleware(guard::barrier(guard::content!(media::json())));
 ///
 /// // Subsequent routes defined from `api` require:
 /// //   - accept: application/json [; charset=utf-8], */*

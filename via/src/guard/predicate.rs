@@ -1,10 +1,7 @@
 use std::convert::Infallible;
 
-/// All of the predicates in self must match the input.
-pub struct And<T>(T);
-
-/// Map a predicate's error to a different type.
-pub struct MapErr<T, F>(T, F);
+use super::error::ErrorThunk;
+use crate::Error;
 
 /// Coerce a predicate to a boolean expression and negate it.
 pub struct Not<T>(T);
@@ -12,14 +9,11 @@ pub struct Not<T>(T);
 /// One of the predicates in self must match the input.
 pub struct Or<T>(T);
 
-/// Project the input from one type to another for a predicate.
-pub struct On<T, U>(T, U);
-
-/// Require a predicate to match if the first matches.
+/// Conditionally execute the second predicate if the first succeeds.
 pub struct When<T, U>(T, U);
 
-/// Match any input.
-pub struct Wildcard;
+/// A predicate that succeeds for any input.
+pub struct Any;
 
 /// An inexpensive comparison operation that can fail with context.
 ///
@@ -181,14 +175,13 @@ pub struct Wildcard;
 ///
 /// To demonstrate this, let's reimplement the [`method::is_safe`] predicate
 /// using combinators rather than [the fn](http::Method::is_safe) defined in
-/// `impl Method` from the [`http`] crate. The [`on`] combinator works great
-/// for this type of projection:
+/// `impl Method` from the [`http`] crate. The [`on`] module provides
+/// combinators that work great for this type of projection:
 ///
 /// ```no_run
 /// use http::Method;
 /// use std::process::ExitCode;
-/// use via::guard::method::allow;
-/// use via::guard::{self, on, or};
+/// use via::guard::{self, method, on};
 /// use via::{Error, Request, Server};
 ///
 /// #[tokio::main]
@@ -198,15 +191,12 @@ pub struct Wildcard;
 ///
 ///     // If the request method is safe, cache the response.
 ///     app.middleware(guard::filter(
-///         on(
-///             Request::method,
-///             or((
-///                 allow(Method::GET),
-///                 allow(Method::HEAD),
-///                 allow(Method::OPTIONS),
-///                 allow(Method::TRACE)
-///             )),
-///         ),
+///         on::method(guard::or((
+///             method::get(),
+///             method::head(),
+///             method::options(),
+///             method::trace(),
+///         ))),
 ///         async |request, next| {
 ///             todo!("implement response caching");
 ///         },
@@ -227,6 +217,7 @@ pub struct Wildcard;
 /// [`HeaderName`]: http::HeaderName
 /// [`Method`]: http::Method
 /// [`method::is_safe`]: crate::guard::method::is_safe
+/// [`on`]: mod@crate::guard::on
 pub trait Predicate<Input: ?Sized> {
     /// The error type returned if the predicate fails.
     type Error<'a>
@@ -235,6 +226,59 @@ pub trait Predicate<Input: ?Sized> {
 
     /// Compares `self` against `input`.
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>>;
+}
+
+/// Conditionally execute either the second or third predicate based on the
+/// first.
+pub struct IfElse<P, T, E> {
+    predicate: P,
+    if_true: T,
+    or_else: E,
+}
+
+/// Lazily convert predicate errors into [`Error`].
+///
+/// Unlike ordinary error mapping, this combinator does not eagerly construct a
+/// framework error when predicate evaluation fails. Instead, it stores the
+/// predicate error together with a conversion function. The conversion happens
+/// only if the guard error is later converted into [`Error`].
+///
+/// This keeps synchronous guard evaluation allocation-free while still
+/// allowing contextual errors to produce rich framework responses.
+///
+/// The returned error type must erase the lifetime of the original error. This
+/// combinator is particularlly useful when using a closure as a top-level
+/// predicate that must return an `Error` type that can be converted to a
+/// [`via::Error`](crate::Error).
+///
+/// # Example
+///
+/// ```
+/// use http::Version;
+/// use via::{Request, guard};
+///
+/// // Create a new application.
+/// let mut app = via::app(());
+///
+/// // Only support request made with HTTP versions >= 1.1.
+/// app.middleware(guard::barrier(guard::into_error(
+///     |request: &Request| request.version() > Version::HTTP_10,
+///     |_| via::err!(400, "http version not supported"),
+/// )));
+/// ```
+pub struct IntoError<T, F> {
+    predicate: T,
+    op: F,
+}
+
+/// Attach a trusted error context to a predicate.
+///
+/// The returned error borrows `E`. Guard middleware converts that borrow into
+/// an owned `Error` before returning a future. The borrow returned in the
+/// `Err` discriminant of `cmp` only exists for a couple of nanoseconds.
+pub struct OkOr<T, E> {
+    predicate: T,
+    error: E,
 }
 
 // Macros adapted for our use case from the nom crate:
@@ -308,31 +352,40 @@ macro_rules! impl_or_predicate {
     };
 }
 
-/// Map the provided predicate's error to a different type.
-///
-/// The returned error type must erase the lifetime of the original error. This
-/// combinator is particularlly useful when using a closure as a top-level
-/// predicate that must return an `Error` type that can be converted to a
-/// [`via::Error`](crate::Error).
+/// Returns a predicate that succeeds for any input.
+pub fn any() -> Any {
+    Any
+}
+
+/// Conditionally execute either the second or third predicate based on the
+/// first.
+pub fn if_else<P, T, E>(predicate: P, if_true: T, or_else: E) -> IfElse<P, T, E> {
+    IfElse {
+        predicate,
+        if_true,
+        or_else,
+    }
+}
+
+/// Lazily convert an error from `predicate` into an [`Error`].
 ///
 /// # Example
 ///
 /// ```
 /// use http::Version;
-/// use via::guard::{self, map_err};
-/// use via::{err, Request};
+/// use via::{Request, guard};
 ///
 /// // Create a new application.
 /// let mut app = via::app(());
 ///
 /// // Only support request made with HTTP versions >= 1.1.
-/// app.middleware(guard::barrier(map_err(
+/// app.middleware(guard::barrier(guard::into_error(
 ///     |request: &Request| request.version() > Version::HTTP_10,
-///     |_| err!(400, "http version not supported"),
+///     |_| via::err!(400, "http version not supported"),
 /// )));
 /// ```
-pub fn map_err<T, F>(predicate: T, map: F) -> MapErr<T, F> {
-    MapErr(predicate, map)
+pub fn into_error<T, F>(predicate: T, op: F) -> IntoError<T, F> {
+    IntoError { predicate, op }
 }
 
 /// Coerce `predicate` to a boolean expression and negate it.
@@ -340,15 +393,13 @@ pub fn not<T>(predicate: T) -> Not<T> {
     Not(predicate)
 }
 
-/// Project a field on the lhs before testing `predicate`.
-pub fn on<T, U, Input, Project>(project: T, predicate: U) -> On<T, U>
-where
-    for<'a> T: Fn(&Input) -> &Project + Copy + 'a,
-    for<'a> U: Predicate<Project> + 'a,
-    Project: ?Sized,
-    Input: ?Sized,
-{
-    On(project, predicate)
+/// Attach trusted error context `E` to `predicate`.
+///
+/// The returned error borrows `E`. Guard middleware converts that borrow into
+/// an owned `Error` before returning a future. The borrow returned in the
+/// `Err` discriminant of `cmp` only exists for a couple of nanoseconds.
+pub fn ok_or<T, E>(predicate: T, error: E) -> OkOr<T, E> {
+    OkOr { predicate, error }
 }
 
 /// One of the predicates in `tuple` must match the input.
@@ -356,14 +407,9 @@ pub fn or<T>(tuple: T) -> Or<T> {
     Or(tuple)
 }
 
-/// Apply the second predicate when the first matches the input.
+/// Conditionally execute the second predicate if the first succeeds.
 pub fn when<T, U>(first: T, second: U) -> When<T, U> {
     When(first, second)
-}
-
-/// Match any input.
-pub fn wildcard() -> Wildcard {
-    Wildcard
 }
 
 // The maximum length of a tuple is 10.
@@ -372,16 +418,47 @@ pub fn wildcard() -> Wildcard {
 and_impls!(A B C D E F G H I J);
 or_impls!(A B C D E F G H I J);
 
-impl<T, E, F, Input> Predicate<Input> for MapErr<T, F>
+impl<Input> Predicate<Input> for Any
 where
-    for<'a> T: Predicate<Input> + 'a,
-    for<'a> F: Fn(T::Error<'_>) -> E + Copy + 'a,
     Input: ?Sized,
 {
-    type Error<'a> = E;
+    type Error<'a> = Infallible;
+
+    fn cmp<'a>(&'a self, _: &Input) -> Result<(), Self::Error<'a>> {
+        Ok(())
+    }
+}
+
+impl<P, T, E, Input> Predicate<Input> for IfElse<P, T, E>
+where
+    for<'a> P: Predicate<Input> + 'a,
+    for<'a> T: Predicate<Input> + 'a,
+    for<'a> E: Predicate<Input, Error<'a> = T::Error<'a>> + 'a,
+    Input: ?Sized,
+{
+    type Error<'a> = E::Error<'a>;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        self.0.cmp(input).map_err(&self.1)
+        if self.predicate.cmp(input).is_ok() {
+            self.if_true.cmp(input)
+        } else {
+            self.or_else.cmp(input)
+        }
+    }
+}
+
+impl<T, F, Input> Predicate<Input> for IntoError<T, F>
+where
+    for<'a> T: Predicate<Input> + 'a,
+    for<'a> F: Fn(T::Error<'_>) -> Error + Copy + 'a,
+    Input: ?Sized,
+{
+    type Error<'a> = ErrorThunk<'a, F, T::Error<'a>>;
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
+        self.predicate
+            .cmp(input)
+            .map_err(|error| ErrorThunk::new(&self.op, error))
     }
 }
 
@@ -401,17 +478,16 @@ where
     }
 }
 
-impl<T, U, Input, Project> Predicate<Input> for On<T, U>
+impl<T, E, Input> Predicate<Input> for OkOr<T, E>
 where
-    for<'a> T: Fn(&Input) -> &Project + Copy + 'a,
-    for<'a> U: Predicate<Project> + 'a,
-    Project: ?Sized,
+    for<'a> T: Predicate<Input> + 'a,
+    for<'a> E: 'a,
     Input: ?Sized,
 {
-    type Error<'a> = U::Error<'a>;
+    type Error<'a> = &'a E;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        self.1.cmp((self.0)(input))
+        self.predicate.cmp(input).map_err(|_| &self.error)
     }
 }
 
@@ -425,17 +501,6 @@ where
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
         self.0.cmp(input).map_or(Ok(()), |_| self.1.cmp(input))
-    }
-}
-
-impl<Input> Predicate<Input> for Wildcard
-where
-    Input: ?Sized,
-{
-    type Error<'a> = Infallible;
-
-    fn cmp<'a>(&'a self, _: &Input) -> Result<(), Self::Error<'a>> {
-        Ok(())
     }
 }
 

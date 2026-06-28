@@ -177,8 +177,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// ```no_run
 /// use std::process::ExitCode;
-/// use via::guard::header::media;
-/// use via::guard::{self, content, or, method};
+/// use via::guard::{self, media, method};
 /// use via::{Error, Server, cookies, rescue};
 ///
 /// mod session {
@@ -241,7 +240,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///     // restore a user's session to our JSON API if they cannot
 ///     // send and receive JSON.
 ///     api.middleware(guard::flat_map(
-///         content(media::json(), media::json()),
+///         guard::content!(media::json()),
 ///         session::restore(),
 ///     ));
 ///
@@ -249,7 +248,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///     // has not been verified in the past hour, confirm that
 ///     // the user exists and has an active account.
 ///     api.middleware(guard::filter(
-///         or((method::is_mutation(), session::is_expired)),
+///         guard::or((method::is_mutation(), session::is_expired)),
 ///         session::verify(),
 ///     ));
 ///

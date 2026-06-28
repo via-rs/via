@@ -1,21 +1,27 @@
+//! Synchronous predicates that shape middleware execution.
+//!
+//! Guards are stateless higher-order middleware. They classify a request before
+//! asynchronous work begins and decide whether middleware should be entered or
+//! skipped entirely.
+
+pub mod bytes;
+pub mod error;
 pub mod header;
+pub mod media;
 pub mod method;
+pub mod on;
 
 mod predicate;
 
-pub use header::Header;
+pub use header::{Header, header};
+pub use method::Method;
+pub use on::{On, Project, on};
 pub use predicate::*;
 
-use std::fmt::Debug;
+pub use via_macros::content;
 
 use crate::request::Request;
 use crate::{BoxFuture, Continue, Error, Middleware, Next};
-
-/// Content negotation as validation.
-pub type Content<T, U> = (
-    Header<header::Contains<Or<(header::Media<header::CaseSensitive>, U)>>>,
-    When<Not<method::IsSafe>, (Header<T>, Header<Wildcard>)>,
-);
 
 /// Skip a middleware if the guard's predicate does not match the request.
 ///
@@ -102,18 +108,18 @@ pub struct FlatMap<T, U> {
 /// # Example
 ///
 /// ```rust
-/// use via::guard::{self, content, header::media};
+/// use via::guard::{self, media};
 ///
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");
 ///
 /// // If the client does not speak JSON, deny the request.
-/// api.middleware(guard::barrier(content(media::json(), media::json())));
+/// api.middleware(guard::barrier(guard::content!(media::json())));
 ///
 /// // Subsequent routes defined from `api` require:
-/// //   - Accept: application/json, */*
-/// //   - Content-Length: * (<= Server::max_request_size)
-/// //   - Content-Type: application/json || application/json; charset=utf-8
+/// //   - accept: application/json [; charset=utf-8], */*
+/// //   - content-type: application/json [; charset=utf-8]
+/// //   - content-length: ^(\d+)$ <= Server::max_request_size
 ///
 /// api.route("/users").scope(|users| {
 ///     // Define the /api/users resource.
@@ -141,32 +147,6 @@ pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
         predicate,
         middleware,
     }
-}
-
-/// Require that the header associated with `key` matches `predicate`.
-pub fn header<K, V>(key: K, value: V) -> Header<V>
-where
-    K: TryInto<http::HeaderName>,
-    K::Error: Debug,
-{
-    Header {
-        value,
-        key: key.try_into().expect("invalid header name."),
-    }
-}
-
-/// The client and server agree on a media type and payloads have a known length.
-///
-/// The first argument is what the client is allowed to send. The second
-/// argument is how the server will reply.
-pub fn content<T, U>(accepts: T, provides: U) -> Content<T, U> {
-    (
-        header::accept(provides),
-        when(
-            method::is_mutation(),
-            (header::content_type(accepts), header::content_length()),
-        ),
-    )
 }
 
 impl<T, U, App> Middleware<App> for FlatMap<T, U>

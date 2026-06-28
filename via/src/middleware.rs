@@ -177,8 +177,8 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// ```no_run
 /// use std::process::ExitCode;
-/// use via::guard::{header::media, method};
-/// use via::{Error, Server, cookies, guard, rescue};
+/// use via::guard::{self, media, method};
+/// use via::{Error, Server, cookies, rescue};
 ///
 /// mod session {
 ///     // Implementations elided...
@@ -240,7 +240,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///     // restore a user's session to our JSON API if they cannot
 ///     // send and receive JSON.
 ///     api.middleware(guard::flat_map(
-///         guard::content!(media::json),
+///         guard::content!(media::json()),
 ///         session::restore(),
 ///     ));
 ///

@@ -1,26 +1,27 @@
+//! Synchronous predicates that shape middleware execution.
+//!
+//! Guards are stateless higher-order middleware. They classify a request before
+//! asynchronous work begins and decide whether middleware should be entered or
+//! skipped entirely.
+
+pub mod bytes;
+pub mod error;
 pub mod header;
+pub mod media;
 pub mod method;
 pub mod on;
 
 mod predicate;
 
-pub use header::Header;
-#[doc(inline)]
-pub use on::{On, on};
+pub use header::{Header, header};
+pub use method::Method;
+pub use on::{On, Project, on};
 pub use predicate::*;
 
 pub use via_macros::content;
 
-use std::fmt::Debug;
-
 use crate::request::Request;
 use crate::{BoxFuture, Continue, Error, Middleware, Next};
-
-/// Content negotation as validation.
-pub type Content<T, U> = (
-    Header<header::Contains<Or<(header::Media<header::CaseSensitive>, U)>>>,
-    When<Not<method::IsSafe>, on::Headers<(Header<T>, Header<Wildcard>)>>,
-);
 
 /// Skip a middleware if the guard's predicate does not match the request.
 ///
@@ -64,13 +65,13 @@ pub struct FlatMap<T, U> {
 /// # Example
 ///
 /// ```rust
-/// use via::guard::{self, header::media};
+/// use via::guard::{self, media};
 ///
 /// let mut app = via::app(());
 /// let mut api = app.route("/api");
 ///
 /// // If the client does not speak JSON, deny the request.
-/// api.middleware(guard::barrier(guard::content!(media::json)));
+/// api.middleware(guard::barrier(guard::content!(media::json())));
 ///
 /// // Subsequent routes defined from `api` require:
 /// //   - accept: application/json [; charset=utf-8], */*
@@ -102,18 +103,6 @@ pub fn flat_map<T, U>(predicate: T, middleware: U) -> FlatMap<T, U> {
     FlatMap {
         predicate,
         middleware,
-    }
-}
-
-/// Require that the header associated with `key` matches `predicate`.
-pub fn header<K, V>(key: K, value: V) -> Header<V>
-where
-    K: TryInto<http::HeaderName>,
-    K::Error: Debug,
-{
-    Header {
-        value,
-        key: key.try_into().expect("invalid header name."),
     }
 }
 

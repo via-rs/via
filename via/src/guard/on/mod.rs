@@ -1,98 +1,14 @@
 //! Field projection helpers.
-//!
-//! This module adapts predicates written for one input type so they can be
-//! evaluated against another.
-//!
-//! Most domain predicates in `guard` are implemented for both their natural
-//! input type and [`Request`]. For example, header predicates can be evaluated
-//! against a [`HeaderMap`] directly, but they can also be evaluated against a
-//! [`Request`] for convenience.
-//!
-//! ```
-//! use via::guard::header::{self, media};
-//!
-//! let accepts_json = header::accept(media::json());
-//! ```
-//!
-//! Projection is useful when more than one predicate should be evaluated
-//! against the same projected value. Instead of allowing each predicate to
-//! independently access the same request field, [`on`] projects the field once
-//! and evaluates the composed predicate against that projected value.
-//!
-//! ```
-//! use via::guard::header::{self, media};
-//! use via::guard::on;
-//!
-//! let content = on::headers((
-//!     header::accept(media::json()),
-//!     header::content_type(media::json()),
-//!     header::content_length(),
-//! ));
-//! ```
-//!
-//! The same pattern can be applied to the request method:
-//!
-//! ```
-//! use http::Method;
-//! use via::guard::method::allow;
-//! use via::guard::{self, on};
-//!
-//! let is_safe = on::method(guard::or((
-//!     allow(Method::GET),
-//!     allow(Method::HEAD),
-//!     allow(Method::OPTIONS),
-//!     allow(Method::TRACE),
-//! )));
-//! ```
-//!
-//! Projection keeps predicates reusable without making request evaluation
-//! depend on optimizer common-subexpression elimination. Predicates can be
-//! written for their smallest natural input, such as [`HeaderMap`] or
-//! [`http::Method`], and then lifted to [`Request`] only when needed.
-//!
-//! Use the helpers in this module, such as [`headers`] and [`method`], when
-//! multiple predicates share a well-known request field. Use [`on`] directly
-//! for custom projections.
-//!
-//! [`HeaderMap`]: http::HeaderMap
 
-pub mod project;
+mod project;
 
-pub use project::Project;
+use std::marker::PhantomData;
+
+use http::HeaderName;
+pub use project::*;
 
 use super::Predicate;
-
-/// A predicate that projects a request's headers before evaluation.
-///
-/// `Headers<T>` adapts a predicate over [`http::HeaderMap`] so that it may be
-/// evaluated directly against a [`Request`].
-///
-/// # Example
-///
-/// ```
-/// use via::guard::header::media;
-/// use via::guard::{on, header};
-///
-/// let predicate = on::headers(header::accept(media::json()));
-/// ```
-pub type Headers<T> = On<project::Headers, T>;
-
-/// A predicate that projects a request's method before evaluation.
-///
-/// `Method<T>` adapts a predicate over [`http::Method`] so that it may be
-/// evaluated directly against a [`Request`].
-///
-/// # Example
-///
-/// ```
-/// use http::Method;
-/// use via::guard::method::allow;
-/// use via::guard::{self, on};
-///
-/// let patch_or_put = guard::or((allow(Method::PATCH), allow(Method::PUT)));
-/// let predicate = on::method(patch_or_put);
-/// ```
-pub type Method<T> = On<project::Method, T>;
+use super::error::OnError;
 
 /// Apply a predicate to a projected field.
 ///
@@ -105,80 +21,117 @@ pub type Method<T> = On<project::Method, T>;
 /// Most applications should prefer the helper functions in the [`on`] module
 /// rather than constructing `On` directly.
 pub struct On<T, U> {
-    projector: T,
-    predicate: U,
+    predicate: T,
+    projector: U,
+}
+
+/// Make a predicate's projected input optional.
+pub struct Opt<T, U> {
+    predicate: T,
+    projector: U,
 }
 
 /// Project a field before evaluating a predicate.
 ///
 /// The returned predicate first applies `project` to the input and then
 /// evaluates `predicate` against the projected value.
-///
-/// # Example
-///
-/// ```
-/// use via::guard::header::media;
-/// use via::guard::on::project;
-/// use via::guard::{header, on};
-///
-/// let predicate = on(project::Headers, header::accept(media::json()));
-/// ```
-pub fn on<T, U>(projector: T, predicate: U) -> On<T, U> {
+pub fn on<T, U>(predicate: T, projector: U) -> On<T, U> {
     On {
-        projector,
         predicate,
+        projector,
     }
 }
 
-/// Evaluate a predicate against a request's headers.
-///
-/// This is a convenience wrapper around [`on`] that projects
-/// [`Request::headers`].
-///
-/// # Example
-///
-/// ```
-/// use via::guard::header::media;
-/// use via::guard::{header, on};
-///
-/// // Requests bodies are JSON and have a known length.
-/// let predicate = on::headers((
-///     header::content_length(),
-///     header::content_type(media::json()),
-/// ));
-/// ```
-pub fn headers<T>(predicate: T) -> Headers<T> {
-    on(project::Headers, predicate)
+/// Evaluate `predicate` against the request extensions.
+pub fn extensions<T>(predicate: T) -> On<T, Extensions> {
+    on(predicate, Extensions)
 }
 
-/// Evaluate a predicate against a request's method.
-///
-/// This is a convenience wrapper around [`on`] that projects
-/// [`Request::method`].
+/// Evaluate `predicate` against the request extension of type `U`.
+pub fn extension<T, U>(predicate: T) -> On<T, Extension<U>> {
+    on(predicate, Extension { _ty: PhantomData })
+}
+
+/// Evaluate `predicate` against a request's headers.
+pub fn headers<T>(predicate: T) -> On<T, Headers> {
+    on(predicate, Headers)
+}
+
+/// Evaluate `predicate` against a request's method.
 ///
 /// # Example
 ///
 /// ```
-/// use http::Method;
-/// use via::guard::method::allow;
-/// use via::guard::{self, on};
+/// use via::guard::{self, on, method};
+/// use via::{Request, Next};
 ///
-/// let patch_or_put = guard::or((allow(Method::PATCH), allow(Method::PUT)));
-/// let predicate = on::method(patch_or_put);;
+/// let update = guard::flat_map(
+///     on::method(guard::or((method::patch(), method::put()))),
+///     async |_: Request, _: Next| {
+///         todo!("update the resource that matches the uri path");
+///     }
+/// );
 /// ```
-pub fn method<T>(predicate: T) -> Method<T> {
-    on(project::Method, predicate)
+pub fn method<T>(predicate: T) -> On<T, Method> {
+    on(predicate, Method)
+}
+
+/// Evaluate `predicate` against the request URI path.
+pub fn path<T>(predicate: T) -> On<T, Path> {
+    on(predicate, Path)
+}
+
+/// Evaluate `predicate` against the request URI query.
+pub fn query<T>(predicate: T) -> On<T, Query> {
+    on(predicate, Query)
+}
+
+/// Evaluate `predicate` against the request URI.
+pub fn uri<T>(predicate: T) -> On<T, Uri> {
+    on(predicate, Uri)
+}
+
+pub(super) fn header<T>(predicate: T, name: HeaderName) -> On<T, Header> {
+    on(predicate, Header { name })
+}
+
+impl<T, U> On<T, U> {
+    /// Make the predicate's projected input optional.
+    ///
+    /// If the field projection fails, the predicate returns `Ok(())`.
+    pub fn opt(self) -> Opt<T, U> {
+        Opt {
+            predicate: self.predicate,
+            projector: self.projector,
+        }
+    }
 }
 
 impl<T, U, Input> Predicate<Input> for On<T, U>
 where
-    for<'a> T: Project<Input> + 'a,
-    for<'a> U: Predicate<T::Output> + 'a,
+    for<'a> T: Predicate<U::Output> + 'a,
+    for<'a> U: Project<Input> + 'a,
 {
-    type Error<'a> = U::Error<'a>;
+    type Error<'a> = OnError<T::Error<'a>, U::Error<'a>>;
 
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
-        let project = self.projector.project(input);
-        self.predicate.cmp(project)
+        self.projector
+            .project(input)
+            .map_err(OnError::Project)
+            .and_then(|input| self.predicate.cmp(input).map_err(OnError::Predicate))
+    }
+}
+
+impl<T, U, Input> Predicate<Input> for Opt<T, U>
+where
+    for<'a> T: Predicate<U::Output> + 'a,
+    for<'a> U: Project<Input> + 'a,
+{
+    type Error<'a> = T::Error<'a>;
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
+        self.projector
+            .project(input)
+            .map_or(Ok(()), |input| self.predicate.cmp(input))
     }
 }

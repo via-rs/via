@@ -83,6 +83,7 @@ impl<'a> InvalidHeader<'a> {
         Self { source }
     }
 
+    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
     pub(crate) fn name(&self) -> &HeaderName {
         match self.source {
             OnError::Predicate(name) | OnError::Project(name) => name,

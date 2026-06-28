@@ -98,10 +98,8 @@ where
     type Error<'a> = ();
 
     fn cmp<'a>(&'a self, value: &[u8]) -> Result<(), Self::Error<'a>> {
-        let separator = &self.separator;
-
         if value
-            .split(|byte| byte == separator)
+            .split(|byte| *byte == self.separator)
             .any(|input| self.predicate.cmp(input).is_ok())
         {
             Ok(())

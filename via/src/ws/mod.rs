@@ -34,11 +34,6 @@ pub use upgrade::Ws;
 
 /// Upgrade the connection to a web socket.
 ///
-/// *Note:*
-///
-/// In order to guarantee progress of the receive loop of your web socket
-/// listener, you must await at least one future in the body of the loop.
-///
 /// # Example
 ///
 /// ```no_run
@@ -68,7 +63,7 @@ pub use upgrade::Ws;
 ///     let mut app = via::app(());
 ///
 ///     // GET /echo ~> web socket upgrade.
-///     app.route("/echo").to(via::ws(echo));
+///     app.route("/echo").to(via::get(via::ws(echo)).or_deny());
 ///
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
 /// }

@@ -4,8 +4,8 @@
 //! [`Request`].
 //!
 //! The implementations for method are useful with projection combinators like
-//! [`on`], while the implementations for request make the common case
-//! straightforward.
+//! those found in the [`on`] module, while the implementations for request
+//! make the common case straightforward.
 //!
 //! [`Method`] is the only contextual predicate in this module. When evaluated
 //! against an input type, it returns a [contextual error] that can be into a
@@ -64,7 +64,7 @@
 //! [`filter`]: crate::guard::filter
 //! [`flat_map`]: crate::guard::flat_map
 //! [`get`]: crate::get
-//! [`on`]: fn@crate::guard::on
+//! [`on`]: mod@crate::guard::on
 //! [`post`]: crate::post
 //! [`put`]: crate::put
 

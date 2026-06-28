@@ -9,7 +9,7 @@ mod predicate;
 
 pub use header::{Header, header};
 pub use method::Method;
-pub use on::{On, on};
+pub use on::{On, Project, on};
 pub use predicate::*;
 
 pub use via_macros::content;

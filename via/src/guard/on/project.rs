@@ -45,8 +45,8 @@ pub struct Uri;
 ///
 /// ```
 /// use std::convert::Infallible;
-/// use via::guard::on::{On, Project};
-/// use via::{Request, guard};
+/// use via::guard::{self, On, Project};
+/// use via::Request;
 ///
 /// pub struct Path;
 ///

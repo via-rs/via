@@ -175,8 +175,8 @@ pub struct Any;
 ///
 /// To demonstrate this, let's reimplement the [`method::is_safe`] predicate
 /// using combinators rather than [the fn](http::Method::is_safe) defined in
-/// `impl Method` from the [`http`] crate. The [`on`] combinator works great
-/// for this type of projection:
+/// `impl Method` from the [`http`] crate. The [`on`] module provides
+/// combinators that work great for this type of projection:
 ///
 /// ```no_run
 /// use http::Method;
@@ -217,7 +217,7 @@ pub struct Any;
 /// [`HeaderName`]: http::HeaderName
 /// [`Method`]: http::Method
 /// [`method::is_safe`]: crate::guard::method::is_safe
-/// [`on`]: fn@crate::guard::on
+/// [`on`]: mod@crate::guard::on
 pub trait Predicate<Input: ?Sized> {
     /// The error type returned if the predicate fails.
     type Error<'a>

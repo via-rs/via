@@ -10,6 +10,7 @@ pub struct MissingUriQuery;
 /// The request is missing an extension.
 pub struct UnknownExtension;
 
+/// A request header is either missing or invalid.
 pub struct InvalidHeader<'a> {
     source: OnError<&'a HeaderName, &'a HeaderName>,
 }
@@ -82,7 +83,7 @@ impl<'a> InvalidHeader<'a> {
         Self { source }
     }
 
-    pub fn name(&self) -> &HeaderName {
+    pub(crate) fn name(&self) -> &HeaderName {
         match self.source {
             OnError::Predicate(name) | OnError::Project(name) => name,
         }

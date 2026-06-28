@@ -8,6 +8,11 @@ pub struct Contains<T = Tag> {
     separator: u8,
 }
 
+/// Trim the ASCII whitespace around the input before testing a predicate.
+pub struct Trim<T> {
+    predicate: T,
+}
+
 macro_rules! cmp_bytes {
     ($(
         $(#[$($doc:tt)*])?
@@ -70,6 +75,22 @@ pub fn contains<T>(predicate: T, separator: u8) -> Contains<T> {
     }
 }
 
+/// Trim the ASCII whitespace around the input before testing `predicate`.
+pub fn trim<T>(predicate: T) -> Trim<T> {
+    Trim { predicate }
+}
+
+impl<T> Predicate<[u8]> for Trim<T>
+where
+    for<'a> T: Predicate<[u8]> + 'a,
+{
+    type Error<'a> = T::Error<'a>;
+
+    fn cmp<'a>(&'a self, input: &[u8]) -> Result<(), Self::Error<'a>> {
+        self.predicate.cmp(input.trim_ascii())
+    }
+}
+
 impl<T> Predicate<[u8]> for Contains<T>
 where
     for<'a> T: Predicate<[u8]> + 'a,
@@ -77,10 +98,12 @@ where
     type Error<'a> = ();
 
     fn cmp<'a>(&'a self, value: &[u8]) -> Result<(), Self::Error<'a>> {
-        if value.split(|byte| byte == &self.separator).any(|item| {
-            let input = item.trim_ascii();
-            self.predicate.cmp(input).is_ok()
-        }) {
+        let separator = &self.separator;
+
+        if value
+            .split(|byte| byte == separator)
+            .any(|input| self.predicate.cmp(input).is_ok())
+        {
             Ok(())
         } else {
             Err(())

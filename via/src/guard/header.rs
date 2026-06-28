@@ -1,27 +1,33 @@
-//! Well-known request header combinators and predicates.
+//! Predicate combinators for testing request headers.
 
 use http::header::{self as h, HeaderMap, HeaderName};
 use std::fmt::Debug;
 
-use super::bytes::{Contains, contains};
+use super::bytes::{Contains, Trim, contains, trim};
 use super::error::{InvalidHeader, OnError};
 use super::on::{self, On};
 use super::{Any, OkOr, Predicate, any, media, ok_or, or};
 use crate::Request;
 
-/// Require that a header associated with a key matches a predicate.
+/// The value predicate of an `Accept` header.
+pub type Accept<T> = Contains<Trim<media::AllOr<T>>>;
+
+/// Require that the header for `key` matches `value`.
 pub struct Header<T> {
     predicate: On<OkOr<T, HeaderName>, on::Header>,
 }
 
-/// When present, require that the header value for `key` matches `value`.
+/// When present, require that the header for `key` matches `value`.
 pub struct Opt<T> {
     predicate: on::Opt<OkOr<T, HeaderName>, on::Header>,
 }
 
 /// The value of `Accept` must include `"*/*"` or match `predicate`.
-pub fn accept<T>(predicate: T) -> Header<Contains<media::AllOr<T>>> {
-    header(h::ACCEPT, contains(or((media::all(), predicate)), b','))
+pub fn accept<T>(predicate: T) -> Header<Accept<T>> {
+    header(
+        h::ACCEPT,
+        contains(trim(or((media::all(), predicate))), b','),
+    )
 }
 
 /// The value of `Content-Type` must match `predicate`.

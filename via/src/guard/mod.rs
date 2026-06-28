@@ -8,7 +8,7 @@ pub mod on;
 mod predicate;
 
 pub use header::{Header, header};
-pub use method::{Method, method};
+pub use method::Method;
 pub use on::{On, on};
 pub use predicate::*;
 

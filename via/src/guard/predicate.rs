@@ -192,10 +192,10 @@ pub struct Any;
 ///     // If the request method is safe, cache the response.
 ///     app.middleware(guard::filter(
 ///         on::method(guard::or((
-///             method(Method::GET),
-///             method(Method::HEAD),
-///             method(Method::OPTIONS),
-///             method(Method::TRACE),
+///             method::get(),
+///             method::head(),
+///             method::options(),
+///             method::trace(),
 ///         ))),
 ///         async |request, next| {
 ///             todo!("implement response caching");

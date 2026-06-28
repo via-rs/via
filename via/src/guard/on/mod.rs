@@ -62,11 +62,15 @@ pub fn headers<T>(predicate: T) -> On<T, Headers> {
 /// # Example
 ///
 /// ```
-/// use http::Method;
 /// use via::guard::{self, on, method};
+/// use via::{Request, Next};
 ///
-/// let patch_or_put = guard::or((method(Method::PATCH), method(Method::PUT)));
-/// let predicate = on::method(patch_or_put);;
+/// let update = guard::flat_map(
+///     on::method(guard::or((method::patch(), method::put()))),
+///     async |_: Request, _: Next| {
+///         todo!("update the resource that matches the uri path");
+///     }
+/// );
 /// ```
 pub fn method<T>(predicate: T) -> On<T, Method> {
     on(predicate, Method)

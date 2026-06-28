@@ -1,10 +1,10 @@
 //! Predicate combinators for HTTP media types.
 
-use crate::guard::bytes::{CaseSensitive, Tag, case_sensitive, tag};
+use crate::guard::bytes::{Tag, TagNoCase, tag, tag_no_case};
 use crate::guard::{Or, Predicate};
 
 /// Match `"*/*"(; charset=*)?` or predicate `T`.
-pub type AllOr<T> = Or<(Media<CaseSensitive>, T)>;
+pub type AllOr<T> = Or<(Media<TagNoCase>, T)>;
 
 /// An essence string with an optional charset.
 ///
@@ -13,8 +13,8 @@ pub type AllOr<T> = Or<(Media<CaseSensitive>, T)>;
 pub struct Media<T = Tag>(T, Option<Tag>);
 
 /// Match `"*/*"(; charset=*)?`.
-pub fn all() -> Media<CaseSensitive> {
-    media(case_sensitive(b"*/*"), None)
+pub fn all() -> Media<TagNoCase> {
+    media(tag_no_case(b"*/*"), None)
 }
 
 /// Match `"text/html"(; charset=utf-8)?`.

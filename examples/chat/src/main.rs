@@ -99,7 +99,7 @@ async fn main() -> Result<ExitCode, Error> {
     let mut users = api.route("users").to(via::post(users::create));
     //                                    ^^^^^^^^^^^^^^^^^^^^^^^^
     // Creating an account does not require authentication.
-    // However, subsquenet request to users resource must be authenticated.
+    // However, subsequent request to users resource must be authenticated.
     users.middleware(guard::barrier(session::is_authenticated()));
 
     users.index().to(via::get(users::index));

@@ -6,7 +6,7 @@ use cookie::Key;
 use std::process::ExitCode;
 use via::error::{Error, rescue};
 use via::guard::{self, media, method};
-use via::{Server, collection, cookies, member, rest};
+use via::{Middleware, Server, collection, cookies, member, middleware, rest};
 
 use database::Database;
 use routes::auth::{login, logout, me};
@@ -53,22 +53,29 @@ async fn main() -> Result<ExitCode, Error> {
     // Parse and track changes that are made to the session cookie.
     api.middleware(cookies([session::COOKIE]));
 
-    // Confirm that the client speaks JSON, then load the session from the
-    // session cookie if it is present in the request.
+    // Content negotiation and authentication guards.
     api.middleware(guard::flat_map(
+        // Confirm that the client speaks JSON.
         guard::content!(media::json()),
-        session::restore(),
-    ));
+        // Then, initialize the active user session.
+        middleware(|mut request, next| {
+            // If the request is read only or the session was verified in the
+            // past hour, skip verifying that the user still has an account.
+            //
+            // This is safe so long as your app is the authoritative source of
+            // truth for the session and you properly end websocket sessions if
+            // the user deletes their account.
+            let auth = guard::filter(
+                guard::or((method::is_mutation(), session::is_stale())),
+                session::refresh(),
+            );
 
-    // If the TTL of the session's identity has not expired and the request can
-    // be cached, we can skip verifying that the user still exists.
-    //
-    // This optimization is safe so long as your app is the authoritative
-    // source of truth for the session and you properly end websocket sessions
-    // if the user deletes their account.
-    api.middleware(guard::filter(
-        guard::or((method::is_mutation(), session::is_stale())),
-        session::refresh,
+            // Restore the an identity token from the session cookie.
+            match session::restore(&mut request) {
+                Ok(_) => auth.call(request, next),
+                Err(error) => Box::pin(async { Err(error) }),
+            }
+        }),
     ));
 
     // The /api/auth namespace.

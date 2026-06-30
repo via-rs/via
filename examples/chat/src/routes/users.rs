@@ -11,6 +11,7 @@ pub async fn index(_: Request, _: Next) -> via::Result {
 }
 
 pub async fn create(request: Request, _: Next) -> via::Result {
+    println!("create user");
     let (future, app) = request.into_future();
     let Body { data } = future.await?.be_z_json::<Body<NewUser>>()?;
 

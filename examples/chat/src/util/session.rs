@@ -4,6 +4,7 @@ use cookie::{Cookie, Key, SameSite};
 use http::StatusCode;
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
+use via::guard::{OkOr, Predicate};
 use via::{Error, Middleware, Response, deny, err, guard};
 
 use crate::database::models::User;
@@ -14,8 +15,6 @@ pub const COOKIE: &str = "via-chat-session";
 
 const EXPIRES_AT: usize = 8;
 const TOKEN_LEN: usize = 16;
-
-pub type IsAuthenticated = guard::MapErr<fn(()) -> Unauthorized, fn(&Request) -> bool>;
 
 pub trait Authenticate {
     fn authenticate(&mut self, secret: &Key, user: Option<Identity>);
@@ -31,25 +30,25 @@ pub struct Identity([u8; 16]);
 
 pub struct RestoreSession;
 
+#[derive(Clone, Copy)]
 pub struct Unauthorized;
 
 #[derive(Clone)]
 struct ProtectFromForgery(Identity);
 
-pub fn is_authenticated() -> IsAuthenticated {
-    guard::map_err(
-        |_| Unauthorized,
-        |request| {
-            request.session().is_some_and(|id| {
-                let now = OffsetDateTime::now_utc().unix_timestamp();
-                id.expires_at().is_ok_and(|timestamp| timestamp > now)
-            })
-        },
-    )
+pub fn is_authenticated() -> OkOr<fn(&Request) -> bool, Unauthorized> {
+    let predicate = |request: &Request| {
+        request.session().is_some_and(|id| {
+            let now = OffsetDateTime::now_utc().unix_timestamp();
+            id.expires_at().is_ok_and(|timestamp| timestamp > now)
+        })
+    };
+
+    guard::ok_or(predicate, Unauthorized)
 }
 
-pub fn is_stale() -> impl Fn(&Request) -> bool + Copy {
-    |request| request.session().is_none_or(Identity::is_expired)
+pub fn is_stale() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
+    |request: &Request| request.session().is_none_or(Identity::is_expired)
 }
 
 pub fn unauthorized<T>() -> via::Result<T> {
@@ -240,5 +239,11 @@ impl Middleware<Unicorn> for RestoreSession {
 impl From<Unauthorized> for via::Error {
     fn from(_: Unauthorized) -> Self {
         err!(401, "unauthorized.")
+    }
+}
+
+impl From<&'_ Unauthorized> for via::Error {
+    fn from(error: &Unauthorized) -> Self {
+        From::from(*error)
     }
 }

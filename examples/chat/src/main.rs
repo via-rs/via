@@ -5,9 +5,8 @@ mod util;
 use cookie::Key;
 use std::process::ExitCode;
 use via::error::{Error, rescue};
-use via::guard::header::media;
-use via::guard::{content, method, not, or};
-use via::{Server, collection, cookies, guard, member, rest};
+use via::guard::{self, media, method};
+use via::{Server, collection, cookies, member, rest};
 
 use database::Database;
 use routes::auth::{login, logout, me};
@@ -57,7 +56,7 @@ async fn main() -> Result<ExitCode, Error> {
     // Confirm that the client speaks JSON, then load the session from the
     // session cookie if it is present in the request.
     api.middleware(guard::flat_map(
-        content(media::json(), media::json()),
+        guard::content!(media::json()),
         session::restore(),
     ));
 
@@ -68,7 +67,7 @@ async fn main() -> Result<ExitCode, Error> {
     // source of truth for the session and you properly end websocket sessions
     // if the user deletes their account.
     api.middleware(guard::filter(
-        or((not(method::is_safe()), session::is_stale())),
+        guard::or((method::is_mutation(), session::is_stale())),
         session::refresh,
     ));
 
@@ -94,7 +93,7 @@ async fn main() -> Result<ExitCode, Error> {
     //                                    ^^^^^^^^^^^^^^^^^^^^^^^^
     // Creating an account does not require authentication.
     // However, subsquenet request to users resource must be authenticated.
-    users.middleware(guard(session::is_authenticated()));
+    users.middleware(guard::barrier(session::is_authenticated()));
 
     users.index().to(via::get(users::index));
     users.route(":user-id").to(member!(users));
@@ -103,7 +102,7 @@ async fn main() -> Result<ExitCode, Error> {
     let mut channels = api.route("channels");
 
     // All requests to the channels resource must be authenticated.
-    channels.middleware(guard(session::is_authenticated()));
+    channels.middleware(guard::barrier(session::is_authenticated()));
 
     channels.index().to(collection!(channels));
     channels.route(":channel-id").scope(|channel| {

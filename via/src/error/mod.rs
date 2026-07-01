@@ -1,6 +1,7 @@
 //! Error handling.
 //!
 
+mod catch;
 mod macros;
 mod rescue;
 mod result;
@@ -14,6 +15,7 @@ use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::{self, Error as IoError};
 
+pub use catch::{Catch, Propagate};
 pub use rescue::{Rescue, Sanitizer, rescue};
 pub use result::ResultExt;
 pub(crate) use server::ServerError;

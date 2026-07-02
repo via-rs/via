@@ -6,3 +6,4 @@ examples/*/*.key
 examples/*/*.p12
 examples/*/.env
 !examples/*/example.env
+examples/chat/schema.json

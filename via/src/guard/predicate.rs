@@ -228,6 +228,11 @@ pub trait Predicate<Input: ?Sized> {
     fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>>;
 }
 
+/// Convert a contextual predicate into boolean predicate.
+pub struct Bool<T> {
+    predicate: T,
+}
+
 /// Conditionally execute either the second or third predicate based on the
 /// first.
 pub struct IfElse<P, T, E> {
@@ -357,6 +362,60 @@ pub fn any() -> Any {
     Any
 }
 
+/// Makes `predicate` a boolean predicate.
+///
+/// # Example
+///
+/// ```
+/// use via::error::Propagate;
+/// use via::guard::{self, Predicate, method, on};
+/// use via::ws::{self, Channel, Request};
+/// use via::{Error, err};
+///
+/// #[derive(Clone)]
+/// struct Session {
+///     user_id: Option<u64>,
+/// }
+///
+/// // Create a new application.
+/// let mut app = via::app(());
+///
+/// // Returns a contextual, extension-based auth predicate.
+/// let authenticate = || {
+///     guard::into_error(
+///         on::extension(|session: &Session| session.user_id.is_some()),
+///         |_| err!(401, "unauthorized.")
+///     )
+/// };
+///
+/// // Authenticated GET requests can open a web socket.
+/// app.route("/chat").to(guard::filter(
+///     guard::or((guard::bool(method::get()), guard::bool(authenticate()))),
+///     //                                            ^^^^
+///     // The contextual predicate error is never constructed. The ErrorThunk
+///     // is dropped when the output is coerced to a boolean.
+///     //
+///     // This keeps the guard to the /chat route allocation free all while
+///     // maintaining compatibility with guards that require a contextual
+///     // predicate such as `barrier` or `flat_map`.
+///     via::ws(async |mut channel: Channel, request: Request| {
+///         while let Some(message) = channel.recv().await {
+///             if message.is_binary() || message.is_text() {
+///                 let text = message.to_text().or_continue()?;
+///                 println!("message received: {}", &text);
+///             } else if message.is_close() {
+///                 break;
+///             }
+///         }
+///
+///         Ok(())
+///     }),
+/// ));
+/// ```
+pub fn bool<T>(predicate: T) -> Bool<T> {
+    Bool { predicate }
+}
+
 /// Conditionally execute either the second or third predicate based on the
 /// first.
 pub fn if_else<P, T, E>(predicate: P, if_true: T, or_else: E) -> IfElse<P, T, E> {
@@ -426,6 +485,22 @@ where
 
     fn cmp<'a>(&'a self, _: &Input) -> Result<(), Self::Error<'a>> {
         Ok(())
+    }
+}
+
+impl<T, Input> Predicate<Input> for Bool<T>
+where
+    for<'a> T: Predicate<Input> + 'a,
+    Input: ?Sized,
+{
+    type Error<'a> = ();
+
+    fn cmp<'a>(&'a self, input: &Input) -> Result<(), Self::Error<'a>> {
+        if self.predicate.cmp(input).is_ok() {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 

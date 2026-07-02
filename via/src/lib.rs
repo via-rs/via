@@ -45,6 +45,20 @@
 //! proud of.
 //!
 
+macro_rules! log {
+    ($level:tt($name:ident = $indent:expr), $fmt:literal $($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "{:indent$}{}({}): {}",
+            "",
+            stringify!($level),
+            stringify!($name),
+            format_args!($fmt $($arg)*),
+            indent = $indent * 2,
+        );
+    };
+}
+
 pub mod error;
 pub mod guard;
 pub mod request;
@@ -55,6 +69,7 @@ pub mod router;
 pub mod ws;
 
 mod app;
+mod before;
 mod cookies;
 mod middleware;
 mod next;
@@ -63,6 +78,7 @@ mod server;
 mod util;
 
 pub use app::{Shared, Via, app};
+pub use before::{Before, before};
 pub use cookies::{Cookies, cookies};
 pub use error::{Error, ResultExt, rescue};
 pub use middleware::{BoxFuture, Middleware, Result, middleware};

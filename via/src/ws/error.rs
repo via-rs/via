@@ -1,7 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::ops::ControlFlow;
 
-use crate::error::Error;
+use crate::error::{Catch, Error};
 use crate::guard::error::InvalidHeader;
 
 #[cfg(feature = "tokio-tungstenite")]
@@ -10,14 +10,7 @@ pub use tungstenite::error::Error as WebSocketError;
 #[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
 pub use tokio_websockets::error::Error as WebSocketError;
 
-pub type Result<T = ()> = std::result::Result<T, ControlFlow<Error, Error>>;
-
-pub trait ResultExt {
-    type Output;
-
-    fn or_close(self) -> Result<Self::Output>;
-    fn or_reconnect(self) -> Result<Self::Output>;
-}
+pub type Result<T = ()> = std::result::Result<T, Catch>;
 
 #[derive(Debug)]
 pub enum UpgradeError {
@@ -28,11 +21,11 @@ pub enum UpgradeError {
     Other,
 }
 
-pub fn already_closed() -> ControlFlow<Error, Error> {
+pub fn already_closed() -> Catch {
     ControlFlow::Break(Error::from_source(Box::new(WebSocketError::AlreadyClosed)))
 }
 
-pub fn rescue(error: WebSocketError) -> ControlFlow<Error, Error> {
+pub fn rescue(error: WebSocketError) -> Catch {
     use std::io::ErrorKind;
 
     if let WebSocketError::Io(io) = &error
@@ -76,34 +69,5 @@ impl From<InvalidHeader<'_>> for UpgradeError {
             "upgrade" => UpgradeError::UnknownUpgradeType,
             _ => UpgradeError::Other,
         }
-    }
-}
-
-impl ResultExt for Error {
-    type Output = ();
-
-    fn or_close(self) -> Result<Self::Output> {
-        Err(ControlFlow::Break(self))
-    }
-
-    fn or_reconnect(self) -> Result<Self::Output> {
-        Err(ControlFlow::Continue(self))
-    }
-}
-
-impl<T, E> ResultExt for std::result::Result<T, E>
-where
-    Error: From<E>,
-{
-    type Output = T;
-
-    #[inline]
-    fn or_close(self) -> Result<Self::Output> {
-        self.map_err(|error| ControlFlow::Break(error.into()))
-    }
-
-    #[inline]
-    fn or_reconnect(self) -> Result<Self::Output> {
-        self.map_err(|error| ControlFlow::Continue(error.into()))
     }
 }

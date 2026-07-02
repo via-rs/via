@@ -109,7 +109,7 @@ where
         #[cfg(not(debug_assertions))]
         let _ = error;
 
-        log!(error(0), "{}", error);
+        log!(error(ws = 0), "{}", error);
     }
 }
 

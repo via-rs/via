@@ -34,13 +34,13 @@ pub struct Unauthorized;
 
 pub fn is_authenticated() -> impl for<'a> Predicate<Request, Error<'a> = &'a Unauthorized> {
     guard::ok_or(
-        guard::not(on::extension(Identity::is_expired)),
+        on::extension(guard::not(Identity::is_expired)),
         Unauthorized,
     )
 }
 
 pub fn needs_verified() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
-    |request: &Request| request.session().is_none_or(Identity::is_expired)
+    guard::bool(on::extension(Identity::is_expired).opt())
 }
 
 pub fn unauthorized<T>() -> via::Result<T> {

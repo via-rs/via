@@ -4,8 +4,9 @@ use cookie::{Cookie, Key, SameSite};
 use http::StatusCode;
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
-use via::guard::{OkOr, Predicate};
-use via::{Error, Middleware, Response, deny, err, guard};
+use via::error::{Catch, Error, Propagate};
+use via::guard::{self, Predicate, on};
+use via::{Middleware, Response, deny, err};
 
 use crate::database::models::User;
 use crate::database::{Database, Id};
@@ -31,18 +32,14 @@ pub struct Identity([u8; 16]);
 #[derive(Clone, Copy)]
 pub struct Unauthorized;
 
-pub fn is_authenticated() -> OkOr<fn(&Request) -> bool, Unauthorized> {
-    let predicate = |request: &Request| {
-        request.session().is_some_and(|id| {
-            let now = OffsetDateTime::now_utc().unix_timestamp();
-            id.expires_at().is_ok_and(|timestamp| timestamp > now)
-        })
-    };
-
-    guard::ok_or(predicate, Unauthorized)
+pub fn is_authenticated() -> impl for<'a> Predicate<Request, Error<'a> = &'a Unauthorized> {
+    guard::ok_or(
+        guard::not(on::extension(Identity::is_expired)),
+        Unauthorized,
+    )
 }
 
-pub fn is_stale() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
+pub fn needs_verified() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
     |request: &Request| request.session().is_none_or(Identity::is_expired)
 }
 
@@ -50,16 +47,24 @@ pub fn unauthorized<T>() -> via::Result<T> {
     deny!(401, "unauthorized")
 }
 
-pub fn restore(request: &mut Request) -> via::Result<()> {
-    if let Some(cookie) = request.cookies().signed(request.app().secret()).get(COOKIE) {
-        let identity = cookie.value().parse::<Identity>()?;
-        request.extensions_mut().insert(identity);
-    }
+pub fn restore(request: &mut Request) -> Result<(), Catch> {
+    let jar = {
+        let secret = request.app().secret();
+        request.cookies().signed(secret)
+    };
+
+    let token = jar
+        .get(COOKIE)
+        .ok_or(Unauthorized)
+        .and_then(|cookie| cookie.value().parse::<Identity>())
+        .or_continue()?;
+
+    request.extensions_mut().insert(token);
 
     Ok(())
 }
 
-pub fn refresh() -> impl Middleware<Unicorn> + 'static {
+pub fn verify() -> impl Middleware<Unicorn> + 'static {
     via::middleware::<_, Unicorn>(|mut request, next| {
         let app = request.app_owned();
 
@@ -155,16 +160,14 @@ impl Identity {
 }
 
 impl FromStr for Identity {
-    type Err = via::Error;
+    type Err = Unauthorized;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let mut buf = [0u8; TOKEN_LEN];
 
-        if URL_SAFE_NO_PAD.decode_slice(input, &mut buf).is_err() {
-            deny!(400, "unknown session cookie format.");
-        }
-
-        Ok(Identity(buf))
+        URL_SAFE_NO_PAD
+            .decode_slice(input, &mut buf)
+            .map_or(Err(Unauthorized), |_| Ok(Identity(buf)))
     }
 }
 

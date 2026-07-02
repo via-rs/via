@@ -1,5 +1,6 @@
 use serde::Deserialize;
-use via::ws::{self, Channel, ResultExt};
+use via::error::Propagate;
+use via::ws::{self, Channel};
 
 use crate::util::Session;
 
@@ -23,7 +24,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
 
     // An active session is required to keep the web socket open.
     let Some(session) = request.session().copied() else {
-        return via::err!(401, "unauthorized.").or_close();
+        return via::err!(401, "unauthorized.").or_break();
     };
 
     while let Some(next) = channel.recv().await {
@@ -40,14 +41,14 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
             // or restart the session.
 
             #[cfg(feature = "tokio-tungstenite")]
-            let text = next.to_text().or_reconnect()?;
+            let text = next.to_text().or_continue()?;
 
             #[cfg(feature = "tokio-websockets")]
-            let text = str::from_utf8(next.as_payload()).or_reconnect()?;
+            let text = str::from_utf8(next.as_payload()).or_continue()?;
 
             // In this example, we want to keep the number of allocations as
             // low as possible. Therefore, we use `serde_json` directly...
-            serde_json::from_str::<Message>(text).or_reconnect()?
+            serde_json::from_str::<Message>(text).or_continue()?
         } else {
             log!("  warn(examples/chat): ignoring message {:?}", next);
             continue; // Other message types are handled internally. Continue.

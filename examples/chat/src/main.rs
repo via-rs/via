@@ -6,7 +6,7 @@ use cookie::Key;
 use std::process::ExitCode;
 use via::error::{Error, rescue};
 use via::guard::{self, media, method};
-use via::{Middleware, Server, collection, cookies, member, middleware, rest};
+use via::{Server, collection, cookies, member, rest};
 
 use database::Database;
 use routes::auth::{login, logout, me};
@@ -58,24 +58,20 @@ async fn main() -> Result<ExitCode, Error> {
         // Confirm that the client speaks JSON.
         guard::content!(media::json()),
         // Then, initialize the active user session.
-        middleware(|mut request, next| {
+        via::before(
+            // Restore an identity token from the session cookie.
+            session::restore,
             // If the request is read only or the session was verified in the
             // past hour, skip verifying that the user still has an account.
             //
             // This is safe so long as your app is the authoritative source of
             // truth for the session and you properly end websocket sessions if
             // the user deletes their account.
-            let auth = guard::filter(
-                guard::or((method::is_mutation(), session::is_stale())),
-                session::refresh(),
-            );
-
-            // Restore the an identity token from the session cookie.
-            match session::restore(&mut request) {
-                Ok(_) => auth.call(request, next),
-                Err(error) => Box::pin(async { Err(error) }),
-            }
-        }),
+            guard::filter(
+                guard::or((method::is_mutation(), session::needs_verified())),
+                session::verify(),
+            ),
+        ),
     ));
 
     // The /api/auth namespace.

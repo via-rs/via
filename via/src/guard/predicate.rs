@@ -362,7 +362,7 @@ pub fn any() -> Any {
     Any
 }
 
-/// Makes `predicate` a boolean predicate.
+/// Convert `predicate` into a boolean predicate.
 ///
 /// # Example
 ///

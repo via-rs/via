@@ -89,6 +89,18 @@ impl Drop for Facade {
     }
 }
 
+macro_rules! indent {
+    ($i:ident = $value:expr) => {
+        #[cfg(debug_assertions)]
+        {
+            $i = $value;
+        }
+    };
+    ($i:ident) => {
+        indent!($i = $i + 1);
+    };
+}
+
 impl Future for Facade {
     type Output = super::Result;
 
@@ -107,7 +119,8 @@ impl Future for Facade {
 
             match &mut self.state {
                 IoState::Receive => {
-                    log!(info(i), "state = receive");
+                    log!(info(ws = i), "state = receive");
+                    indent!(i);
 
                     // Confirm that the listener can receive the next message.
                     if self.rendezvous.has_capacity()? {
@@ -120,10 +133,10 @@ impl Future for Facade {
 
                             // If send fails, the channel is disconnected.
                             self.rendezvous.try_send(received)?;
-                            log!(info(i + 2), "inbound message forwarded to listener.");
+                            log!(info(ws = i), "inbound message forwarded to listener.");
                         }
                     } else {
-                        log!(info(i + 2), "listener is busy.");
+                        log!(info(ws = i), "listener is busy.");
                     }
 
                     // The listener will probably register an additional wake.
@@ -133,27 +146,31 @@ impl Future for Facade {
                     }
 
                     if let Some(sent) = self.rendezvous.try_recv()? {
-                        log!(info(i + 2), "outbound message received from listener.");
+                        log!(info(ws = i), "outbound message received from listener.");
+                        indent!(i);
+
                         self.state = IoState::Send(sent);
                     } else {
-                        log!(info(i + 2), "waiting for something interesting to happen.");
+                        log!(info(ws = i), "waiting for something interesting to happen.");
                         return Poll::Pending;
                     }
                 }
 
                 state @ IoState::Send(_) => {
-                    log!(info(i), "state = send");
+                    log!(info(ws = i), "state = send");
+                    indent!(i);
 
                     let mut sink = Pin::new(stream);
 
                     if sink.as_mut().poll_ready(cx).map_err(rescue)?.is_pending() {
-                        log!(info(i + 2), "waiting for i/o to become available.");
+                        log!(info(ws = i), "waiting for i/o to become available.");
                         return Poll::Pending;
                     }
 
                     if let IoState::Send(message) = mem::replace(state, IoState::Flush) {
                         sink.as_mut().start_send(message).map_err(rescue)?;
-                        log!(info(i + 2), "outbound message accepted by i/o.");
+                        log!(info(ws = i), "outbound message accepted by i/o.");
+                        indent!(i);
                     } else {
                         // We are in an invalid state. This can be interpreted
                         // as a signal that the risk of re-entrance is elevated
@@ -163,23 +180,19 @@ impl Future for Facade {
                 }
 
                 IoState::Flush => {
-                    log!(info(i), "state = flush");
+                    log!(info(ws = i), "state = flush");
+                    indent!(i);
 
                     if Pin::new(stream).poll_flush(cx).map_err(rescue)?.is_ready() {
-                        log!(info(i + 2), "outbound message sent successfully.");
+                        log!(info(ws = i), "outbound message sent successfully.");
                         self.state = IoState::Receive;
                         cx.waker().wake_by_ref();
                     } else {
-                        log!(info(i + 2), "waiting for flush to complete.");
+                        log!(info(ws = i), "waiting for flush to complete.");
                     }
 
                     return Poll::Pending;
                 }
-            }
-
-            #[cfg(debug_assertions)]
-            {
-                i += 4;
             }
         }
     }
@@ -247,14 +260,14 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
             Poll::Ready(Err(ControlFlow::Break(error))) => {
-                log!(error(0), "{}", &error);
+                log!(error(ws = 0), "{}", &error);
                 Poll::Ready(Err(error))
             }
             Poll::Ready(Err(ControlFlow::Continue(error))) => {
                 #[cfg(not(debug_assertions))]
                 let _ = error;
 
-                log!(warn(0), "{}", &error);
+                log!(warn(ws = 1), "{}", &error);
 
                 this.reconnect();
                 context.waker().wake_by_ref();

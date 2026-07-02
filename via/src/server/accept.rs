@@ -21,18 +21,6 @@ use crate::error::ServerError;
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use super::tls::{Alpn, NegotiateAlpn};
 
-macro_rules! log {
-    ($level:tt($reason:tt), $fmt:literal $($arg:tt)*) => {
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "{}({}): {}",
-            stringify!($level),
-            stringify!($reason),
-            format_args!($fmt $($arg)*)
-        );
-    };
-}
-
 macro_rules! serve_unless_cancelled {
     ($cancellation:ident, $connection:ident) => {
         tokio::select! {
@@ -81,7 +69,7 @@ where
                 Ok(stream) => stream,
                 Err(error) => {
                     // Print the error message to stderr in debug builds.
-                    log!(error(accept), "{}", error);
+                    log!(error(accept = 0), "{}", error);
 
                     // Exit with a corresponding error exit code or continue
                     // on EMFILE for POSIX systems.
@@ -192,7 +180,7 @@ where
 
 async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), ServerError>>) {
     log!(
-        info(gc),
+        info(gc = 0),
         "joining {} inflight connections...",
         connections.len()
     );
@@ -205,10 +193,10 @@ async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), 
         match result {
             Ok(Ok(_)) => {}
             Err(error) => {
-                log!(error(connection), "{}", &error);
+                log!(error(gc = 1), "(connection) -> {}", &error);
             }
             Ok(Err(error)) => {
-                log!(error(service), "{}", &error);
+                log!(error(gc = 1), "(service) -> {}", &error);
             }
         }
 
@@ -243,6 +231,7 @@ where
         .with_upgrades();
 
     serve_unless_cancelled!(cancellation, connection);
+
     Ok(())
 }
 

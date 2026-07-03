@@ -316,11 +316,14 @@ impl<'a, App> Route<'a, App> {
         Route(self.0.route(path))
     }
 
-    /// Consumes self by calling the provided closure with a mutable reference
-    /// to self.
+    /// Takes ownership of self and then calls `scope` with a mutable ref to
+    /// self.
     ///
-    pub fn scope(mut self, scope: impl FnOnce(&mut Self)) {
+    /// This is particularly useful when you want to attach middleware to a
+    /// route before assigning it a terminal middleware.
+    pub fn scope(mut self, scope: impl FnOnce(&mut Self)) -> Self {
         scope(&mut self);
+        self
     }
 
     /// Defines how the route should respond when it is visited.

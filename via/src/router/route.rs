@@ -1,11 +1,7 @@
 use std::sync::Arc;
 use via_router::RouteMut;
 
-use super::switch::{Deny, Switch};
 use crate::middleware::Middleware;
-
-/// A reborrow of a `&mut Route<App>` that can define a "responder" middleware.
-pub struct Index<'a, App>(Route<'a, App>);
 
 /// An entry in the route tree associated with a path segment pattern.
 ///
@@ -27,25 +23,17 @@ pub struct Index<'a, App>(Route<'a, App>);
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
 ///     let mut app = via::app(());
-///     let mut api = app.route("/api");
+///     let mut path = app.push("/api");
 ///
 ///     // If an error occurs on a descendant of /api, respond with json.
 ///     // Siblings of /api must define their own error handling logic.
-///     api.middleware(rescue(|sanitizer| sanitizer.use_json()));
+///     path.middleware(rescue(|sanitizer| sanitizer.use_json()));
 ///
 ///     // Define a /users resource as a child of /api so the rescue and timeout
 ///     // middleware run before any of the middleware or responders defined in
 ///     // the /users resource.
-///     api.route("/users").scope(|users| {
-///         let index = async |_, _| todo!();
-///         let show = async |_, _| todo!();
-///
-///         // list users
-///         users.route("/").to(via::get(index));
-///
-///         // find user with id = :id
-///         users.route("/:id").to(via::get(show));
-///     });
+///     path.route("/users", via::get(async |_, _| todo!()))
+///         .route("/:user-id", via::get(async |_, _| todo!()));
 ///
 ///     // Start serving our application from http://localhost:8080/.
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
@@ -53,164 +41,7 @@ pub struct Index<'a, App>(Route<'a, App>);
 /// ```
 pub struct Route<'a, App>(pub(super) RouteMut<'a, Arc<dyn Middleware<App>>>);
 
-/// Describes a RESTful resource by associating path segments with middleware.
-///
-/// A [`Resource`] can be constructed by passing an identifier to a module as well as
-/// a parameter name to the [`rest!`](crate::rest) macro.
-///
-/// # Example
-///
-/// ```
-/// use routes::{channels, reactions, threads};
-/// use via::rest;
-///
-/// // A chat application.
-/// let mut chat = via::app(());
-///
-/// // Our chat application nests routes that return data under an /api prefix.
-/// let mut api = chat.route("/api");
-///
-/// // Let `channel` be an entry to: /api/channels/:channel-id.
-/// let mut channel = api.resource(rest!(channels, ":channel-id"));
-/// //                             ^^^^
-/// // Source CRUD actions from routes::channels and define the following:
-/// //   - GET /api/channels/:channel-id ~> channels::index
-/// //   - POST /api/channels/:channel-id ~> channels::create
-/// //   - GET /api/channels/:channel-id ~> channels::show
-/// //   - PATCH /api/channels/:channel-id ~> channels::update
-/// //   - DELETE /api/channels/:channel-id ~> channels::destroy
-/// //
-/// // The `rest!` macro collapses channels::{index, create} and
-/// // channels::{destroy, show, update} into 2 respective middlewares.
-/// //
-/// // This amortizes the routing cost of HTTP method-based dispatch into a
-/// // single Arc::clone per request rather than a clone per method.
-///
-/// // Now we can define the resources that are owned by a channel as
-/// // descendants of `channel`.
-/// channel.scope(|channel| {
-///     // Let `thread` be an entry to: ./threads/:thread-id.
-///     let mut thread = channel.resource(rest!(threads, ":thread-id"));
-///
-///     // Since a reply is simply a thread that belongs to a thread we can use
-///     // the routes::threads module to define the replies resource.
-///     //
-///     // Let `reply` be an entry to: ./threads/:thread-id/replies/:reply-id.
-///     let mut reply = thread.resource(rest!(threads, ":reply-id", "replies"));
-///
-///     // Since `reply` is holding a mutable borrow to `thread`, we must first
-///     // define the reactions resource on `reply` to prevent a compile error
-///     // from the borrow checker.
-///     reply.resource(rest!(reactions, ":reaction-id"));
-///
-///     // Now we can define the reactions resource on `thread` since `reply`
-///     // is no longer referenced in this scope.
-///     thread.resource(rest!(reactions, ":reaction-id"));
-/// });
-/// #
-/// # macro_rules! action {
-/// #     ($name:ident) => {
-/// #         pub async fn $name(_: via::Request, _: via::Next) -> via::Result { todo!() }
-/// #     };
-/// # }
-/// #
-/// # macro_rules! resource {
-/// #     ($($name:ident),*) => {
-/// #         $(pub mod $name {
-/// #             action!(index);
-/// #             action!(create);
-/// #             action!(show);
-/// #             action!(update);
-/// #             action!(destroy);
-/// #         })*
-/// #     };
-/// # }
-/// #
-/// # mod routes {
-/// #     resource!(channels, reactions, threads);
-/// # }
-/// ```
-pub struct Resource<T, U> {
-    collection: WithPath<T>,
-    member: WithPath<U>,
-}
-
-#[doc(hidden)]
-pub struct ResourceBuilder<T> {
-    collection: WithPath<T>,
-}
-
-struct WithPath<T> {
-    path: &'static str,
-    middleware: T,
-}
-
-impl<'a, App> Index<'a, App> {
-    /// Defines how the route should respond when it is visited.
-    ///
-    /// Unlike [`Route::to`], the mutable borrow to the route tree entry is
-    /// consumed and not returned. This prevents logical aliasing errors that
-    /// can occur when defining a tree-like structure with a builder style API.
-    pub fn to<T>(self, middleware: T)
-    where
-        T: Middleware<App> + 'static,
-    {
-        self.0.to(middleware);
-    }
-}
-
 impl<'a, App> Route<'a, App> {
-    /// Reborrow `self` in order to define a "responder" middleware.
-    ///
-    /// Route resolution is dependent on the sequence in which they are
-    /// defined. In order to encourage clean code and a linear progression of
-    /// route definitons, [`Self::to`] takes ownership of `self`. This prevents
-    /// descendants from implicitly defining routes on ancestors. [`Self::to`]
-    /// returns `self` to support builder-style method chains that allow you to
-    /// continue nesting descendant routes from an ancestor.
-    ///
-    /// Sometimes it can be beneficial to temporarily opt-out of the typical
-    /// flow of the router DSL. A common pattern used when defining routes at
-    /// scale is moving a route definition at the root of your application's
-    /// main fn directly into a scope. This allows common identifiers to be
-    /// reused without shadowing identifier names of sibling route definitions.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use via::{Next, Request};
-    ///
-    /// let mut app = via::app(());
-    /// let mut api = app.route("/api");
-    ///
-    /// api.route("/users").scope(|users| {
-    ///     users.middleware(async |request: Request, next: Next| {
-    ///         // Confirm that the request is authenticated.
-    ///         // Then, call the next middleware.
-    ///         next.call(request).await
-    ///     });
-    ///
-    ///     let list = via::get(async |request: Request, _: Next| {
-    ///         todo!("Respond with a list of users");
-    ///     });
-    ///
-    ///     let show = via::get(async |request: Request, _: Next| {
-    ///         todo!("Respond with the user with id = :user-id.");
-    ///     });
-    ///
-    ///     // Reborrow `users` so it can be consumed by `.to(..)`.
-    ///     users.index().to(list);
-    ///
-    ///     // The mutable borrow to `users` is still live.
-    ///     users.route("/:user-id").to(show).scope(|user| {
-    ///         // Define descendents from /api/users/:user-id.
-    ///     });
-    /// });
-    /// ```
-    pub fn index(&mut self) -> Index<'_, App> {
-        Index(self.route("/"))
-    }
-
     /// Appends the provided middleware to the route's call stack.
     ///
     /// Middleware attached to a route runs anytime the route’s path is a
@@ -227,7 +58,7 @@ impl<'a, App> Route<'a, App> {
     ///
     /// // Requests made to /admin or any of its descendants must have an
     /// // is-admin cookie present on the request.
-    /// app.route("/admin").middleware(async |request: Request, next: Next| {
+    /// app.push("/admin").middleware(async |request: Request, next: Next| {
     ///     // We suggest using signed cookies to prevent tampering.
     ///     // See the cookies example in our git repo for more information.
     ///     if request.cookies().get("is-admin").is_none() {
@@ -245,20 +76,6 @@ impl<'a, App> Route<'a, App> {
         self.0.middleware(Arc::new(middleware));
     }
 
-    /// Mount the provided RESTful resource at `self` and return a mutable
-    /// borrow to the "member" route.
-    pub fn resource<T, U>(&mut self, resource: Resource<T, U>) -> Route<'_, App>
-    where
-        T: Middleware<App> + 'static,
-        U: Middleware<App> + 'static,
-    {
-        self.route(resource.collection.path)
-            .to(resource.collection.middleware);
-
-        self.route(resource.member.path)
-            .to(resource.member.middleware)
-    }
-
     /// Returns a new child route by appending the provided path to the current
     /// route.
     ///
@@ -269,9 +86,10 @@ impl<'a, App> Route<'a, App> {
     ///
     /// ```
     /// # let mut app = via::app(());
-    /// // The following routes reference the router entry at /hello/:name.
-    /// app.route("/hello/:name");
-    /// app.route("/hello").route("/:name");
+    /// // The following routes all reference the same path: /hello/:name.
+    /// app.push("/hello/:name");
+    /// app.push("hello").push(":name");
+    /// app.push("/hello").push("/:name");
     /// ```
     ///
     /// # Dynamic Segments
@@ -298,11 +116,115 @@ impl<'a, App> Route<'a, App> {
     ///
     /// ```
     /// # let mut app = via::app(());
-    /// let mut resource = app.route("/posts");
+    /// let mut path = app.push("/posts");
     ///
-    /// resource.route("/").to(via::get(posts::index));
-    /// resource.route("/:id").to(via::get(posts::show));
-    /// resource.route("/trending").to(via::get(posts::trending));
+    /// // Assigning a terminal middleware to a path takes ownership of self.
+    /// //
+    /// // We want to continue defining adjacent resources rather than
+    /// // dependencies of an individual post. Therefore, we reassign path.
+    /// path = path.assign(via::get(posts::index));
+    ///
+    /// // The /posts/:id resource.
+    /// path.push("/:id").assign(via::get(posts::show));
+    ///
+    /// // A bespoke /posts/trending route.
+    /// path.push("/trending").assign(via::get(posts::trending));
+    /// #
+    /// # mod posts {
+    /// #     use via::{Next, Request};
+    /// #     pub async fn trending(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
+    /// # }
+    /// ```
+    pub fn push(&mut self, path: &'static str) -> Route<'_, App> {
+        Route(self.0.route(path))
+    }
+
+    /// A convenience method that appends `path` to self and assigns it to
+    /// `middleware`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # let mut app = via::app(());
+    /// let mut path = app.push("/posts");
+    ///
+    /// // The /posts "collection" resource.
+    /// path = path.assign(via::get(posts::index));
+    ///
+    /// // The /posts/:id "member" resource.
+    /// path.route("/:id", via::get(posts::show));
+    ///
+    /// // A bespoke /posts/trending route.
+    /// path.route("/trending", via::get(posts::trending));
+    /// #
+    /// # mod posts {
+    /// #     use via::{Next, Request};
+    /// #     pub async fn trending(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
+    /// # }
+    /// ```
+    pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Route<'_, App>
+    where
+        T: Middleware<App> + 'static,
+    {
+        self.push(path).assign(middleware)
+    }
+
+    /// Defines how the route should respond when it is visited.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # let mut app = via::app(());
+    /// #
+    /// // Define the /users resource as `path`.
+    /// let mut path = app.push("/users");
+    ///
+    /// path.assign(via::get(users::index))
+    /// //          ^^^^^^^^^^^^^^^^^^^^^
+    /// //   Called only when the request path matches /users.
+    /// //
+    ///     .push("/:id")
+    ///     .assign(via::get(users::show));
+    /// //          ^^^^^^^^^^^^^^^^^^^^^
+    /// //   Called only when the request path matches /users/:id.
+    /// //
+    /// #
+    /// # mod users {
+    /// #     use via::{Next, Request};
+    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
+    /// # }
+    /// ```
+    pub fn assign<T>(self, middleware: T) -> Self
+    where
+        T: Middleware<App> + 'static,
+    {
+        Self(self.0.to(Arc::new(middleware)))
+    }
+
+    /// Takes ownership of self and then calls `op` with a mutable ref to self.
+    ///
+    /// Maping a route is particularly useful when you want to define routes in
+    /// a new scope. It is less busy than assigning the path to a variable in a
+    /// block.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # let mut app = via::app(());
+    /// #
+    /// // The /posts "collection" resource.
+    /// app.route("/posts", via::get(posts::index)).map(|mut path| {
+    ///     // The /posts/:id "member" resource.
+    ///     path.route("/:post-id", via::get(posts::show));
+    ///
+    ///     // A bespoke /posts/trending route.
+    ///     path.route("/:post-id", via::get(posts::trending));
+    /// });
     /// #
     /// # mod posts {
     /// #     use via::{Next, Request};
@@ -312,78 +234,7 @@ impl<'a, App> Route<'a, App> {
     /// # }
     /// ```
     ///
-    pub fn route(&mut self, path: &'static str) -> Route<'_, App> {
-        Route(self.0.route(path))
-    }
-
-    /// Takes ownership of self and then calls `scope` with a mutable ref to
-    /// self.
-    ///
-    /// This is particularly useful when you want to attach middleware to a
-    /// route before assigning it a terminal middleware.
-    pub fn scope(mut self, scope: impl FnOnce(&mut Self)) -> Self {
-        scope(&mut self);
-        self
-    }
-
-    /// Defines how the route should respond when it is visited.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # mod users {
-    /// #     use via::{Next, Request};
-    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
-    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
-    /// # }
-    /// #
-    /// # let mut app = via::app(());
-    /// #
-    /// // Called only when the request path is /users.
-    /// let mut users = app.route("/users").to(via::get(users::show));
-    ///
-    /// // Called only when the request path matches /users/:id.
-    /// users.route("/:id").to(via::get(users::show));
-    /// ```
-    ///
-    pub fn to<T>(self, middleware: T) -> Self
-    where
-        T: Middleware<App> + 'static,
-    {
-        Self(self.0.to(Arc::new(middleware)))
-    }
-}
-
-impl<T, U, X, Y> Resource<Switch<T, X>, Switch<U, Y>> {
-    /// Returns a `405 Method Not Allowed` response if the request method is
-    /// not supported by the resource.
-    #[allow(clippy::type_complexity)]
-    pub fn or_deny(self) -> Resource<Switch<Switch<T, X>, Deny>, Switch<Switch<U, Y>, Deny>> {
-        Resource {
-            collection: WithPath {
-                path: self.collection.path,
-                middleware: self.collection.middleware.or_deny(),
-            },
-            member: WithPath {
-                path: self.member.path,
-                middleware: self.member.middleware.or_deny(),
-            },
-        }
-    }
-}
-
-#[doc(hidden)]
-impl<T> ResourceBuilder<T> {
-    pub fn collection(path: &'static str, middleware: T) -> ResourceBuilder<T> {
-        ResourceBuilder {
-            collection: WithPath { path, middleware },
-        }
-    }
-
-    pub fn member<U>(self, path: &'static str, middleware: U) -> Resource<T, U> {
-        Resource {
-            collection: self.collection,
-            member: WithPath { path, middleware },
-        }
+    pub fn map<T>(self, op: impl FnOnce(Self) -> T) -> T {
+        op(self)
     }
 }

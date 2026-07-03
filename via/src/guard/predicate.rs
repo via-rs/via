@@ -389,7 +389,7 @@ pub fn any() -> Any {
 /// };
 ///
 /// // Authenticated GET requests can open a web socket.
-/// app.route("/chat").to(guard::filter(
+/// app.push("/chat").assign(guard::filter(
 ///     guard::or((guard::bool(method::get()), guard::bool(authenticate()))),
 ///     //                                            ^^^^
 ///     // The contextual predicate error is never constructed. The ErrorThunk

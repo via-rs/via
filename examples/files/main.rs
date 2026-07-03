@@ -117,7 +117,7 @@ async fn main() -> Result<ExitCode, Error> {
         semaphore: Arc::new(Semaphore::new(max_open_files)),
     });
 
-    app.route("/*path").to(via::get(serve_dir));
+    app.route("/*path", via::get(serve_dir));
 
     if cfg!(not(feature = "fs")) {
         eprintln!("    the \"fs\" feature flag is required in order to run the files example.");

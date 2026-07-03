@@ -218,7 +218,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///     // Define the /api namespace. Middleware attached to
 ///     // `api` only runs for requests to a nested resource
 ///     // (i.e /api/users).
-///     let mut api = app.route("/api");
+///     let mut api = app.push("/api");
 ///
 ///     // Errors originating from the /api namespace generate a
 ///     // JSON response.

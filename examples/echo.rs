@@ -41,7 +41,7 @@ async fn main() -> Result<ExitCode, Error> {
     #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
     let relay = via::ws(relay);
 
-    app.route("/echo").to(via::post(echo).get(relay));
+    app.route("/echo", via::post(echo).get(relay));
 
     Server::new(app).listen(("127.0.0.1", 8080)).await
 }

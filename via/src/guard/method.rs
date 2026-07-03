@@ -49,7 +49,7 @@
 //! #
 //! # let mut app = via::app(());
 //! #
-//! app.route("/users").to(
+//! app.push("/users").assign(
 //!     via::get(users::show)
 //!         .post(users::create)
 //!         .or_deny()

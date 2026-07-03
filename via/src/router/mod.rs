@@ -1,7 +1,7 @@
 mod route;
 mod switch;
 
-pub use route::{Index, Resource, ResourceBuilder, Route};
+pub use route::Route;
 pub use switch::*;
 
 pub(crate) use switch::MethodNotAllowed;
@@ -15,18 +15,25 @@ pub(crate) struct Router<T> {
     tree: via_router::Router<Arc<dyn Middleware<T>>>,
 }
 
-impl<T> Router<T> {
+impl<App> Router<App> {
     pub fn new() -> Self {
         Self {
             tree: via_router::Router::new(),
         }
     }
 
-    pub fn route(&mut self, path: &'static str) -> Route<'_, T> {
+    pub fn push(&mut self, path: &'static str) -> Route<'_, App> {
         Route(self.tree.route(path))
     }
 
-    pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, Arc<dyn Middleware<T>>> {
+    pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Route<'_, App>
+    where
+        T: Middleware<App> + 'static,
+    {
+        self.push(path).assign(middleware)
+    }
+
+    pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, Arc<dyn Middleware<App>>> {
         self.tree.traverse(path)
     }
 }

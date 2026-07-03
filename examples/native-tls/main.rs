@@ -71,10 +71,10 @@ async fn main() -> Result<ExitCode, Error> {
     let mut app = via::app(());
 
     // Add our hello responder to the endpoint /hello/:name.
-    app.route("/hello/:name").to(via::get(hello));
+    app.route("/hello/:name", via::get(hello));
 
     #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    app.route("/echo").to(via::get(via::ws(echo)));
+    app.route("/echo", via::get(via::ws(echo)));
 
     Server::new(app)
         .listen_native_tls(("127.0.0.1", 8080), tls_config)

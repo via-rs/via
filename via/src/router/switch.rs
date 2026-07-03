@@ -49,11 +49,11 @@ pub struct Deny {
 /// async fn main() -> Result<ExitCode, Error> {
 ///     let mut app = via::app(());
 ///
-///     // Define a route that listens for `PATCH` and `PUT` request to /users/:user-id.
-///     app.route("/users/:user-id").to(
+///     // The route "/users/:user-id" accepts PATCH and PUT requests.
+///     app.push("/users/:user-id").assign(
 ///         via::patch(update)
 ///             .put(update)
-///             .or_deny() // All other methods are a 405 Method Not Allowed.
+///             .or_deny(), // All other methods are a 405 Method Not Allowed.
 ///     );
 ///
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
@@ -162,7 +162,7 @@ impl<T, U> Switch<T, U> {
     /// #
     /// # fn main() {
     /// # let mut app = via::app(());
-    /// app.route("/hello/:name").to(via::get(greet).or_deny());
+    /// app.route("/hello/:name", via::get(greet).or_deny());
     /// // curl -XPOST http://localhost:8080/hello/world
     /// // => method not allowed: "POST"
     /// # }

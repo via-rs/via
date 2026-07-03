@@ -86,9 +86,9 @@ pub struct Filter<T, U> {
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
 ///     let mut app = via::app(());
-///     let mut api = app.route("/api");
+///     let mut api = app.push("/api");
 ///
-///     api.route("/admin/graphql").to(guard::flat_map(
+///     api.push("/admin/graphql").assign(guard::flat_map(
 ///         guard::into_error(
 ///             |request: &Request| request.is_admin(),
 ///             |_| err!(403, "admin permissions are required."),
@@ -117,7 +117,7 @@ pub struct FlatMap<T, U> {
 /// use via::guard::{self, media};
 ///
 /// let mut app = via::app(());
-/// let mut api = app.route("/api");
+/// let mut api = app.push("/api");
 ///
 /// // If the client does not speak JSON, deny the request.
 /// api.middleware(guard::barrier(guard::content!(media::json())));
@@ -127,7 +127,7 @@ pub struct FlatMap<T, U> {
 /// //   - content-type: application/json [; charset=utf-8]
 /// //   - content-length: ^(\d+)$ <= Server::max_request_size
 ///
-/// api.route("/users").scope(|users| {
+/// api.push("/users").map(|mut users| {
 ///     // Define the /api/users resource.
 /// });
 /// ```

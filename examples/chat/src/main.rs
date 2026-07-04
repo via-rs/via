@@ -9,7 +9,7 @@ use via::{Error, Server, cookies, rescue, router};
 
 use database::Database;
 use routes::auth::{login, logout, me};
-use routes::{channels, chat, reactions, threads, users};
+use routes::{channels, reactions, threads, users};
 use util::session::{self, auth_required, authenticate};
 
 type Request = via::Request<Unicorn>;

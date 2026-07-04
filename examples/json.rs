@@ -44,7 +44,7 @@ async fn main() -> via::Result<ExitCode> {
     app.middleware(guard::barrier(guard::content!(media::json())));
 
     // Define a route that responds to POST /hello.
-    app.route("/hello").to(via::post(hello).or_deny());
+    app.route("/hello", via::post(hello).or_deny());
 
     Server::new(app).listen(("127.0.0.1", 8080)).await
 }

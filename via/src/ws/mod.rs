@@ -50,7 +50,7 @@ pub use upgrade::Ws;
 ///     let mut app = via::app(());
 ///
 ///     // GET /echo ~> web socket upgrade.
-///     app.route("/echo").to(via::get(via::ws(echo)).or_deny());
+///     app.route("/echo", via::get(via::ws(echo)).or_deny());
 ///
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
 /// }

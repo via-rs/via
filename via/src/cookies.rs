@@ -67,7 +67,7 @@ struct SetCookieError;
 ///     app.middleware(via::cookies(["name"]).decode());
 ///
 ///     // Respond with a greeting when a user visits /hello/:name.
-///     app.route("/hello/:name").to(via::get(greet));
+///     app.route("/hello/:name", via::get(greet));
 ///
 ///     // Start serving our application from http://localhost:8080/.
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
@@ -180,7 +180,7 @@ struct SetCookieError;
 ///     app.middleware(via::cookies(["session"]));
 ///
 ///     // Add our login route to our application.
-///     app.route("/auth/login").to(via::post(login));
+///     app.route("/auth/login", via::post(login));
 ///
 ///     // Start serving our application from http://localhost:8080/.
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await

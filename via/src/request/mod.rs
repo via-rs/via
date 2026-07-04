@@ -111,7 +111,7 @@ use params::PathParam;
 ///     });
 ///
 ///     // Accept POST requests to /auth with the login fn.
-///     app.route("/auth").to(via::post(login).or_deny());
+///     app.route("/auth", via::post(login).or_deny());
 ///
 ///     // Listen for incoming connections at http://localhost:8080/.
 ///     // We recommend enabling a TLS-backend in production.

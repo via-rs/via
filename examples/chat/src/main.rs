@@ -80,7 +80,7 @@ async fn main() -> Result<ExitCode, Error> {
 
     // The /api/chat route.
     #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    path.route("/chat", via::get(authenticate(via::ws(chat))));
+    path.route("/chat", via::get(authenticate(via::ws(routes::chat))));
 
     // The /api/channels resource.
     path.route("/channels", channels::collection(auth_required))

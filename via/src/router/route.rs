@@ -39,7 +39,9 @@ use crate::middleware::Middleware;
 ///     Server::new(app).listen(("127.0.0.1", 8080)).await
 /// }
 /// ```
-pub struct Route<'a, App>(pub(super) RouteMut<'a, Arc<dyn Middleware<App>>>);
+pub struct Route<'a, App> {
+    pub(super) node: RouteMut<'a, Arc<dyn Middleware<App>>>,
+}
 
 impl<'a, App> Route<'a, App> {
     /// Appends the provided middleware to the route's call stack.
@@ -73,7 +75,7 @@ impl<'a, App> Route<'a, App> {
     where
         T: Middleware<App> + 'static,
     {
-        self.0.middleware(Arc::new(middleware));
+        self.node.middleware(Arc::new(middleware));
     }
 
     /// Returns a new child route by appending the provided path to the current
@@ -138,7 +140,9 @@ impl<'a, App> Route<'a, App> {
     /// # }
     /// ```
     pub fn push(&mut self, path: &'static str) -> Route<'_, App> {
-        Route(self.0.route(path))
+        Route {
+            node: self.node.route(path),
+        }
     }
 
     /// A convenience method that appends `path` to self and assigns it to
@@ -203,7 +207,9 @@ impl<'a, App> Route<'a, App> {
     where
         T: Middleware<App> + 'static,
     {
-        Self(self.0.to(Arc::new(middleware)))
+        Self {
+            node: self.node.assign(Arc::new(middleware)),
+        }
     }
 
     /// Takes ownership of self and then calls `op` with a mutable ref to self.

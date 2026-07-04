@@ -163,6 +163,10 @@ impl<T: Clone> Router<T> {
         }
     }
 
+    pub fn middleware(&mut self, middleware: T) {
+        self.tree.route.push(MatchCond::Partial(middleware));
+    }
+
     pub fn route(&mut self, path: &'static str) -> RouteMut<'_, T> {
         RouteMut {
             node: insert(&mut self.tree, path::patterns(path)),
@@ -219,7 +223,7 @@ impl<'a, T> RouteMut<'a, T> {
         }
     }
 
-    pub fn to(self, middleware: T) -> Self {
+    pub fn assign(self, middleware: T) -> Self {
         self.node.route.push(MatchCond::Exact(middleware));
         self
     }

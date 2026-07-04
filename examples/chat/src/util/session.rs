@@ -130,6 +130,7 @@ impl Identity {
             .is_ok_and(|timestamp| OffsetDateTime::now_utc().unix_timestamp() > timestamp)
     }
 
+    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
     pub async fn verify(&self, database: &Database) -> bool {
         if let Ok(id) = self.user_id() {
             database.user_exists(id).await

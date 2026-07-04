@@ -1,1 +1,2 @@
 mod guard;
+mod resource;

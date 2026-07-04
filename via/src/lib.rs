@@ -77,6 +77,8 @@ mod next;
 mod server;
 mod util;
 
+pub use via_macros::resource;
+
 pub use app::{Shared, Via, app};
 pub use before::{Before, before};
 pub use cookies::{Cookies, cookies};

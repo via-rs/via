@@ -80,7 +80,7 @@ pub struct Before<T, U> {
 ///     });
 ///
 ///     // The /api namespace.
-///     let mut api = app.route("api");
+///     let mut api = app.push("api");
 ///
 ///     // If an error occurs, respond with JSON.
 ///     api.middleware(rescue(|sanitizer| sanitizer.use_json()));

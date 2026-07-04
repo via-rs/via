@@ -87,7 +87,7 @@ pub fn app<App>(app: App) -> Via<App> {
 
 impl<App> Via<App> {
     delegate! {
-        to self.router.route("/") {
+        to self.router {
             /// Append the provided middleware to applications call stack.
             ///
             /// Middleware attached with this method runs for every request.
@@ -96,23 +96,28 @@ impl<App> Via<App> {
             pub fn middleware<T>(&mut self, middleware: T)
             where
                 T: Middleware<App> + 'static;
-        }
 
-        to self.router {
             /// Returns a new route as a child of the root path `/`.
             ///
             /// See also the usage example in [`Route::route`].
-            pub fn route(&mut self, path: &'static str) -> Route<'_, App>;
+            pub fn push(&mut self, path: &'static str) -> Route<'_, App>;
+
+            /// Returns a new route as a child of the root path `/`.
+            ///
+            /// See also the usage example in [`Route::route`].
+            pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Route<'_, App>
+            where
+                T: Middleware<App> + 'static;
         }
     }
 }
 
 impl<App> Via<App> {
-    pub(crate) fn app(&self) -> &Shared<App> {
+    fn app(&self) -> &Shared<App> {
         &self.app
     }
 
-    pub(crate) fn router(&self) -> &Router<App> {
+    fn router(&self) -> &Router<App> {
         &self.router
     }
 }

@@ -13,7 +13,8 @@ struct Login {
 }
 
 pub async fn me(request: Request, _: Next) -> via::Result {
-    Response::build().json(&Body::new(request.user().await?))
+    let user = request.user().await?;
+    Response::build().json(&Body::new(user))
 }
 
 pub async fn login(request: Request, _: Next) -> via::Result {

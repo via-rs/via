@@ -1,3 +1,5 @@
+via::resource!(app = Unicorn);
+
 use http::StatusCode;
 use serde::Serialize;
 use via::request::PathParams;
@@ -7,7 +9,7 @@ use super::channels::ChannelMemberParams;
 use crate::database::Id;
 use crate::database::models::{NewReaction, Reaction};
 use crate::util::{Body, Session};
-use crate::{Next, Request};
+use crate::{Next, Request, Unicorn};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ReactionCollectionParams {

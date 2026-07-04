@@ -2,9 +2,8 @@ use serde::Deserialize;
 use via::error::Propagate;
 use via::ws::{self, Channel};
 
+use crate::Unicorn;
 use crate::util::Session;
-
-type Request = ws::Request<crate::Unicorn>;
 
 #[derive(Deserialize)]
 struct Message<'a> {
@@ -19,7 +18,7 @@ macro_rules! log {
     };
 }
 
-pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
+pub async fn chat(mut channel: Channel, request: ws::Request<Unicorn>) -> ws::Result {
     log!("  info(examples/chat): setup ws recv loop.");
 
     // An active session is required to keep the web socket open.

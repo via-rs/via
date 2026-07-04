@@ -32,7 +32,14 @@ pub struct Identity([u8; 16]);
 #[derive(Clone, Copy)]
 pub struct Unauthorized;
 
-pub fn is_authenticated() -> impl for<'a> Predicate<Request, Error<'a> = &'a Unauthorized> {
+pub fn authenticate<T>(middleware: T) -> impl Middleware<Unicorn> + 'static
+where
+    T: Middleware<Unicorn> + 'static,
+{
+    guard::flat_map(auth_required(), middleware)
+}
+
+pub fn auth_required() -> impl for<'a> Predicate<Request, Error<'a> = &'a Unauthorized> {
     guard::ok_or(
         on::extension(guard::not(Identity::is_expired)),
         Unauthorized,

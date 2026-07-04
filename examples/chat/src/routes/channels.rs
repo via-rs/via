@@ -1,9 +1,11 @@
+via::resource!(app = Unicorn, guard = collection);
+
 use serde::Serialize;
 use via::request::PathParams;
 use via::{Error, deny};
 
 use crate::database::Id;
-use crate::{Next, Request};
+use crate::{Next, Request, Unicorn};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ChannelMemberParams {
@@ -15,23 +17,23 @@ pub async fn authorization(request: Request, next: Next) -> via::Result {
     next.call(request).await
 }
 
-pub async fn index(_: Request, _: Next) -> via::Result {
+async fn index(_: Request, _: Next) -> via::Result {
     deny!(500, "todo!")
 }
 
-pub async fn create(_: Request, _: Next) -> via::Result {
+async fn create(_: Request, _: Next) -> via::Result {
     deny!(500, "todo!")
 }
 
-pub async fn show(_: Request, _: Next) -> via::Result {
+async fn show(_: Request, _: Next) -> via::Result {
     deny!(500, "todo!")
 }
 
-pub async fn update(_: Request, _: Next) -> via::Result {
+async fn update(_: Request, _: Next) -> via::Result {
     deny!(500, "todo!")
 }
 
-pub async fn destroy(_: Request, _: Next) -> via::Result {
+async fn destroy(_: Request, _: Next) -> via::Result {
     deny!(500, "todo!")
 }
 

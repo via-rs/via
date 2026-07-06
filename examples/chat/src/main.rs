@@ -48,7 +48,7 @@ async fn main() -> Result<ExitCode, Error> {
     let mut path = app.push("/api");
 
     // If an error occurs, respond with JSON.
-    path.middleware(rescue(|sanitizer| sanitizer.use_json()));
+    path.middleware(rescue::json().build());
 
     // Parse and track changes that are made to the session cookie.
     path.middleware(cookies([session::COOKIE]));

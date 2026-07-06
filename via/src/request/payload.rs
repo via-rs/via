@@ -11,23 +11,14 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 use zeroize::Zeroize;
 
+#[cfg(feature = "tokio-tungstenite")]
+use tungstenite::protocol::Message;
+
+#[cfg(feature = "tokio-websockets")]
+use tokio_websockets::Message;
+
+use crate::util::sealed;
 use crate::{Error, err};
-
-mod sealed {
-    /// Prevents external implementations of Payload. Allowing us to make
-    /// assumptions about the data contained by implementations of Payload.
-    pub trait Sealed {}
-
-    impl Sealed for super::Aggregate {}
-
-    impl Sealed for bytes::Bytes {}
-
-    #[cfg(feature = "tokio-tungstenite")]
-    impl Sealed for tungstenite::protocol::Message {}
-
-    #[cfg(feature = "tokio-websockets")]
-    impl Sealed for tokio_websockets::Message {}
-}
 
 /// Represents an optionally contiguous source of data received from a client.
 ///
@@ -193,6 +184,12 @@ struct RequestPayload {
     frames: Vec<Bytes>,
     trailers: Option<HeaderMap>,
 }
+
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+sealed!(Aggregate, Bytes, Message);
+
+#[cfg(not(any(feature = "tokio-tungstenite", feature = "tokio-websockets")))]
+sealed!(Aggregate, Bytes);
 
 #[inline]
 fn deserialize_json<T>(buf: &[u8]) -> Result<T, Error>
@@ -376,14 +373,10 @@ impl Payloadz for Aggregate {
 }
 
 #[cfg(feature = "tokio-tungstenite")]
-impl_payload_for_bytes_like!(tungstenite::protocol::Message);
+impl_payload_for_bytes_like!(Message);
 
 #[cfg(feature = "tokio-websockets")]
-impl_payload_for_bytes_like!(
-    tokio_websockets::Message,
-    tokio_websockets::Message::into_payload,
-    tokio_websockets::Message::binary
-);
+impl_payload_for_bytes_like!(Message, Message::into_payload, Message::binary);
 
 impl Payload for Bytes {
     fn coalesce(mut self) -> Vec<u8> {

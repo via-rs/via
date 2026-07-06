@@ -27,7 +27,7 @@ use crate::middleware::Middleware;
 ///
 ///     // If an error occurs on a descendant of /api, respond with json.
 ///     // Siblings of /api must define their own error handling logic.
-///     path.middleware(rescue(|sanitizer| sanitizer.use_json()));
+///     path.middleware(rescue::json().build());
 ///
 ///     // Define a /users resource as a child of /api so the rescue and timeout
 ///     // middleware run before any of the middleware or responders defined in

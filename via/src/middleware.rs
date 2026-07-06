@@ -222,7 +222,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 ///     // Errors originating from the /api namespace generate a
 ///     // JSON response.
-///     api.middleware(rescue(|error| error.use_json()));
+///     api.middleware(rescue::json().build());
 ///
 ///     // Confirm the client speaks JSON. Then, restore their
 ///     // session.

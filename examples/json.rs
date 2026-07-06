@@ -38,7 +38,11 @@ async fn main() -> via::Result<ExitCode> {
     let mut app = via::app(());
 
     // Errors that occur further down the stack generate a JSON response.
-    app.middleware(rescue(|error| error.use_json()));
+    app.middleware(
+        rescue::canonical_reason_phrase()
+            .and(rescue::json())
+            .build(),
+    );
 
     // If the client does not speak JSON, deny the request.
     app.middleware(guard::barrier(guard::content!(media::json())));

@@ -1,11 +1,12 @@
-//! Error handling.
+//! Raise and recover from service errors with a capability-bounded policy.
 //!
 
 mod catch;
 mod macros;
-mod rescue;
 mod result;
 mod server;
+
+pub mod rescue;
 
 use http::{StatusCode, header};
 use serde::ser::SerializeSeq;
@@ -16,7 +17,6 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::io::{self, Error as IoError};
 
 pub use catch::{Catch, Propagate};
-pub use rescue::{Rescue, Sanitizer, rescue};
 pub use result::ResultExt;
 pub(crate) use server::ServerError;
 

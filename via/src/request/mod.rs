@@ -1,3 +1,5 @@
+//! Interact with incoming requests to your service.
+
 pub mod params;
 
 mod payload;

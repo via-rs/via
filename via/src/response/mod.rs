@@ -1,3 +1,5 @@
+//! Build, finalize, and decorate responses from middleware.
+
 mod body;
 mod builder;
 mod redirect;

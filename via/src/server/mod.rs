@@ -90,6 +90,7 @@ where
     /// can increase connection overhead due to additional TCP and TLS handshakes.
     ///
     /// **Default:** `true`
+    /// Return whether HTTP keep-alive is enabled.
     pub fn keep_alive(mut self, keep_alive: bool) -> Self {
         self.config.keep_alive = keep_alive;
         self
@@ -103,6 +104,7 @@ where
     /// request body size.
     ///
     /// **Default:** `16 KB`
+    /// Return the maximum per-connection buffer size.
     pub fn max_buf_size(mut self, max_buf_size: usize) -> Self {
         self.config.max_buf_size = max_buf_size;
         self
@@ -112,6 +114,7 @@ where
     /// accept.
     ///
     /// **Default:** `1000`
+    /// Return the maximum number of concurrent accepted connections.
     pub fn max_connections(mut self, max_connections: usize) -> Self {
         self.config.max_connections = max_connections;
         self
@@ -120,6 +123,7 @@ where
     /// Set the maximum request body size in bytes.
     ///
     /// **Default:** `100 MB`
+    /// Return the maximum accepted request body size.
     pub fn max_request_size(mut self, max_request_size: usize) -> Self {
         self.config.max_request_size = max_request_size;
         self
@@ -130,6 +134,7 @@ where
     ///
     /// **Default:** `10s`
     /// **Max:** `30s`
+    /// Return the graceful shutdown timeout, capped at 30 seconds.
     pub fn shutdown_timeout(mut self, duration: Duration) -> Self {
         self.config.shutdown_timeout = (duration <= Duration::from_secs(30))
             .then_some(duration)
@@ -143,6 +148,7 @@ where
     ///
     /// **Default:** `10s`
     /// **Max:** `30s`
+    /// Return the HTTP/1 header read timeout, capped at 30 seconds.
     pub fn http1_header_read_timeout(mut self, duration: Duration) -> Self {
         self.config.http1_header_read_timeout = (duration <= Duration::from_secs(30))
             .then_some(duration)
@@ -282,6 +288,7 @@ impl<App> Server<App> {
     ///
     /// **Default:** `Some(64)`
     ///
+    /// Return the configured HTTP/2 max concurrent streams value.
     pub fn http2_max_concurrent_streams(mut self, max_concurrent_streams: Option<u32>) -> Self {
         self.config.http2_max_concurrent_streams = max_concurrent_streams;
         self
@@ -299,6 +306,7 @@ impl<App> Server<App> {
     ///
     /// **Default:** `64 KB`
     ///
+    /// Return the configured HTTP/2 maximum send buffer size.
     pub fn http2_max_send_buf_size(mut self, max_send_buf_size: usize) -> Self {
         self.config.http2_max_send_buf_size = max_send_buf_size;
         self
@@ -311,6 +319,7 @@ impl<App> Server<App> {
     ///
     /// **Default:** `5s`
     ///
+    /// Return the configured TLS handshake timeout.
     pub fn tls_handshake_timeout(mut self, tls_handshake_timeout: Duration) -> Self {
         if tls_handshake_timeout.is_zero() {
             panic!("tls_handshake_timeout must be > 0");
@@ -322,26 +331,32 @@ impl<App> Server<App> {
 }
 
 impl ServerConfig {
+    /// Return whether HTTP keep-alive is enabled.
     pub fn keep_alive(&self) -> bool {
         self.keep_alive
     }
 
+    /// Return the maximum per-connection buffer size.
     pub fn max_buf_size(&self) -> usize {
         self.max_buf_size
     }
 
+    /// Return the maximum number of concurrent accepted connections.
     pub fn max_connections(&self) -> usize {
         self.max_connections
     }
 
+    /// Return the maximum accepted request body size.
     pub fn max_request_size(&self) -> usize {
         self.max_request_size
     }
 
+    /// Return the graceful shutdown timeout, capped at 30 seconds.
     pub fn shutdown_timeout(&self) -> Duration {
         self.shutdown_timeout.min(Duration::from_secs(30))
     }
 
+    /// Return the HTTP/1 header read timeout, capped at 30 seconds.
     pub fn http1_header_read_timeout(&self) -> Duration {
         self.http1_header_read_timeout.min(Duration::from_secs(30))
     }
@@ -349,14 +364,17 @@ impl ServerConfig {
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 impl ServerConfig {
+    /// Return the configured HTTP/2 max concurrent streams value.
     pub fn http2_max_concurrent_streams(&self) -> Option<u32> {
         self.http2_max_concurrent_streams
     }
 
+    /// Return the configured HTTP/2 maximum send buffer size.
     pub fn http2_max_send_buf_size(&self) -> usize {
         self.http2_max_send_buf_size
     }
 
+    /// Return the configured TLS handshake timeout.
     pub fn tls_handshake_timeout(&self) -> Duration {
         self.tls_handshake_timeout
     }

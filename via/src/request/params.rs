@@ -1,3 +1,5 @@
+//! Path and query parameter accessors.
+
 use std::borrow::Cow;
 use std::str::FromStr;
 
@@ -5,6 +7,7 @@ use super::query::{QueryParamRange, QueryParser};
 use crate::error::{Error, ResultExt};
 use crate::util::UriEncoding;
 
+/// A lazily decoded path parameter lookup.
 pub struct PathParam<'a, 'b> {
     encoding: UriEncoding,
     source: &'a str,
@@ -12,12 +15,14 @@ pub struct PathParam<'a, 'b> {
     name: &'b str,
 }
 
+/// Borrowed path parameters captured while routing a request.
 #[derive(Clone, Copy)]
 pub struct PathParams<'a> {
     path: &'a str,
     spans: &'a [via_router::PathParam],
 }
 
+/// A lazily decoded query parameter lookup.
 pub struct QueryParam<'a, 'b> {
     encoding: UriEncoding,
     source: Option<&'a str>,
@@ -25,6 +30,7 @@ pub struct QueryParam<'a, 'b> {
     name: &'b str,
 }
 
+/// Parsed query parameters for a request URI.
 pub struct QueryParams<'a> {
     query: Option<&'a str>,
     spans: Vec<(Cow<'a, str>, Option<QueryParamRange>)>,
@@ -50,6 +56,7 @@ fn query_pos_for_key(
 }
 
 impl<'a> PathParams<'a> {
+    /// Returns the path parameter associated with `name`.
     pub fn get<'b>(&self, name: &'b str) -> PathParam<'a, 'b> {
         PathParam::new(self.path, get(self.spans, name), name)
     }
@@ -70,6 +77,7 @@ impl<'a> QueryParams<'a> {
         Self { query, spans }
     }
 
+    /// Iterate over all query parameters with the provided name.
     pub fn all<'b>(&self, name: &'b str) -> impl Iterator<Item = QueryParam<'a, 'b>> {
         self.spans.iter().filter_map(move |(key, value)| {
             let value = value.as_ref();
@@ -82,10 +90,12 @@ impl<'a> QueryParams<'a> {
         })
     }
 
+    /// Return `true` if the query string contains a parameter with `name`.
     pub fn contains(&self, name: &str) -> bool {
         self.spans.iter().any(|(key, _)| key.as_ref() == name)
     }
 
+    /// Return the first query parameter with the provided name.
     pub fn first<'b>(&self, name: &'b str) -> QueryParam<'a, 'b> {
         let range = self
             .spans
@@ -95,6 +105,7 @@ impl<'a> QueryParams<'a> {
         QueryParam::new(self.query, range, name)
     }
 
+    /// Return the last query parameter with the provided name.
     pub fn last<'b>(&self, name: &'b str) -> QueryParam<'a, 'b> {
         let range = self
             .spans
@@ -144,6 +155,9 @@ impl<'a, 'b> PathParam<'a, 'b> {
             .and_then(|value| value.as_ref().parse().or_bad_request())
     }
 
+    /// Return the parameter value if it exists.
+    ///
+    /// Missing parameters produce `Ok(None)` rather than an error.
     pub fn ok(self) -> Result<Option<Cow<'a, str>>, Error> {
         self.param
             .and_then(|param| param.slice(self.source))
@@ -203,6 +217,9 @@ impl<'a, 'b> QueryParam<'a, 'b> {
             .and_then(|value| value.as_ref().parse().or_bad_request())
     }
 
+    /// Return the parameter value if it exists.
+    ///
+    /// Missing parameters produce `Ok(None)` rather than an error.
     pub fn ok(self) -> Result<Option<Cow<'a, str>>, Error> {
         self.slice()
             .map(|value| self.encoding.decode_as(self.name, value))

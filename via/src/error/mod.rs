@@ -1,4 +1,4 @@
-//! Error handling.
+//! Raise and recover from service errors with a capability-bounded policy.
 //!
 
 mod catch;

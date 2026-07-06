@@ -13,6 +13,7 @@ pub(crate) struct IoWithPermit<T> {
 
 impl<T> IoWithPermit<T> {
     #[inline]
+    /// Wrap `io` and hold a connection permit for its lifetime.
     pub fn new(io: T, _permit: OwnedSemaphorePermit) -> Self {
         Self {
             io: WithHyperIo::new(io),

@@ -1,10 +1,10 @@
+//! A declarative routing DSL that makes trust boundaries obvious.
+
 mod route;
 mod switch;
 
 pub use route::Route;
 pub use switch::*;
-
-pub(crate) use switch::MethodNotAllowed;
 
 use std::sync::Arc;
 use via_router::Traverse;
@@ -59,12 +59,14 @@ where
 }
 
 impl<App> Router<App> {
+    /// Create an empty router.
     pub fn new() -> Self {
         Self {
             tree: via_router::Router::new(),
         }
     }
 
+    /// Append middleware to the router root.
     pub fn middleware<T>(&mut self, middleware: T)
     where
         T: Middleware<App> + 'static,
@@ -72,12 +74,14 @@ impl<App> Router<App> {
         self.tree.middleware(Arc::new(middleware))
     }
 
+    /// Return a route builder for `path`.
     pub fn push(&mut self, path: &'static str) -> Route<'_, App> {
         Route {
             node: self.tree.route(path),
         }
     }
 
+    /// Attach middleware at `path` and return its route builder.
     pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Route<'_, App>
     where
         T: Middleware<App> + 'static,
@@ -85,6 +89,7 @@ impl<App> Router<App> {
         self.push(path).assign(middleware)
     }
 
+    /// Traverse the route tree for `path`.
     pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, Arc<dyn Middleware<App>>> {
         self.tree.traverse(path)
     }

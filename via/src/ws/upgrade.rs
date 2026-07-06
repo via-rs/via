@@ -26,6 +26,7 @@ const DEFAULT_FRAME_SIZE: usize = 16384; // 16KB
 
 type HasToken = Contains<Trim<Tag>>;
 
+/// Middleware that validates and upgrades WebSocket requests.
 pub struct Ws<T> {
     listener: Arc<Listener<T>>,
     guard: (Header<CaseSensitive>, Header<HasToken>, Header<HasToken>),

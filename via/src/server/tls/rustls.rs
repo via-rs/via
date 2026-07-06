@@ -10,9 +10,11 @@ use tokio_rustls::server::{Accept, TlsAcceptor, TlsStream};
 
 use super::{Acceptor, Alpn, NegotiateAlpn};
 
+/// Rustls acceptor wrapper.
 pub struct RustlsAcceptor(TlsAcceptor);
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
+/// Rustls stream wrapper.
 pub struct RustlsStream {
     alpn: Alpn,
     tls: Pin<Box<MaybeTlsStream>>,
@@ -29,6 +31,7 @@ struct MaybeTlsStream {
 }
 
 impl RustlsAcceptor {
+    /// Create a Rustls acceptor from a server configuration.
     pub fn new(rustls_config: ServerConfig) -> Self {
         Self(TlsAcceptor::from(Arc::new(rustls_config)))
     }

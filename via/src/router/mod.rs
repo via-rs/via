@@ -1,3 +1,5 @@
+//! A declarative routing DSL that makes trust boundaries obvious.
+
 mod route;
 mod switch;
 

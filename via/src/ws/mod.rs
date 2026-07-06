@@ -1,3 +1,5 @@
+//! Support bidirectional communication over HTTP with WebSockets.
+
 #[cfg(all(feature = "aws-lc-rs", feature = "ring"))]
 compile_error!("features \"aws-lc-rs\" and \"ring\" are mutually exclusive.");
 

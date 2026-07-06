@@ -83,7 +83,7 @@ pub struct Before<T, U> {
 ///     let mut api = app.push("api");
 ///
 ///     // If an error occurs, respond with JSON.
-///     api.middleware(rescue(|sanitizer| sanitizer.use_json()));
+///     api.middleware(rescue::json().build());
 ///
 ///     // Parse and track changes that are made to the session cookie.
 ///     api.middleware(cookies([session::COOKIE]));

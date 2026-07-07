@@ -59,7 +59,11 @@ required-features = ["rustls-23"]
 
 [dev-dependencies]
 base64 = "0.22"
+bb8 = "0.9"
+bitflags = { version = "2", features = ["serde"] }
 cookie = { version = "0.18", features = ["percent-encode", "signed"] }
+diesel = { features = ["time", "uuid"], version = "2" }
+diesel-async = { version = "0.9", features = ["bb8", "postgres"] }
 dotenvy = "0.15"
 http = "1"
 mime_guess = "2"
@@ -71,3 +75,4 @@ time = { version = "0.3", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 via = { path = "../via" }
+zeroize = { version = "1", features = ["serde"] }

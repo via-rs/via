@@ -4,12 +4,11 @@ use cookie::{Cookie, Key, SameSite};
 use http::StatusCode;
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
-use via::error::{Catch, Error, Propagate};
+use via::error::{Catch, Propagate};
 use via::guard::{self, Predicate, on};
 use via::{Middleware, Response, deny, err};
 
-use crate::database::models::User;
-use crate::database::{Database, Id};
+use crate::database::Id;
 use crate::{Request, Unicorn};
 
 pub const COOKIE: &str = "via-chat-session";
@@ -23,7 +22,7 @@ pub trait Authenticate {
 
 pub trait Session {
     fn session(&self) -> Option<&Identity>;
-    async fn user(&self) -> Result<User, Error>;
+    // async fn user(&self) -> Result<User, Error>;
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -82,12 +81,14 @@ pub fn verify() -> impl Middleware<Unicorn> + 'static {
                     return next.call(request).await;
                 };
 
-                if let Ok(updated) = token.refresh(&app.database).await {
-                    Some(updated)
-                } else {
-                    extensions.remove::<Identity>();
-                    None
-                }
+                Some(token.clone())
+
+                // if let Ok(updated) = token.refresh(&app.database).await {
+                //     Some(updated)
+                // } else {
+                //     extensions.remove::<Identity>();
+                //     None
+                // }
             };
 
             let mut response = next.call(request).await?;
@@ -109,10 +110,10 @@ fn in_an_hour() -> i64 {
 }
 
 impl Identity {
-    pub fn new(user: Id) -> Self {
+    pub fn new(id: &Id) -> Self {
         let mut buf = [0; TOKEN_LEN];
 
-        buf[..EXPIRES_AT].copy_from_slice(user.to_bytes().as_slice());
+        buf[..EXPIRES_AT].copy_from_slice(id.value().to_be_bytes().as_slice());
         buf[EXPIRES_AT..].copy_from_slice(in_an_hour().to_be_bytes().as_slice());
 
         Self(buf)
@@ -125,41 +126,50 @@ impl Identity {
             .map(i64::from_be_bytes)
     }
 
+    pub fn id(&self) -> Id {
+        let mut bytes = [0; 8];
+
+        bytes.copy_from_slice(&self.0[..EXPIRES_AT]);
+        Id::new(i64::from_be_bytes(bytes))
+    }
+
     pub fn is_expired(&self) -> bool {
         self.expires_at()
             .is_ok_and(|timestamp| OffsetDateTime::now_utc().unix_timestamp() > timestamp)
     }
 
-    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    pub async fn verify(&self, database: &Database) -> bool {
-        if let Ok(id) = self.user_id() {
-            database.user_exists(id).await
-        } else {
-            false
-        }
-    }
+    // #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+    // pub async fn verify(&self, database: &Database) -> bool {
+    //     if let Ok(id) = self.user_id() {
+    //         database.user_exists(id).await
+    //     } else {
+    //         false
+    //     }
+    // }
 
-    pub async fn user(&self, database: &Database) -> Result<User, Error> {
-        if let Some(user) = database.find_user(self.user_id()?).await? {
-            Ok(user)
-        } else {
-            unauthorized()
-        }
-    }
+    // pub async fn user(&self, database: &Database) -> Result<User, Error> {
+    //     if let Some(user) = database.find_user(self.user_id()?).await? {
+    //         Ok(user)
+    //     } else {
+    //         unauthorized()
+    //     }
+    // }
 
-    async fn refresh(&mut self, database: &Database) -> Result<Self, Unauthorized> {
-        if database.user_exists(self.user_id()?).await {
-            let new_expires_at = in_an_hour().to_be_bytes();
-            self.0[EXPIRES_AT..].copy_from_slice(new_expires_at.as_slice());
-            Ok(*self)
-        } else {
-            Err(Unauthorized)
-        }
-    }
+    // async fn refresh(&mut self, database: &Database) -> Result<Self, Unauthorized> {
+    //     if database.user_exists(self.user_id()?).await {
+    //         let new_expires_at = in_an_hour().to_be_bytes();
+    //         self.0[EXPIRES_AT..].copy_from_slice(new_expires_at.as_slice());
+    //         Ok(*self)
+    //     } else {
+    //         Err(Unauthorized)
+    //     }
+    // }
 
     fn user_id(&self) -> Result<Id, Unauthorized> {
-        let bytes = self.0[..EXPIRES_AT].try_into().or(Err(Unauthorized))?;
-        Id::new(u64::from_be_bytes(bytes)).or(Err(Unauthorized))
+        self.0[..EXPIRES_AT]
+            .try_into()
+            .or(Err(Unauthorized))
+            .map(|bytes| Id::new(i64::from_be_bytes(bytes)))
     }
 
     fn encode(&self) -> String {
@@ -184,12 +194,12 @@ impl Session for Request {
         self.extensions().get()
     }
 
-    async fn user(&self) -> Result<User, Error> {
-        let session = self.session().ok_or(Unauthorized)?;
-        let database = self.app().database();
+    // async fn user(&self) -> Result<User, Error> {
+    //     let session = self.session().ok_or(Unauthorized)?;
+    //     let database = self.app().database();
 
-        session.user(database).await
-    }
+    //     session.user(database).await
+    // }
 }
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
@@ -198,12 +208,12 @@ impl Session for via::ws::Request<Unicorn> {
         self.extensions().get()
     }
 
-    async fn user(&self) -> Result<User, Error> {
-        let session = self.session().ok_or(Unauthorized)?;
-        let database = self.app().database();
+    // async fn user(&self) -> Result<User, Error> {
+    //     let session = self.session().ok_or(Unauthorized)?;
+    //     let database = self.app().database();
 
-        session.user(database).await
-    }
+    //     session.user(database).await
+    // }
 }
 
 impl Authenticate for Response {

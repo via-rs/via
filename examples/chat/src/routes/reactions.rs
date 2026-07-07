@@ -1,14 +1,11 @@
 via::resource!(app = Unicorn);
 
-use http::StatusCode;
 use serde::Serialize;
+use via::Error;
 use via::request::PathParams;
-use via::{Error, Payload, Response, deny};
 
 use super::channels::ChannelMemberParams;
 use crate::database::Id;
-use crate::database::models::{NewReaction, Reaction};
-use crate::util::{Body, Session};
 use crate::{Next, Request, Unicorn};
 
 #[derive(Clone, Debug, Serialize)]
@@ -26,44 +23,24 @@ pub struct ReactionMemberParams {
     reaction_id: Id,
 }
 
-pub async fn index(request: Request, _: Next) -> via::Result {
-    let params = request.params::<ReactionCollectionParams>()?;
-
-    Response::build().json(&Body::new(params))
+async fn index(_: Request, _: Next) -> via::Result {
+    via::deny!(500, "todo!")
 }
 
-pub async fn create(request: Request, _: Next) -> via::Result {
-    let _user = request.user().await?;
-    let params = request.params::<ReactionCollectionParams>()?;
-    let (future, _) = request.into_future();
-    let new_reaction: Body<NewReaction> = future.await?.json()?;
-
-    if cfg!(debug_assertions) {
-        println!("  params = {:#?}", &params);
-        println!("  body = {:#?}", &new_reaction);
-    }
-
-    Response::build()
-        .status(StatusCode::CREATED)
-        .json(&Body::new(Reaction::new(new_reaction.data)?))
+async fn create(_: Request, _: Next) -> via::Result {
+    via::deny!(500, "todo!")
 }
 
-pub async fn show(request: Request, _: Next) -> via::Result {
-    let params = request.params::<ReactionMemberParams>()?;
-
-    if cfg!(debug_assertions) {
-        println!("  params = {:#?}", &params);
-    }
-
-    Response::build().json(&Body::new(params))
+async fn show(_: Request, _: Next) -> via::Result {
+    via::deny!(500, "todo!")
 }
 
-pub async fn update(_: Request, _: Next) -> via::Result {
-    deny!(500, "todo!")
+async fn update(_: Request, _: Next) -> via::Result {
+    via::deny!(500, "todo!")
 }
 
-pub async fn destroy(_: Request, _: Next) -> via::Result {
-    deny!(500, "todo!")
+async fn destroy(_: Request, _: Next) -> via::Result {
+    via::deny!(500, "todo!")
 }
 
 impl<'a> TryFrom<PathParams<'a>> for ReactionCollectionParams {

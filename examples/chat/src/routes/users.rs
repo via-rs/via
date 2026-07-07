@@ -1,50 +1,160 @@
+//! The /api/users resource.
+//!
+//! `index` and all member actions require an authenticated user. `create` is
+//! public so visitors can register an account.
+//!
+//! After an account is created, the response updates the session cookie to
+//! authenticate the new user.
+
 via::resource!(app = Unicorn, guard = [index, member]);
 
-use http::StatusCode;
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
 use via::request::Payloadz;
-use via::{Response, deny};
+use via::{Payload, Response, deny};
 
-use crate::database::Identify;
-use crate::database::models::NewUser;
-use crate::util::{Authenticate, Body, Identity};
+use crate::database::{Id, users};
+use crate::models::user::{ChangeSet, NewUser, User, by_id, recent};
+use crate::util::{Authenticate, Identity, Session};
 use crate::{Next, Request, Unicorn};
 
-async fn index(_: Request, _: Next) -> via::Result {
-    deny!(500, "todo!")
+/// List users.
+///
+/// Responds to `GET /users`.
+async fn index(request: Request, _: Next) -> via::Result {
+    // Get pagination params from the URI query.
+    // let page = request.query::<Page>()?;
+
+    // Acquire a database connection.
+    let mut conn = request.app().database().get().await?;
+
+    // Execute the query.
+    let users = users::table
+        .select(User::as_select())
+        .order(recent())
+        .load(&mut conn)
+        .await?;
+
+    Response::build().data(users)
 }
 
+/// Create a new user account.
+///
+/// Responds to `POST /users`.
+///
+/// On success, the session cookie is updated to authenticate the new account.
 async fn create(request: Request, _: Next) -> via::Result {
-    let (future, app) = request.into_future();
-    let Body { data } = future.await?.be_z_json::<Body<NewUser>>()?;
+    // Deny the request if it comes from an authenticated user.
+    if request.session().is_some() {
+        deny!(403, "logout before creating a new account");
+    }
 
-    let user = app.database().insert_user(data).await?;
-    let identity = Identity::new(*user.id());
-    let mut response = Response::build().json(&Body::new(user))?;
+    // Deserialize a new user from the request body.
+    let (body, app) = request.into_future();
+    let new_user = body.await?.be_z_data::<NewUser>()?;
+    //                         ^^^^^^^^^
+    // Best-effort zeroization of the original request buffer containing the
+    // unencrypted password. The password type used by `NewUser` is also
+    // zeroized on drop.
+    //
+    // Prefer zeroizing payloads whenever they contain credentials.
 
+    // Acquire a database connection.
+    let mut conn = app.database().get().await?;
+
+    // Insert the user into the users table.
+    let user = diesel::insert_into(users::table)
+        .values(new_user)
+        .returning(User::as_returning())
+        .get_result(&mut conn)
+        .await?;
+
+    // Create an identity token for the new user.
+    let identity = Identity::new(user.id());
+
+    // Build the response containing the newly inserted user.
+    let mut response = Response::build().status(201).data(user)?;
+
+    // Update the session cookie with the identity token of the new user.
     response.authenticate(app.secret(), Some(identity));
 
     Ok(response)
 }
 
+/// Retrieve a user by id.
+///
+/// Responds to `GET /users/:user-id`.
 async fn show(request: Request, _: Next) -> via::Result {
-    let id = request.param("user-id").parse()?;
-    let Some(user) = request.app().database().find_user(id).await? else {
-        deny!(404, "not found.")
-    };
+    // Parse an Id from the :user-id path parameter.
+    let id = request.param("user-id").parse::<Id>()?;
 
-    Response::build().json(&Body::new(user))
+    // Acquire a database connection.
+    let mut conn = request.app().database().get().await?;
+
+    // Find the user with id = :user-id.
+    let user = users::table
+        .select(User::as_select())
+        .filter(by_id(&id))
+        .first(&mut conn)
+        .await?;
+
+    Response::build().data(user)
 }
 
-async fn update(_: Request, _: Next) -> via::Result {
-    deny!(500, "todo!")
-}
+/// Update an existing user.
+///
+/// Responds to `PATCH /users/:user-id`.
+///
+/// The active user must be the user identified by `:user-id`.
+async fn update(request: Request, _: Next) -> via::Result {
+    // Parse an Id from the :user-id path parameter.
+    let id = request.param("user-id").parse::<Id>()?;
 
-async fn destroy(request: Request, _: Next) -> via::Result {
-    let id = request.param("user-id").parse()?;
-
-    if request.app().database().delete_user(id).await?.is_some() {
-        Response::build().status(StatusCode::NO_CONTENT).finish()
-    } else {
-        deny!(404, "not found.")
+    // Confirm that the active user is the owner of the account.
+    if request.session().is_none_or(|session| id != session.id()) {
+        deny!(403, "only the account owner can update a user");
     }
+
+    // Deserialize a user change set from the request body.
+    let (body, app) = request.into_future();
+    let change_set = body.await?.data::<ChangeSet>()?;
+
+    // Acquire a database connection.
+    let mut conn = app.database().get().await?;
+
+    // Update the user with id = :user-id.
+    let user = diesel::update(users::table)
+        .filter(by_id(&id))
+        .set(change_set)
+        .returning(User::as_returning())
+        .get_result(&mut conn)
+        .await?;
+
+    Response::build().data(user)
+}
+
+/// Delete a user account.
+///
+/// Responds to `DELETE /users/:user-id`.
+///
+/// The active user must be the user identified by `:user-id`.
+async fn destroy(request: Request, _: Next) -> via::Result {
+    // Parse an Id from the :user-id path parameter.
+    let id = request.param("user-id").parse::<Id>()?;
+
+    // Confirm that the active user is the owner of the account.
+    if request.session().is_none_or(|session| id != session.id()) {
+        deny!(403, "only the account owner can delete a user");
+    }
+
+    // Acquire a database connection.
+    let mut conn = request.app().database().get().await?;
+
+    // Delete the user.
+    diesel::delete(users::table)
+        .filter(by_id(&id))
+        .execute(&mut conn)
+        .await?;
+
+    Response::build().status(204).finish()
 }

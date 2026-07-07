@@ -1,3 +1,4 @@
+pub mod env;
 pub mod session;
 
 pub use session::{Authenticate, Identity, Session};

@@ -1,4 +1,5 @@
 mod database;
+mod models;
 mod routes;
 mod util;
 
@@ -7,7 +8,7 @@ use std::process::ExitCode;
 use via::guard::{self, media, method};
 use via::{Error, Server, cookies, rescue, router};
 
-use database::Database;
+use database::{ConnectionPool, establish_connection};
 use routes::auth::{login, logout, me};
 use routes::{channels, reactions, threads, users};
 use util::session::{self, auth_required, authenticate};
@@ -16,13 +17,13 @@ type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
 
 struct Unicorn {
-    database: Database,
+    database: ConnectionPool,
     secret: Key,
 }
 
 impl Unicorn {
     #[inline]
-    fn database(&self) -> &Database {
+    fn database(&self) -> &ConnectionPool {
         &self.database
     }
 
@@ -36,7 +37,7 @@ impl Unicorn {
 async fn main() -> Result<ExitCode, Error> {
     // Create our chat application, "Unicorn".
     let mut app = via::app(Unicorn {
-        database: Database::new()?,
+        database: establish_connection().await,
         secret: Key::generate(),
         // secret: std::env::var("VIA_SECRET_KEY")
         //     .map(|secret| secret.as_bytes().try_into())
@@ -75,7 +76,7 @@ async fn main() -> Result<ExitCode, Error> {
     ));
 
     // The /api/auth namespace.
-    path.route("/auth", via::delete(logout).post(login))
+    path.route("/auth", via::post(login).delete(logout))
         .route("/me", via::get(me));
 
     // The /api/chat route.

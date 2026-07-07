@@ -1,7 +1,7 @@
-pub mod models;
-
+mod conn;
+mod id;
 mod schema;
-mod table;
 
-pub use schema::Database;
-pub use table::{Id, Identify, Persist};
+pub use conn::*;
+pub use id::*;
+pub use schema::*;

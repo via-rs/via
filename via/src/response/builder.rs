@@ -30,6 +30,11 @@ pub struct ResponseBuilder {
     response: http::response::Builder,
 }
 
+#[derive(Serialize)]
+struct JsonData<T> {
+    data: T,
+}
+
 impl ResponseBuilder {
     #[inline]
     pub fn status<T>(mut self, status: T) -> Self
@@ -71,6 +76,14 @@ impl ResponseBuilder {
     #[inline]
     pub fn body(self, body: ResponseBody) -> Result<Response, Error> {
         Ok(self.response.body(body)?.into())
+    }
+
+    #[inline]
+    pub fn data<T>(self, data: T) -> Result<Response, Error>
+    where
+        T: Serialize,
+    {
+        self.json(&JsonData { data })
     }
 
     #[inline]

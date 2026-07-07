@@ -182,6 +182,7 @@ pub struct Before<T, U> {
 /// }
 /// ```
 /// </details>
+#[inline(always)]
 pub fn before<T, U>(decorator: T, middleware: U) -> Before<T, U> {
     Before {
         decorator,

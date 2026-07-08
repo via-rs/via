@@ -15,7 +15,8 @@ use via::{Payload, Response, ResultExt, deny};
 
 use crate::database::{Id, users};
 use crate::models::user::{ChangeSet, NewUser, User, by_id, recent};
-use crate::util::{Authenticate, Identity, Session};
+use crate::util::session::Identity;
+use crate::util::{Authenticate, Page, Paginate, Session};
 use crate::{Next, Request, Unicorn};
 
 /// List users.
@@ -23,20 +24,18 @@ use crate::{Next, Request, Unicorn};
 /// Responds to `GET /users`.
 async fn index(request: Request, _: Next) -> via::Result {
     // Get pagination params from the URI query.
-    // let page = request.query::<Page>()?;
+    let page = request.query::<Page>()?;
+
+    // Acquire a database connection.
+    let mut conn = request.app().acquire_database_connection().await?;
 
     // Load a page of users.
-    let users = {
-        // Acquire a database connection.
-        let mut conn = request.app().acquire_database_connection().await?;
-
-        // Execute the query.
-        users::table
-            .select(User::as_select())
-            .order(recent())
-            .load(&mut conn)
-            .await?
-    };
+    let users = users::table
+        .select(User::as_select())
+        .order(recent())
+        .paginate(page)
+        .load(&mut conn)
+        .await?;
 
     Response::build().data(users)
 }

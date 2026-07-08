@@ -4,8 +4,7 @@ use diesel::helper_types::InnerJoin;
 use diesel::pg::{Pg, PgValue};
 use diesel::prelude::*;
 use diesel::serialize::{self, Output, ToSql};
-use diesel::sql_types::VarChar;
-use diesel::sql_types::{Array, BigInt, Integer, Text};
+use diesel::sql_types::{Array, BigInt, Integer, Text, VarChar};
 use diesel_async::RunQueryDsl;
 use serde::de::{Deserializer, Error as DeError};
 use serde::{Deserialize, Serialize, Serializer};
@@ -15,22 +14,37 @@ use std::ops::Deref;
 use std::str::FromStr;
 use time::OffsetDateTime;
 
+use super::thread::ThreadWithUser;
 use super::user::{User, UserPreview};
 use crate::database::{Connection, Id, reactions, users};
 
+#[derive(Debug)]
+pub struct InvalidEmojiError;
+
+#[derive(AsExpression, Clone, Debug, FromSqlRow)]
+#[diesel(sql_type = VarChar)]
+pub struct Emoji {
+    buf: [u8; 16],
+    len: usize,
+}
+
 #[derive(Associations, Identifiable, Queryable, Selectable, Serialize)]
-// #[diesel(belongs_to(ConversationWithUser, foreign_key = conversation_id))]
+#[diesel(belongs_to(ThreadWithUser, foreign_key = thread_id))]
 #[diesel(belongs_to(User))]
 #[diesel(table_name = reactions)]
 #[serde(rename_all = "camelCase")]
 pub struct Reaction {
     id: Id,
     emoji: Emoji,
+
+    #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+
+    #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
 
     #[serde(skip)]
-    conversation_id: Id,
+    thread_id: Id,
 
     #[serde(skip)]
     user_id: Id,
@@ -46,13 +60,13 @@ pub struct ChangeSet {
 #[diesel(table_name = reactions)]
 #[serde(rename_all = "camelCase")]
 pub struct NewReaction {
-    pub conversation_id: Option<Id>,
+    pub thread_id: Option<Id>,
     pub user_id: Option<Id>,
     emoji: Emoji,
 }
 
-#[derive(Clone, Deserialize, QueryableByName, Serialize)]
-// #[diesel(belongs_to(ConversationWithUser, foreign_key = conversation_id))]
+#[derive(Associations, Clone, Deserialize, QueryableByName, Serialize)]
+#[diesel(belongs_to(ThreadWithUser, foreign_key = thread_id))]
 #[diesel(table_name = reactions)]
 #[diesel(check_for_backend(Pg))]
 #[serde(rename_all = "camelCase")]
@@ -65,7 +79,7 @@ pub struct ReactionPreview {
     #[diesel(sql_type = BigInt)]
     total_count: i64,
 
-    conversation_id: Id,
+    thread_id: Id,
 }
 
 #[derive(Queryable, Selectable, Serialize)]
@@ -77,16 +91,6 @@ pub struct ReactionWithUser {
 
     #[diesel(embed)]
     user: UserPreview,
-}
-
-#[derive(Debug)]
-struct InvalidEmojiError;
-
-#[derive(AsExpression, Clone, Debug, FromSqlRow)]
-#[diesel(sql_type = VarChar)]
-struct Emoji {
-    buf: [u8; 16],
-    len: usize,
 }
 
 filters! {
@@ -107,24 +111,24 @@ impl Reaction {
         Self::query().inner_join(users::table)
     }
 
-    // pub fn to_conversations<'a>(
-    //     connection: &mut Connection<'_>,
-    //     ids: impl IntoIterator<Item = &'a Id>,
-    // ) -> impl Future<Output = QueryResult<Vec<ReactionPreview>>> {
-    //     const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
-    //     const USERNAMES_PER_REACTION: i32 = 6;
+    pub fn to_threads<'a>(
+        connection: &mut Connection<'_>,
+        ids: impl IntoIterator<Item = &'a Id>,
+    ) -> impl Future<Output = QueryResult<Vec<ReactionPreview>>> {
+        const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
+        const USERNAMES_PER_REACTION: i32 = 6;
 
-    //     diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
-    //         .bind::<Array<i64>, Vec<_>>(ids.into_iter().collect())
-    //         .bind::<Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
-    //         .bind::<Integer, _>(USERNAMES_PER_REACTION)
-    //         .load(connection)
-    // }
+        diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
+            .bind::<Array<BigInt>, Vec<_>>(ids.into_iter().collect())
+            .bind::<Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
+            .bind::<Integer, _>(USERNAMES_PER_REACTION)
+            .load(connection)
+    }
 }
 
 impl ReactionPreview {
     pub fn to_id(&self) -> Id {
-        self.conversation_id.clone()
+        self.thread_id.clone()
     }
 }
 

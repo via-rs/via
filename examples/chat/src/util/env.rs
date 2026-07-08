@@ -1,12 +1,9 @@
-use std::env::{VarError, var};
+use zeroize::Zeroizing;
 
-pub fn require(name: &str) -> String {
-    var(name).unwrap_or_else(|error| match error {
-        VarError::NotPresent => {
-            panic!("missing required env variable: {}", name);
-        }
-        VarError::NotUnicode(_) => {
-            panic!("env variable \"{}\" is not valid UTF-8", name);
-        }
-    })
+pub fn require(name: &str) -> Zeroizing<String> {
+    let Ok(value) = dotenvy::var(name) else {
+        panic!("missing required env variable: {}", name);
+    };
+
+    value.into()
 }

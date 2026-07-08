@@ -3,8 +3,8 @@ CREATE TABLE users (
 
   email TEXT NOT NULL,
   username TEXT NOT NULL,
-  password_hash TEXT NOT NULL,
-  password_changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- password_hash TEXT NOT NULL,
+  -- password_changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

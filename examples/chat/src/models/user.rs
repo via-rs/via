@@ -11,7 +11,11 @@ pub struct User {
     id: Id,
     email: String,
     username: String,
+
+    #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+
+    #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
 }
 

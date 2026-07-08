@@ -57,11 +57,7 @@ async fn main() -> via::Result<ExitCode> {
     // Create our chat application, "Unicorn".
     let mut app = via::app(Unicorn {
         database: establish_connection().await,
-        signer: Key::generate(),
-        // signer: std::env::var("VIA_SECRET_KEY")
-        //     .map(|signer| signer.as_bytes().try_into())
-        //     .expect("missing required env var: VIA_SECRET_KEY")
-        //     .expect("unexpected end of input while parsing VIA_SECRET_KEY"),
+        signer: Key::from(util::env::require("VIA_SECRET_KEY").as_bytes()),
     });
 
     // The /api namespace.

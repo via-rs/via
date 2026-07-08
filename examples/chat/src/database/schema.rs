@@ -51,8 +51,6 @@ diesel::table! {
         id -> Int8,
         email -> Text,
         username -> Text,
-        password_hash -> Text,
-        password_changed_at -> Timestamptz,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }

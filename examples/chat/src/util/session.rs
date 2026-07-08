@@ -6,7 +6,7 @@ use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
 use via::error::{Catch, Propagate};
 use via::guard::{self, Predicate, on};
-use via::{Middleware, Response, deny, err};
+use via::{Middleware, Response, err};
 
 use crate::database::Id;
 use crate::{Request, Unicorn};
@@ -16,20 +16,20 @@ pub const COOKIE: &str = "via-chat-session";
 const EXPIRES_AT: usize = 8;
 const TOKEN_LEN: usize = 16;
 
-pub trait Authenticate {
-    fn authenticate(&mut self, secret: &Key, user: Option<Identity>);
-}
-
-pub trait Session {
-    fn session(&self) -> Option<&Identity>;
-    // async fn user(&self) -> Result<User, Error>;
-}
-
 #[derive(Clone, Copy, PartialEq)]
 pub struct Identity([u8; 16]);
 
 #[derive(Clone, Copy)]
 pub struct Unauthorized;
+
+pub trait Authenticate {
+    fn authenticate(&mut self, secret: &Key, user: Option<Identity>);
+}
+
+pub trait Session {
+    fn session(&self) -> Result<&Identity, Unauthorized>;
+    // async fn user(&self) -> Result<User, Error>;
+}
 
 pub fn authenticate<T>(middleware: T) -> impl Middleware<Unicorn> + 'static
 where
@@ -49,13 +49,9 @@ pub fn needs_verified() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
     guard::bool(on::extension(Identity::is_expired).opt())
 }
 
-pub fn unauthorized<T>() -> via::Result<T> {
-    deny!(401, "unauthorized")
-}
-
 pub fn restore(request: &mut Request) -> Result<(), Catch> {
     let jar = {
-        let secret = request.app().secret();
+        let secret = request.app().signer();
         request.cookies().signed(secret)
     };
 
@@ -94,9 +90,9 @@ pub fn verify() -> impl Middleware<Unicorn> + 'static {
             let mut response = next.call(request).await?;
 
             if response.status() == StatusCode::UNAUTHORIZED {
-                response.authenticate(&app.secret, None);
+                response.authenticate(&app.signer, None);
             } else {
-                response.authenticate(&app.secret, identity);
+                response.authenticate(&app.signer, identity);
             }
 
             Ok(response)
@@ -190,8 +186,8 @@ impl FromStr for Identity {
 }
 
 impl Session for Request {
-    fn session(&self) -> Option<&Identity> {
-        self.extensions().get()
+    fn session(&self) -> Result<&Identity, Unauthorized> {
+        self.extensions().get().ok_or(Unauthorized)
     }
 
     // async fn user(&self) -> Result<User, Error> {
@@ -204,8 +200,8 @@ impl Session for Request {
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 impl Session for via::ws::Request<Unicorn> {
-    fn session(&self) -> Option<&Identity> {
-        self.extensions().get()
+    fn session(&self) -> Result<&Identity, Unauthorized> {
+        self.extensions().get().ok_or(Unauthorized)
     }
 
     // async fn user(&self) -> Result<User, Error> {
@@ -240,7 +236,7 @@ impl Authenticate for Response {
 
 impl From<Unauthorized> for via::Error {
     fn from(_: Unauthorized) -> Self {
-        err!(401, "unauthorized.")
+        err!(401, "unauthorized")
     }
 }
 

@@ -6,41 +6,62 @@ mod util;
 use cookie::Key;
 use std::process::ExitCode;
 use via::guard::{self, media, method};
-use via::{Error, Server, cookies, rescue, router};
+use via::{Server, cookies, rescue, router};
 
 use database::{ConnectionPool, establish_connection};
 use routes::auth::{login, logout, me};
 use routes::{channels, reactions, threads, users};
 use util::session::{self, auth_required, authenticate};
 
+use crate::database::Connection;
+
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
 
 struct Unicorn {
     database: ConnectionPool,
-    secret: Key,
+    signer: Key,
+}
+
+macro_rules! log {
+    ($level:tt($name:ident), $fmt:literal $($arg:tt)*) => {
+        log!($level($name = 0), $fmt $($arg)*)
+    };
+    ($level:tt($name:ident = $indent:expr), $fmt:literal $($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "{:indent$}{}({}): {}",
+            "",
+            stringify!($level),
+            stringify!($name),
+            format_args!($fmt $($arg)*),
+            indent = $indent * 2,
+        );
+    };
 }
 
 impl Unicorn {
-    #[inline]
-    fn database(&self) -> &ConnectionPool {
-        &self.database
+    async fn acquire_database_connection(&self) -> via::Result<Connection> {
+        self.database.get().await.map_err(|error| {
+            log!(error(database), "{}", &error);
+            via::err!(500, "internal server error")
+        })
     }
 
     #[inline]
-    fn secret(&self) -> &Key {
-        &self.secret
+    fn signer(&self) -> &Key {
+        &self.signer
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<ExitCode, Error> {
+async fn main() -> via::Result<ExitCode> {
     // Create our chat application, "Unicorn".
     let mut app = via::app(Unicorn {
         database: establish_connection().await,
-        secret: Key::generate(),
-        // secret: std::env::var("VIA_SECRET_KEY")
-        //     .map(|secret| secret.as_bytes().try_into())
+        signer: Key::generate(),
+        // signer: std::env::var("VIA_SECRET_KEY")
+        //     .map(|signer| signer.as_bytes().try_into())
         //     .expect("missing required env var: VIA_SECRET_KEY")
         //     .expect("unexpected end of input while parsing VIA_SECRET_KEY"),
     });

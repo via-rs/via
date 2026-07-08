@@ -479,7 +479,7 @@ where
 
 impl<T, Await, App> Middleware<App> for T
 where
-    T: Fn(Request<App>, Next<App>) -> Await + Send + Sync,
+    T: Fn(Request<App>, Next<App>) -> Await + Copy + Send + Sync,
     Await: Future<Output = Result> + Send + 'static,
 {
     fn call(&self, request: Request<App>, next: Next<App>) -> BoxFuture {

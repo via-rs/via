@@ -8,12 +8,10 @@ use std::process::ExitCode;
 use via::guard::{self, media, method};
 use via::{Server, cookies, rescue, router};
 
-use database::{ConnectionPool, establish_connection};
+use database::{Connection, ConnectionPool, establish_connection};
 use routes::auth::{login, logout, me};
 use routes::{channels, reactions, threads, users};
 use util::session::{self, auth_required, authenticate};
-
-use crate::database::Connection;
 
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
@@ -41,7 +39,7 @@ macro_rules! log {
 }
 
 impl Unicorn {
-    async fn acquire_database_connection(&self) -> via::Result<Connection> {
+    async fn acquire_database_connection(&self) -> via::Result<Connection<'_>> {
         self.database.get().await.map_err(|error| {
             log!(error(database), "{}", &error);
             via::err!(500, "internal server error")

@@ -39,19 +39,18 @@ pub async fn login(request: Request, _: Next) -> via::Result {
     // Find the user with the matching set of credentials.
     let user = {
         // Acquire a database connection and read the request body.
-        let (mut conn, payload) = tokio::try_join!(
-            app.acquire_database_connection(),
-            body.timeout_after_secs(2)
-        )?;
-
         // Deserialize login params from the request body.
-        let params = payload.be_z_data::<Login>()?;
-        //                   ^^^^^^^^^
+        let params = body.timeout_after_secs(2).await?.be_z_data::<Login>()?;
+        //                                             ^^^^^^^^^
         // Best-effort zeroization of the original request buffer containing the
         // unencrypted password.
         //
         // Prefer zeroizing payloads whenever they contain credentials.
 
+        // Acquire a database connection.
+        let mut conn = app.acquire_database_connection().await?;
+
+        // Execute the query.
         users::table
             .select(User::as_select())
             .filter(by_username(&params.username))
@@ -108,12 +107,13 @@ pub async fn logout(request: Request, _: Next) -> via::Result {
 pub async fn me(request: Request, _: Next) -> via::Result {
     // Load the active user with id = session.id.
     let user = {
-        // Acquire a database connection.
-        let mut conn = request.app().acquire_database_connection().await?;
-
         // Get the active user id from the session.
         let id = request.session().map(Identity::id)?;
 
+        // Acquire a database connection.
+        let mut conn = request.app().acquire_database_connection().await?;
+
+        // Execute the query.
         users::table
             .select(User::as_select())
             .filter(by_id(&id))

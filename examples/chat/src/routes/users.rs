@@ -25,11 +25,12 @@ async fn index(request: Request, _: Next) -> via::Result {
     // Get pagination params from the URI query.
     // let page = request.query::<Page>()?;
 
-    // Execute the query.
+    // Load a page of users.
     let users = {
         // Acquire a database connection.
         let mut conn = request.app().acquire_database_connection().await?;
 
+        // Execute the query.
         users::table
             .select(User::as_select())
             .order(recent())
@@ -56,21 +57,19 @@ async fn create(request: Request, _: Next) -> via::Result {
 
     // Insert the user into the users table.
     let user = {
-        // Acquire a database connection and read the request body.
-        let (mut conn, payload) = tokio::try_join!(
-            app.acquire_database_connection(),
-            body.timeout_after_secs(2)
-        )?;
-
         // Deserialize a NewUser from the request body.
-        let new_user = payload.be_z_data::<NewUser>()?;
-        //                     ^^^^^^^^^
+        let new_user = body.timeout_after_secs(2).await?.be_z_data::<NewUser>()?;
+        //                                               ^^^^^^^^^
         // Best-effort zeroization of the original request buffer containing the
         // unencrypted password. The password type used by `NewUser` is also
         // zeroized on drop.
         //
         // Prefer zeroizing payloads whenever they contain credentials.
 
+        // Acquire a database connection.
+        let mut conn = app.acquire_database_connection().await?;
+
+        // Execute the query.
         diesel::insert_into(users::table)
             .values(new_user)
             .returning(User::as_returning())
@@ -102,6 +101,7 @@ async fn show(request: Request, _: Next) -> via::Result {
         // Acquire a database connection.
         let mut conn = request.app().acquire_database_connection().await?;
 
+        // Execute the query.
         users::table
             .select(User::as_select())
             .filter(by_id(&id))
@@ -133,15 +133,13 @@ async fn update(request: Request, _: Next) -> via::Result {
 
     // Apply the change set to the active user.
     let user = {
-        // Acquire a database connection and read the request body.
-        let (mut conn, payload) = tokio::try_join!(
-            app.acquire_database_connection(),
-            body.timeout_after_secs(2)
-        )?;
+        // Aggregate the request body and deserialize a user change set.
+        let change_set = body.timeout_after_secs(2).await?.data::<ChangeSet>()?;
 
-        // Deserialize a user change set from the request body.
-        let change_set = payload.data::<ChangeSet>()?;
+        // Acquire a database connection.
+        let mut conn = app.acquire_database_connection().await?;
 
+        // Execute the query.
         diesel::update(users::table)
             .filter(by_id(&id))
             .set(change_set)

@@ -58,6 +58,7 @@ path = "./rustls/main.rs"
 required-features = ["rustls-23"]
 
 [dev-dependencies]
+argon2 = "0.5"
 base64 = "0.22"
 bb8 = "0.9"
 bitflags = { version = "2", features = ["serde"] }

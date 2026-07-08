@@ -48,7 +48,7 @@ async fn index(request: Request, _: Next) -> via::Result {
 /// On success, the session cookie is updated to authenticate the new account.
 async fn create(request: Request, _: Next) -> via::Result {
     // Deny the request if it comes from an authenticated user.
-    if request.session().is_err() {
+    if request.session().is_ok() {
         deny!(403, "logout before creating a new account");
     }
 

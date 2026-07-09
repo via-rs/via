@@ -68,12 +68,8 @@ async fn create(request: Request, _: Next) -> via::Result {
         // Acquire a database connection.
         let mut conn = app.acquire_database_connection().await?;
 
-        // Execute the query.
-        diesel::insert_into(users::table)
-            .values(new_user)
-            .returning(User::as_returning())
-            .get_result(&mut conn)
-            .await?
+        // Insert the new user.
+        User::create(&mut conn, new_user).await?
     };
 
     // Create an identity token for the new user.

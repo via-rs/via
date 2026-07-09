@@ -9,7 +9,7 @@ use via::guard::{self, Predicate, on};
 use via::{Middleware, Response, err};
 
 use crate::database::Id;
-use crate::{Request, Unicorn};
+use crate::{Next, Request, Unicorn};
 
 pub const COOKIE: &str = "via-chat-session";
 
@@ -67,10 +67,10 @@ pub fn restore(request: &mut Request) -> Result<(), Catch> {
 }
 
 pub fn verify() -> impl Middleware<Unicorn> + 'static {
-    via::middleware::<_, Unicorn>(|mut request, next| {
+    |mut request: Request, next: Next| {
         let app = request.app_owned();
 
-        Box::pin(async move {
+        async move {
             let identity = {
                 let extensions = request.extensions_mut();
                 let Some(token) = extensions.get_mut::<Identity>() else {
@@ -96,8 +96,8 @@ pub fn verify() -> impl Middleware<Unicorn> + 'static {
             }
 
             Ok(response)
-        })
-    })
+        }
+    }
 }
 
 #[inline(always)]

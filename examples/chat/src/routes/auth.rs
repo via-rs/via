@@ -2,21 +2,13 @@
 
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
-use serde::Deserialize;
 use via::request::Payloadz;
 use via::{Response, ResultExt, deny};
-use zeroize::Zeroizing;
 
 use crate::database::users;
-use crate::models::user::{User, by_id, by_username};
-use crate::util::session::{Authenticate, Identity, Session, Unauthorized};
+use crate::models::user::{AuthParams, User, by_id};
+use crate::util::session::{Authenticate, Identity, Session};
 use crate::{Next, Request};
-
-#[derive(Deserialize)]
-struct Login {
-    username: String,
-    password: Zeroizing<String>,
-}
 
 /// Authenticates the user identified by the credentials in the request body.
 ///
@@ -36,28 +28,23 @@ pub async fn login(request: Request, _: Next) -> via::Result {
     // Prepare to read the request body.
     let (body, app) = request.into_future();
 
+    // Timeout after 2s. It's plenty of time to read a single frame.
+    let body = body.timeout_after_secs(2);
+
     // Find the user with the matching set of credentials.
     let user = {
-        // Acquire a database connection and read the request body.
-        // Deserialize login params from the request body.
-        let params = body.timeout_after_secs(2).await?.be_z_data::<Login>()?;
-        //                                             ^^^^^^^^^
-        // Best-effort zeroization of the original request buffer containing the
-        // unencrypted password.
-        //
-        // Prefer zeroizing payloads whenever they contain credentials.
+        // Read the request body and then deserialize AuthParams from the
+        // "data" field of the JSON object in the request body.
+        let params = body.await?.be_z_data::<AuthParams>()?;
+        //                       ^^^^^^^^^
+        // Best-effort zeroization of the original request body containing the
+        // plain text password prevents a secret from lingering in memory.
 
         // Acquire a database connection.
         let mut conn = app.acquire_database_connection().await?;
 
-        // Execute the query.
-        users::table
-            .select(User::as_select())
-            .filter(by_username(&params.username))
-            .first(&mut conn)
-            .await
-            .optional()?
-            .ok_or(Unauthorized)?
+        // Authenticate the user.
+        User::authenticate(&mut conn, params).await?
     };
 
     // Create an identity token for the active user.

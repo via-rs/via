@@ -1,4 +1,3 @@
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::expression::AsExpression;
 use diesel::pg::{Pg, PgValue};
@@ -56,6 +55,15 @@ pub struct AuthParams {
     password: Zeroizing<String>,
 }
 
+/// A write-only password credential.
+///
+/// This type should never expose plaintext password material.
+///
+/// When deserialized from request input, the plaintext password is immediately
+/// hashed with Argon2id.
+///
+/// When loaded from the database, the stored PHC string is validated and
+/// retained only for verification purposes.
 #[derive(AsExpression, Deserialize, FromSqlRow)]
 #[diesel(sql_type = Text)]
 #[serde(transparent)]
@@ -73,16 +81,18 @@ sorts! {
     pub fn recent(#[desc] created_at, id) on users;
 }
 
+/// Deserializes a plaintext password directly into an opaque password hash.
 fn deserialize_password<'de, D>(deserializer: D) -> Result<Zeroizing<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
     use argon2::password_hash::{SaltString, rand_core::OsRng};
+    use argon2::{Argon2, PasswordHasher};
     use serde::de::Error;
 
-    // Deserialize the password as plain text wrapped in Zeroizing.
+    // Deserialize the password as plaintext wrapped in Zeroizing.
     //
-    // This prevents the plain text password from lingering in memory for
+    // This prevents the plaintext password from lingering in memory for
     // longer than it has to.
     let password = Zeroizing::new(String::deserialize(deserializer)?);
 
@@ -101,14 +111,10 @@ where
         )
 }
 
-fn verify_password(hash: &str, value: &[u8]) -> bool {
-    PasswordHash::new(hash)
-        .and_then(|hash| Argon2::default().verify_password(value, &hash))
-        .is_ok()
-}
-
 impl User {
     pub async fn authenticate(conn: &mut Connection<'_>, params: AuthParams) -> via::Result<Self> {
+        use argon2::{Argon2, PasswordHash, PasswordVerifier};
+
         let AuthParams { email, password } = params;
         let password = password.as_bytes();
 
@@ -119,11 +125,9 @@ impl User {
             .await
             .or(Err(Unauthorized))?;
 
-        if verify_password(hash.value(), password) {
-            Ok(user)
-        } else {
-            Err(Unauthorized.into())
-        }
+        PasswordHash::new(hash.value())
+            .and_then(|hash| Argon2::default().verify_password(password, &hash))
+            .map_or_else(|_| Err(Unauthorized.into()), |_| Ok(user))
     }
 
     pub async fn create(conn: &mut Connection<'_>, init: NewUser) -> via::Result<Self> {
@@ -156,8 +160,8 @@ impl Debug for Password {
 impl FromSql<Text, Pg> for Password {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let value = str::from_utf8(value.as_bytes())?;
-        let Ok(hash) = PasswordHash::new(value) else {
-            return Err("".into());
+        let Ok(hash) = argon2::PasswordHash::new(value) else {
+            return Err("internal server error".into());
         };
 
         Ok(Password {

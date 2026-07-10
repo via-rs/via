@@ -1,6 +1,5 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cookie::{Cookie, Key, SameSite};
 use http::StatusCode;
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
@@ -8,10 +7,9 @@ use via::error::{Catch, Propagate};
 use via::guard::{self, Predicate, on};
 use via::{Middleware, Response, err};
 
-use crate::database::Id;
+use super::id::Id;
+use crate::models::user::User;
 use crate::{Next, Request, Unicorn};
-
-pub const COOKIE: &str = "via-chat-session";
 
 const EXPIRES_AT: usize = 8;
 const TOKEN_LEN: usize = 16;
@@ -22,13 +20,18 @@ pub struct Identity([u8; 16]);
 #[derive(Clone, Copy)]
 pub struct Unauthorized;
 
-pub trait Authenticate {
-    fn authenticate(&mut self, secret: &Key, user: Option<Identity>);
+pub trait Authentication {
+    fn login(&self, user: User) -> via::Result;
+    fn logout(&self, response: &mut Response);
+    fn refresh(&self, identity: &Identity, response: &mut Response);
+    fn restore(&self, request: &Request) -> Result<Identity, Unauthorized>;
 }
 
 pub trait Session {
     fn session(&self) -> Result<&Identity, Unauthorized>;
-    // async fn user(&self) -> Result<User, Error>;
+    fn me(&self) -> Result<Id, Unauthorized> {
+        self.session().and_then(Identity::id)
+    }
 }
 
 pub fn authenticate<T>(middleware: T) -> impl Middleware<Unicorn> + 'static
@@ -50,53 +53,35 @@ pub fn needs_verified() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
 }
 
 pub fn restore(request: &mut Request) -> Result<(), Catch> {
-    let jar = {
-        let secret = request.app().signer();
-        request.cookies().signed(secret)
-    };
-
-    let token = jar
-        .get(COOKIE)
-        .ok_or(Unauthorized)
-        .and_then(|cookie| cookie.value().parse::<Identity>())
-        .or_continue()?;
-
-    request.extensions_mut().insert(token);
-
+    let identity = request.app().restore(request).or_continue()?;
+    request.extensions_mut().insert(identity);
     Ok(())
 }
 
 pub fn verify() -> impl Middleware<Unicorn> + 'static {
-    |mut request: Request, next: Next| {
+    async |request: Request, next: Next| {
+        let Some(id) = request.me().ok() else {
+            return next.call(request).await;
+        };
+
+        // if let Ok(updated) = token.refresh(&app.database).await {
+        //     Some(updated)
+        // } else {
+        //     extensions.remove::<Identity>();
+        //     None
+        // }
+
         let app = request.app_owned();
+        let mut response = next.call(request).await?;
 
-        async move {
-            let identity = {
-                let extensions = request.extensions_mut();
-                let Some(token) = extensions.get_mut::<Identity>() else {
-                    return next.call(request).await;
-                };
-
-                Some(token.clone())
-
-                // if let Ok(updated) = token.refresh(&app.database).await {
-                //     Some(updated)
-                // } else {
-                //     extensions.remove::<Identity>();
-                //     None
-                // }
-            };
-
-            let mut response = next.call(request).await?;
-
-            if response.status() == StatusCode::UNAUTHORIZED {
-                response.authenticate(&app.signer, None);
-            } else {
-                response.authenticate(&app.signer, identity);
-            }
-
-            Ok(response)
+        if response.status() == StatusCode::UNAUTHORIZED {
+            app.logout(&mut response);
+        } else {
+            let token = Identity::new(&id);
+            app.refresh(&token, &mut response);
         }
+
+        Ok(response)
     }
 }
 
@@ -115,18 +100,12 @@ impl Identity {
         Self(buf)
     }
 
-    pub fn expires_at(&self) -> Result<i64, Unauthorized> {
-        self.0[EXPIRES_AT..]
-            .try_into()
-            .or(Err(Unauthorized))
-            .map(i64::from_be_bytes)
-    }
-
-    pub fn id(&self) -> Id {
-        let mut bytes = [0; 8];
-
-        bytes.copy_from_slice(&self.0[..EXPIRES_AT]);
-        Id::new(i64::from_be_bytes(bytes))
+    pub fn id(&self) -> Result<Id, Unauthorized> {
+        if let Ok(bytes) = self.0[..EXPIRES_AT].try_into() {
+            Ok(Id::new(i64::from_be_bytes(bytes)))
+        } else {
+            Err(Unauthorized)
+        }
     }
 
     pub fn is_expired(&self) -> bool {
@@ -161,15 +140,16 @@ impl Identity {
     //     }
     // }
 
-    fn user_id(&self) -> Result<Id, Unauthorized> {
-        self.0[..EXPIRES_AT]
-            .try_into()
-            .or(Err(Unauthorized))
-            .map(|bytes| Id::new(i64::from_be_bytes(bytes)))
+    pub fn encode(&self) -> String {
+        URL_SAFE_NO_PAD.encode(&self.0)
     }
 
-    fn encode(&self) -> String {
-        URL_SAFE_NO_PAD.encode(self.0.as_slice())
+    fn expires_at(&self) -> Result<i64, Unauthorized> {
+        if let Ok(bytes) = self.0[EXPIRES_AT..].try_into() {
+            Ok(i64::from_be_bytes(bytes))
+        } else {
+            Err(Unauthorized)
+        }
     }
 }
 
@@ -210,28 +190,6 @@ impl Session for via::ws::Request<Unicorn> {
 
     //     session.user(database).await
     // }
-}
-
-impl Authenticate for Response {
-    fn authenticate(&mut self, secret: &Key, identity: Option<Identity>) {
-        // Build an empty session cookie.
-        let mut cookie = Cookie::build(COOKIE)
-            .http_only(true)
-            .same_site(SameSite::Strict)
-            .expires(OffsetDateTime::now_utc() + Duration::weeks(2))
-            .secure(true)
-            .path("/")
-            .build();
-
-        if let Some(token) = identity {
-            cookie.set_value(token.encode());
-        } else {
-            cookie.make_removal();
-        }
-
-        // Add the session cookie.
-        self.cookies_mut().signed_mut(secret).add(cookie);
-    }
 }
 
 impl From<Unauthorized> for via::Error {

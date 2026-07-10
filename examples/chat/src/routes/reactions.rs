@@ -5,7 +5,7 @@ use via::Error;
 use via::request::PathParams;
 
 use super::channels::ChannelMemberParams;
-use crate::database::Id;
+use crate::util::Id;
 use crate::{Next, Request, Unicorn};
 
 #[derive(Clone, Debug, Serialize)]

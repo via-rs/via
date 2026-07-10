@@ -1,16 +1,18 @@
 use bitflags::bitflags;
-use diesel::AsExpression;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
+use diesel::dsl::{AsSelect, InnerJoin, Select};
 use diesel::pg::{Pg, PgValue};
-use diesel::prelude::*;
 use diesel::serialize::{self, Output, ToSql};
-use diesel::sql_types::Integer;
+use diesel::{AsExpression, sql_types};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use via_diesel::prelude::*;
 
-use super::channel::Channel;
-use super::user::UserPreview;
-use crate::database::{Id, subscriptions};
+use super::{Channel, ChannelWithThreads, ThreadDetails, UserPreview};
+use crate::schema::{channels, subscriptions, users};
+use crate::util::Id;
+
+type JoinChannels = InnerJoin<subscriptions::table, channels::table>;
 
 #[derive(Clone, Debug, Identifiable, Queryable, Selectable, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,10 +53,10 @@ pub struct ChangeSet {
 pub struct ChannelSubscription {
     #[diesel(embed)]
     #[serde(flatten)]
-    subscription: Subscription,
+    channel: Channel,
 
     #[diesel(embed)]
-    channel: Channel,
+    subscription: Subscription,
 }
 
 #[derive(Queryable, Selectable, Serialize)]
@@ -71,45 +73,54 @@ pub struct UserSubscription {
 
 bitflags! {
     #[derive(AsExpression, Clone, Debug, Deserialize, FromSqlRow, Serialize)]
-    #[diesel(sql_type = Integer)]
+    #[diesel(sql_type = sql_types::Integer)]
     pub struct AuthClaims: i32 {
-        const VIEW        = 1 << 0;
-        const WRITE       = 1 << 1;
-        const REACT       = 1 << 2;
-        const INVITE      = 1 << 3;
-        const MODERATE    = 1 << 4;
+        const READ         = 1 << 1;
+        const WRITE        = 1 << 2;
+        const MODERATE     = 1 << 3;
+        const ADMINISTRATE = 1 << 4;
     }
 }
 
-filters! {
+via_diesel::filters! {
     pub fn by_id(id == &Id) on subscriptions;
     pub fn by_user(user_id == &Id) on subscriptions;
     pub fn by_channel(channel_id == &Id) on subscriptions;
 }
 
-sorts! {
+via_diesel::sorts! {
     pub fn recent(#[desc] created_at, id) on subscriptions;
 }
 
 diesel::define_sql_function! {
     /// SQL: (lhs & rhs) = rhs
-    fn has_flags(lhs: Integer, rhs: Integer) -> Bool;
+    fn has_flags(lhs: sql_types::Integer, rhs: sql_types::Integer) -> sql_types::Bool;
 }
 
 pub fn claims_can_participate() -> has_flags<subscriptions::claims, i32> {
-    let participate = AuthClaims::VIEW | AuthClaims::WRITE | AuthClaims::REACT;
+    let participate = AuthClaims::READ | AuthClaims::WRITE;
     has_flags(subscriptions::claims, participate.bits())
 }
 
-impl FromSql<Integer, Pg> for AuthClaims {
+impl FromSql<sql_types::Integer, Pg> for AuthClaims {
     fn from_sql(bytes: PgValue<'_>) -> deserialize::Result<Self> {
         i32::from_sql(bytes).map(Self::from_bits_truncate)
     }
 }
 
-impl ToSql<Integer, Pg> for AuthClaims {
+impl ToSql<sql_types::Integer, Pg> for AuthClaims {
     fn to_sql<'a>(&'a self, output: &mut Output<'a, '_, Pg>) -> serialize::Result {
-        <_ as ToSql<Integer, _>>::to_sql(&self.bits(), &mut output.reborrow())
+        <_ as ToSql<sql_types::Integer, _>>::to_sql(&self.bits(), &mut output.reborrow())
+    }
+}
+
+impl Subscription {
+    pub fn users() -> InnerJoin<subscriptions::table, users::table> {
+        subscriptions::table.inner_join(users::table)
+    }
+
+    pub fn query() -> Select<subscriptions::table, AsSelect<Self, Pg>> {
+        subscriptions::table.select(Self::as_select())
     }
 }
 
@@ -126,13 +137,23 @@ impl NewSubscription {
 }
 
 impl ChannelSubscription {
+    pub fn query() -> Select<JoinChannels, AsSelect<Self, Pg>> {
+        subscriptions::table
+            .inner_join(channels::table)
+            .select(Self::as_select())
+    }
+
+    pub fn with_threads(self, threads: Vec<ThreadDetails>) -> ChannelWithThreads {
+        ChannelWithThreads::new(self, threads)
+    }
+
     pub fn id(&self) -> &Id {
         &self.subscription.id
     }
 
-    // pub fn channel(&self) -> &Channel {
-    //     &self.channel
-    // }
+    pub fn channel(&self) -> &Channel {
+        &self.channel
+    }
 
     pub fn claims(&self) -> &AuthClaims {
         &self.subscription.claims

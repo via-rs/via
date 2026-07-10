@@ -1,13 +1,12 @@
 //! The /api/auth namespace.
 
-use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
+use http::StatusCode;
 use via::request::Payloadz;
-use via::{Response, ResultExt, deny};
+use via::{Response, deny};
+use via_diesel::prelude::*;
 
-use crate::database::users;
-use crate::models::user::{AuthParams, User, by_id};
-use crate::util::session::{Authenticate, Identity, Session};
+use crate::models::user::{User, by_id};
+use crate::util::session::{Authentication, Session};
 use crate::{Next, Request};
 
 /// Authenticates the user identified by the credentials in the request body.
@@ -25,38 +24,24 @@ pub async fn login(request: Request, _: Next) -> via::Result {
         deny!(403, "session already exists");
     }
 
-    // Prepare to read the request body.
+    // Read the request body and then deserialize AuthParams from the
+    // "data" field of the JSON object in the request body.
     let (body, app) = request.into_future();
-
-    // Timeout after 2s. It's plenty of time to read a single frame.
-    let body = body.timeout_after_secs(2);
+    let params = body.timeout_after_secs(2).await?.be_z_data()?;
+    //                                             ^^^^^^^^^
+    // Best-effort zeroization of the original request body containing the
+    // plain text password prevents a secret from lingering in memory.
 
     // Find the user with the matching set of credentials.
     let user = {
-        // Read the request body and then deserialize AuthParams from the
-        // "data" field of the JSON object in the request body.
-        let params = body.await?.be_z_data::<AuthParams>()?;
-        //                       ^^^^^^^^^
-        // Best-effort zeroization of the original request body containing the
-        // plain text password prevents a secret from lingering in memory.
-
         // Acquire a database connection.
-        let mut conn = app.acquire_database_connection().await?;
+        let mut connection = app.database().await?;
 
         // Authenticate the user.
-        User::authenticate(&mut conn, params).await?
+        User::authenticate(&mut connection, params).await?
     };
 
-    // Create an identity token for the active user.
-    let identity = Identity::new(user.id());
-
-    // Build a response containing the active user.
-    let mut response = Response::build().status(201).data(user)?;
-
-    // Set the session cookie.
-    response.authenticate(app.signer(), Some(identity));
-
-    Ok(response)
+    app.login(user)
 }
 
 /// Ends the session associated with the request.
@@ -77,7 +62,7 @@ pub async fn logout(request: Request, _: Next) -> via::Result {
     let mut response = Response::build().status(204).finish()?;
 
     // Remove the session cookie.
-    response.authenticate(request.app().signer(), None);
+    request.app().logout(&mut response);
 
     Ok(response)
 }
@@ -92,32 +77,25 @@ pub async fn logout(request: Request, _: Next) -> via::Result {
 /// If there is not an active user session associated with the request, a 404
 /// Not Found response is returned.
 pub async fn me(request: Request, _: Next) -> via::Result {
-    // Load the active user with id = session.id.
-    let user = {
-        // Get the active user id from the session.
-        let id = request.session().map(Identity::id)?;
+    // Get the active user id from the session.
+    let id = request.me()?;
 
+    // Find the active user with id = session.id.
+    let user = {
         // Acquire a database connection.
-        let mut conn = request.app().acquire_database_connection().await?;
+        let mut connection = request.app().database().await?;
 
         // Execute the query.
-        users::table
-            .select(User::as_select())
+        User::query()
             .filter(by_id(&id))
-            .first(&mut conn)
-            .await
-            .optional()?
-            .or_not_found()?
+            .first(&mut connection)
+            .await?
     };
 
-    // Create a fresh identity token for the active user.
-    let identity = Identity::new(user.id());
-
     // Build a response containing the active user.
-    let mut response = Response::build().data(user)?;
+    let mut response = request.app().login(user)?;
 
-    // Update the session cookie expiry.
-    response.authenticate(request.app().signer(), Some(identity));
+    *response.status_mut() = StatusCode::OK;
 
     Ok(response)
 }

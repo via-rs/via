@@ -2,10 +2,8 @@ use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::expression::AsExpression;
 use diesel::helper_types::InnerJoin;
 use diesel::pg::{Pg, PgValue};
-use diesel::prelude::*;
 use diesel::serialize::{self, Output, ToSql};
 use diesel::sql_types::{Array, BigInt, Integer, Text, VarChar};
-use diesel_async::RunQueryDsl;
 use serde::de::{Deserializer, Error as DeError};
 use serde::{Deserialize, Serialize, Serializer};
 use std::error::Error;
@@ -13,10 +11,13 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
 use std::str::FromStr;
 use time::OffsetDateTime;
+use via_diesel::prelude::*;
+use via_diesel::{filters, sorts};
 
-use super::thread::ThreadWithUser;
-use super::user::{User, UserPreview};
-use crate::database::{Connection, Id, reactions, users};
+use super::{ThreadWithUser, User, UserPreview};
+use crate::app::Connection;
+use crate::schema::{reactions, users};
+use crate::util::Id;
 
 #[derive(Debug)]
 pub struct InvalidEmojiError;
@@ -111,18 +112,19 @@ impl Reaction {
         Self::query().inner_join(users::table)
     }
 
-    pub fn to_threads<'a>(
+    pub async fn to_threads<'a>(
         connection: &mut Connection<'_>,
-        ids: impl IntoIterator<Item = &'a Id>,
-    ) -> impl Future<Output = QueryResult<Vec<ReactionPreview>>> {
+        ids: Vec<Id>,
+    ) -> via::Result<Vec<ReactionPreview>> {
         const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
         const USERNAMES_PER_REACTION: i32 = 6;
 
-        diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
-            .bind::<Array<BigInt>, Vec<_>>(ids.into_iter().collect())
+        let query = diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
+            .bind::<Array<BigInt>, Vec<_>>(ids)
             .bind::<Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
-            .bind::<Integer, _>(USERNAMES_PER_REACTION)
-            .load(connection)
+            .bind::<Integer, _>(USERNAMES_PER_REACTION);
+
+        AsyncQueryDsl::load(query, connection).await
     }
 }
 

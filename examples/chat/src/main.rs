@@ -1,26 +1,3 @@
-mod database;
-mod models;
-mod routes;
-mod util;
-
-use cookie::Key;
-use std::process::ExitCode;
-use via::guard::{self, media, method};
-use via::{Server, cookies, rescue, router};
-
-use database::{Connection, ConnectionPool, establish_connection};
-use routes::auth::{login, logout, me};
-use routes::{channels, reactions, threads, users};
-use util::session::{self, auth_required, authenticate};
-
-type Request = via::Request<Unicorn>;
-type Next = via::Next<Unicorn>;
-
-struct Unicorn {
-    database: ConnectionPool,
-    signer: Key,
-}
-
 macro_rules! log {
     ($level:tt($name:ident), $fmt:literal $($arg:tt)*) => {
         log!($level($name = 0), $fmt $($arg)*)
@@ -34,40 +11,41 @@ macro_rules! log {
             stringify!($name),
             format_args!($fmt $($arg)*),
             indent = $indent * 2,
-        );
+        )
     };
 }
 
-impl Unicorn {
-    async fn acquire_database_connection(&self) -> via::Result<Connection<'_>> {
-        self.database.get().await.map_err(|error| {
-            log!(error(database), "{}", &error);
-            via::err!(500, "internal server error")
-        })
-    }
+mod app;
+mod models;
+mod routes;
+mod schema;
+mod util;
 
-    #[inline]
-    fn signer(&self) -> &Key {
-        &self.signer
-    }
-}
+use std::process::ExitCode;
+use via::guard::{self, media, method};
+use via::{Server, cookies, rescue, router};
+
+use app::Unicorn;
+use routes::auth::{login, logout, me};
+use routes::{channels, reactions, threads, users};
+use util::session::{self, auth_required, authenticate};
+
+type Request = via::Request<Unicorn>;
+type Next = via::Next<Unicorn>;
 
 #[tokio::main]
 async fn main() -> via::Result<ExitCode> {
-    // Create our chat application, "Unicorn".
-    let mut app = via::app(Unicorn {
-        database: establish_connection().await,
-        signer: Key::from(util::env::require("VIA_SECRET_KEY").as_bytes()),
-    });
+    // Setup our chat service, "Unicorn".
+    let mut unicorn = via::app(Unicorn::new().await?);
 
     // The /api namespace.
-    let mut path = app.push("/api");
+    let mut path = unicorn.push("/api");
 
     // If an error occurs, respond with JSON.
     path.middleware(rescue::json().build());
 
-    // Parse and track changes that are made to the session cookie.
-    path.middleware(cookies([session::COOKIE]));
+    // Parse and persist updates to the session cookie.
+    path.middleware(cookies([app::SESSION]));
 
     // Content negotiation, session restoration, and verification.
     path.middleware(guard::flat_map(
@@ -136,5 +114,5 @@ async fn main() -> via::Result<ExitCode> {
         .route("/:user-id", users::member(auth_required));
 
     // Start listening at http://localhost:8080 for incoming requests.
-    Server::new(app).listen(("127.0.0.1", 8080)).await
+    Server::new(unicorn).listen(("127.0.0.1", 8080)).await
 }

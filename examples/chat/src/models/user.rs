@@ -1,17 +1,18 @@
 use diesel::deserialize::{self, FromSql, FromSqlRow};
+use diesel::dsl::{AsSelect, Select};
 use diesel::expression::AsExpression;
 use diesel::pg::{Pg, PgValue};
-use diesel::prelude::*;
 use diesel::serialize::{self, Output, ToSql};
-use diesel::sql_types::Text;
-use diesel_async::RunQueryDsl;
+use diesel::sql_types;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::{self, Debug, Formatter};
 use time::OffsetDateTime;
+use via_diesel::prelude::*;
 use zeroize::Zeroizing;
 
-use crate::database::{Connection, Id, users};
-use crate::util::session::Unauthorized;
+use crate::app::Connection;
+use crate::schema::users;
+use crate::util::{Id, Unauthorized};
 
 #[derive(Clone, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +47,7 @@ pub struct ChangeSet {
 #[diesel(table_name = users)]
 pub struct UserPreview {
     id: Id,
+    email: String,
     username: String,
 }
 
@@ -65,19 +67,19 @@ pub struct AuthParams {
 /// When loaded from the database, the stored PHC string is validated and
 /// retained only for verification purposes.
 #[derive(AsExpression, Deserialize, FromSqlRow)]
-#[diesel(sql_type = Text)]
+#[diesel(sql_type = sql_types::Text)]
 #[serde(transparent)]
 struct Password {
     #[serde(deserialize_with = "deserialize_password")]
     hash: Zeroizing<String>,
 }
 
-filters! {
+via_diesel::filters! {
     pub fn by_id(id == &Id) on users;
     pub fn by_email(email == &str) on users;
 }
 
-sorts! {
+via_diesel::sorts! {
     pub fn recent(#[desc] created_at, id) on users;
 }
 
@@ -116,8 +118,6 @@ impl User {
         use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
         let AuthParams { email, password } = params;
-        let password = password.as_bytes();
-
         let (user, hash) = users::table
             .select((Self::as_select(), users::password_hash))
             .filter(by_email(&email))
@@ -126,22 +126,50 @@ impl User {
             .or(Err(Unauthorized))?;
 
         PasswordHash::new(hash.value())
-            .and_then(|hash| Argon2::default().verify_password(password, &hash))
+            .and_then(|hash| Argon2::default().verify_password(password.as_bytes(), &hash))
             .map_or_else(|_| Err(Unauthorized.into()), |_| Ok(user))
     }
 
-    pub async fn create(conn: &mut Connection<'_>, init: NewUser) -> via::Result<Self> {
-        let user = diesel::insert_into(users::table)
-            .values((
-                users::email.eq(init.email),
-                users::username.eq(init.username),
-                users::password_hash.eq(init.password_hash),
-            ))
-            .returning(Self::as_returning())
-            .get_result(conn)
-            .await?;
+    pub async fn create(connection: &mut Connection<'_>, init: NewUser) -> via::Result<Self> {
+        let values = (
+            users::email.eq(init.email),
+            users::username.eq(init.username),
+            users::password_hash.eq(init.password_hash),
+        );
 
-        Ok(user)
+        diesel::insert_into(users::table)
+            .values(values)
+            .returning(Self::as_returning())
+            .get_result(connection)
+            .await
+    }
+
+    pub async fn destroy(connection: &mut Connection<'_>, id: Id) -> via::Result<usize> {
+        diesel::delete(users::table)
+            .filter(by_id(&id))
+            .execute(connection)
+            .await
+    }
+
+    pub async fn update(
+        connection: &mut Connection<'_>,
+        id: Id,
+        changes: ChangeSet,
+    ) -> via::Result<Self> {
+        diesel::update(users::table)
+            .filter(by_id(&id))
+            .set(changes)
+            .returning(Self::as_returning())
+            .get_result(connection)
+            .await
+    }
+
+    pub fn query() -> Select<users::table, AsSelect<Self, Pg>> {
+        users::table.select(Self::as_select())
+    }
+
+    pub fn id(&self) -> &Id {
+        &self.id
     }
 }
 
@@ -157,7 +185,7 @@ impl Debug for Password {
     }
 }
 
-impl FromSql<Text, Pg> for Password {
+impl FromSql<sql_types::Text, Pg> for Password {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let value = str::from_utf8(value.as_bytes())?;
         let Ok(hash) = argon2::PasswordHash::new(value) else {
@@ -170,8 +198,8 @@ impl FromSql<Text, Pg> for Password {
     }
 }
 
-impl ToSql<Text, Pg> for Password {
+impl ToSql<sql_types::Text, Pg> for Password {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
-        <str as ToSql<Text, Pg>>::to_sql(self.value(), out)
+        <str as ToSql<sql_types::Text, Pg>>::to_sql(self.value(), out)
     }
 }

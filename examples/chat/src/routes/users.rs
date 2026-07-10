@@ -12,8 +12,7 @@ use via::request::Payloadz;
 use via::{Payload, Response, deny};
 use via_diesel::{LimitAndOffset, prelude::*};
 
-use crate::models::user::{ChangeSet, User, by_id, recent};
-use crate::schema::users;
+use crate::models::user::{User, by_id, recent};
 use crate::util::{Authentication, Id, Session};
 use crate::{Next, Request, Unicorn};
 

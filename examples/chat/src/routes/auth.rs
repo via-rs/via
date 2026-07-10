@@ -1,12 +1,11 @@
 //! The /api/auth namespace.
 
-use http::StatusCode;
 use via::request::Payloadz;
 use via::{Response, deny};
 use via_diesel::prelude::*;
 
 use crate::models::user::{User, by_id};
-use crate::util::session::{Authentication, Session};
+use crate::util::{Authentication, Identity, Session};
 use crate::{Next, Request};
 
 /// Authenticates the user identified by the credentials in the request body.
@@ -93,9 +92,10 @@ pub async fn me(request: Request, _: Next) -> via::Result {
     };
 
     // Build a response containing the active user.
-    let mut response = request.app().login(user)?;
+    let mut response = Response::build().data(user)?;
 
-    *response.status_mut() = StatusCode::OK;
+    // Update the the session cookie expiry and ttl.
+    request.app().refresh(&Identity::new(&id), &mut response);
 
     Ok(response)
 }

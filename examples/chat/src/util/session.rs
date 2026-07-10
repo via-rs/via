@@ -1,5 +1,4 @@
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::{Engine, general_purpose::URL_SAFE_NO_PAD};
 use http::StatusCode;
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
@@ -8,8 +7,9 @@ use via::guard::{self, Predicate, on};
 use via::{Middleware, Response, err};
 
 use super::id::Id;
-use crate::models::user::User;
-use crate::{Next, Request, Unicorn};
+use crate::app::Unicorn;
+use crate::models::User;
+use crate::{Next, Request};
 
 const EXPIRES_AT: usize = 8;
 const TOKEN_LEN: usize = 16;

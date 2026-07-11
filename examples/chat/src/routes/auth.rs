@@ -4,8 +4,9 @@ use via::request::Payloadz;
 use via::{Response, deny};
 use via_diesel::prelude::*;
 
+use crate::app::restore_session;
 use crate::models::user::{User, by_id};
-use crate::util::{Authentication, Identity, Session};
+use crate::util::{Authenticator, Session};
 use crate::{Next, Request};
 
 /// Authenticates the user identified by the credentials in the request body.
@@ -17,9 +18,9 @@ use crate::{Next, Request};
 ///
 /// If there is already a session associated with the request, a 403 Forbidden
 /// response is returned.
-pub async fn login(request: Request, _: Next) -> via::Result {
+pub async fn login(mut request: Request, _: Next) -> via::Result {
     // Deny the request if it comes from an authenticated user.
-    if request.me().is_ok() {
+    if restore_session(&mut request).is_ok() {
         deny!(403, "session already exists");
     }
 
@@ -51,9 +52,9 @@ pub async fn login(request: Request, _: Next) -> via::Result {
 ///
 /// If there is not a session associated with the request, a 404 Not Found
 /// response is returned instead.
-pub async fn logout(request: Request, _: Next) -> via::Result {
+pub async fn logout(mut request: Request, _: Next) -> via::Result {
     // If there is not an active session, pretend we don't exist.
-    if request.me().is_err() {
+    if restore_session(&mut request).is_err() {
         deny!(404, "not found");
     }
 
@@ -79,7 +80,7 @@ pub async fn me(request: Request, _: Next) -> via::Result {
     // Get the active user id from the session.
     let id = request.me()?;
 
-    // Find the active user with id = session.id.
+    // Find the active user.
     let user = {
         // Acquire a database connection.
         let mut connection = request.app().database().await?;
@@ -91,11 +92,5 @@ pub async fn me(request: Request, _: Next) -> via::Result {
             .await?
     };
 
-    // Build a response containing the active user.
-    let mut response = Response::build().data(user)?;
-
-    // Update the the session cookie expiry and ttl.
-    request.app().refresh(&Identity::new(&id), &mut response);
-
-    Ok(response)
+    Response::build().data(user)
 }

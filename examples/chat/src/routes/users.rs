@@ -13,7 +13,7 @@ use via::{Payload, Response, deny};
 use via_diesel::{LimitAndOffset, prelude::*};
 
 use crate::models::user::{User, by_id, recent};
-use crate::util::{Authentication, Id, Session};
+use crate::util::{Authenticator, Id, Session};
 use crate::{Next, Request, Unicorn};
 
 /// List users.

@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
 
 use crate::app::Connection;
 use crate::schema::users;
-use crate::util::{Id, Unauthorized};
+use crate::util::{Id, session::Unauthorized};
 
 #[derive(Clone, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,10 +180,6 @@ impl User {
 
     pub fn query() -> Select<users::table, AsSelect<Self, Pg>> {
         users::table.select(Self::as_select())
-    }
-
-    pub fn id(&self) -> &Id {
-        &self.id
     }
 }
 

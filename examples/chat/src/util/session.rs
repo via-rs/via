@@ -1,15 +1,13 @@
 use base64::engine::{Engine, GeneralPurpose};
-use http::StatusCode;
-use serde::Serialize;
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
 use via::guard::{self, Predicate, on};
-use via::{Error, Middleware, Response, err};
+use via::{Middleware, Response, err};
 
 use super::id::Id;
+use crate::Request;
 use crate::app::{IdentityExtension, Unicorn};
 use crate::models::User;
-use crate::{Next, Request};
 
 const EXPIRES_AT: usize = 8;
 const TOKEN_LEN: usize = 16;
@@ -17,27 +15,18 @@ const TOKEN_LEN: usize = 16;
 /// The codec used to decode or encode an identity token.
 pub const CODEC: GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-/// The cookie name used to store an encoded identity token.
-pub const SESSION: &str = "via-chat-session";
-
 #[derive(Clone, PartialEq)]
 pub struct Identity([u8; 16]);
 
 pub struct Unauthorized;
 
-pub trait Authentication {
+pub trait Authenticator {
     fn login(&self, user: User) -> via::Result;
     fn logout(&self, response: &mut Response);
-    fn refresh(&self, identity: &Identity, response: &mut Response);
 }
 
 pub trait Session {
     fn me(&self) -> Result<Id, Unauthorized>;
-}
-
-#[derive(Serialize)]
-struct Errors {
-    errors: [Error; 1],
 }
 
 pub fn authenticate<T>(middleware: T) -> impl Middleware<Unicorn> + 'static
@@ -58,50 +47,9 @@ pub fn needs_verified() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
     guard::bool(on(Identity::is_expired, IdentityExtension).opt())
 }
 
-pub async fn verify(request: Request, next: Next) -> via::Result {
-    // Get the id of the active user from the session.
-    let me = request.me()?;
-
-    {
-        // Acquire a database connection.
-        let mut connection = request.app().database().await?;
-
-        // Confirm that the user has an active account.
-        if let Err(error) = User::exists(&mut connection, me).await {
-            // If the user does not exist, destroy the session.
-            return if error.status() == StatusCode::UNAUTHORIZED {
-                unauthorized(request.app(), error)
-            } else {
-                Err(error)
-            };
-        }
-    }
-
-    // Get an owned handle to our application, Unicorn.
-    let app = request.app_owned();
-
-    // Await the response from the next middleware.
-    let mut response = next.call(request).await?;
-
-    // Update the expiry and tll of the session.
-    app.refresh(&Identity::new(&me), &mut response);
-
-    Ok(response)
-}
-
 #[inline(always)]
 fn in_an_hour() -> i64 {
     (OffsetDateTime::now_utc() + Duration::hours(1)).unix_timestamp()
-}
-
-fn unauthorized(app: &Unicorn, error: Error) -> via::Result {
-    let mut response = Response::build()
-        .status(StatusCode::UNAUTHORIZED)
-        .json(&Errors { errors: [error] })?;
-
-    app.logout(&mut response);
-
-    Ok(response)
 }
 
 impl Identity {

@@ -43,6 +43,178 @@ pub struct Route<'a, App> {
     pub(super) node: RouteMut<'a, Arc<dyn Middleware<App>>>,
 }
 
+pub struct Scope<'a, App> {
+    pub(super) node: RouteMut<'a, Arc<dyn Middleware<App>>>,
+}
+
+impl<'a, App> Scope<'a, App> {
+    /// A convenience method that appends `path` to self and assigns it to
+    /// `middleware`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # let mut app = via::app(());
+    /// let mut path = app.push("/posts");
+    ///
+    /// // The /posts "collection" resource.
+    /// path = path.assign(via::get(posts::index));
+    ///
+    /// // The /posts/:id "member" resource.
+    /// path.route("/:id", via::get(posts::show));
+    ///
+    /// // A bespoke /posts/trending route.
+    /// path.route("/trending", via::get(posts::trending));
+    /// #
+    /// # mod posts {
+    /// #     use via::{Next, Request};
+    /// #     pub async fn trending(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
+    /// # }
+    /// ```
+    pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Scope<'_, App>
+    where
+        T: Middleware<App> + 'static,
+    {
+        self.push(path).scope(|scope| scope.assign(middleware))
+    }
+
+    /// Defines how the route should respond when it is visited.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # let mut app = via::app(());
+    /// #
+    /// // Define the /users resource as `path`.
+    /// let mut path = app.push("/users");
+    ///
+    /// path.assign(via::get(users::index))
+    /// //          ^^^^^^^^^^^^^^^^^^^^^
+    /// //   Called only when the request path matches /users.
+    /// //
+    ///     .push("/:id")
+    ///     .assign(via::get(users::show));
+    /// //          ^^^^^^^^^^^^^^^^^^^^^
+    /// //   Called only when the request path matches /users/:id.
+    /// //
+    /// #
+    /// # mod users {
+    /// #     use via::{Next, Request};
+    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
+    /// # }
+    /// ```
+    pub fn assign<T>(self, middleware: T) -> Self
+    where
+        T: Middleware<App> + 'static,
+    {
+        Self {
+            node: self.node.assign(Arc::new(middleware)),
+        }
+    }
+
+    /// Returns a new child route by appending the provided path to the current
+    /// route.
+    ///
+    /// The path argument can contain multiple segments. The returned route
+    /// always represents the final segment of that path.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # let mut app = via::app(());
+    /// // The following routes all reference the same path: /hello/:name.
+    /// app.push("/hello/:name");
+    /// app.push("hello").push(":name");
+    /// app.push("/hello").push("/:name");
+    /// ```
+    ///
+    /// # Dynamic Segments
+    ///
+    /// Routes can include *dynamic* segments that capture portions of the
+    /// request path as parameters. These parameters are made available to
+    /// middleware at runtime.
+    ///
+    /// - `:dynamic` — Matches a single path segment. `/users/:id` matches
+    ///   `/users/12345` and captures `"12345"` as `id`.
+    ///
+    /// - `*splat` — Matches zero or more remaining path segments.
+    ///   `/static/*asset` matches `/static/logo.png` or `/static/css/main.css`
+    ///   and captures the remainder of the path starting from the splat
+    ///   pattern as `asset`. `logo.png` and `css/main.css`.
+    ///
+    /// Dynamic segments match any path segment, so define them after all
+    /// static sibling routes to ensure intended routing behavior.
+    ///
+    /// Consider the following sequence of route definitions. We define
+    /// `/articles/trending` before `/articles/:id` to ensure that a request to
+    /// `/articles/trending` is routed to `articles::trending` rather than
+    /// capturing `"trending"` as `id` and invoking `articles::show`.
+    ///
+    /// ```
+    /// # let mut app = via::app(());
+    /// let mut path = app.push("/posts");
+    ///
+    /// // Assigning a terminal middleware to a path takes ownership of self.
+    /// //
+    /// // We want to continue defining adjacent resources rather than
+    /// // dependencies of an individual post. Therefore, we reassign path.
+    /// path = path.assign(via::get(posts::index));
+    ///
+    /// // The /posts/:id resource.
+    /// path.push("/:id").assign(via::get(posts::show));
+    ///
+    /// // A bespoke /posts/trending route.
+    /// path.push("/trending").assign(via::get(posts::trending));
+    /// #
+    /// # mod posts {
+    /// #     use via::{Next, Request};
+    /// #     pub async fn trending(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
+    /// # }
+    /// ```
+    pub fn push(&mut self, path: &'static str) -> Route<'_, App> {
+        Route {
+            node: self.node.route(path),
+        }
+    }
+
+    /// Takes ownership of self and then calls `op` with a mutable ref to self.
+    ///
+    /// Maping a route is particularly useful when you want to define routes in
+    /// a new scope. It is less busy than assigning the path to a variable in a
+    /// block.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # let mut app = via::app(());
+    /// #
+    /// // The /posts "collection" resource.
+    /// app.route("/posts", via::get(posts::index)).map(|mut path| {
+    ///     // The /posts/:id "member" resource.
+    ///     path.route("/:post-id", via::get(posts::show));
+    ///
+    ///     // A bespoke /posts/trending route.
+    ///     path.route("/:post-id", via::get(posts::trending));
+    /// });
+    /// #
+    /// # mod posts {
+    /// #     use via::{Next, Request};
+    /// #     pub async fn trending(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
+    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
+    /// # }
+    /// ```
+    ///
+    pub fn map<T>(self, op: impl FnOnce(Self) -> T) -> T {
+        op(self)
+    }
+}
+
 impl<'a, App> Route<'a, App> {
     /// Appends the provided middleware to the route's call stack.
     ///
@@ -145,73 +317,6 @@ impl<'a, App> Route<'a, App> {
         }
     }
 
-    /// A convenience method that appends `path` to self and assigns it to
-    /// `middleware`.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # let mut app = via::app(());
-    /// let mut path = app.push("/posts");
-    ///
-    /// // The /posts "collection" resource.
-    /// path = path.assign(via::get(posts::index));
-    ///
-    /// // The /posts/:id "member" resource.
-    /// path.route("/:id", via::get(posts::show));
-    ///
-    /// // A bespoke /posts/trending route.
-    /// path.route("/trending", via::get(posts::trending));
-    /// #
-    /// # mod posts {
-    /// #     use via::{Next, Request};
-    /// #     pub async fn trending(_: Request, _: Next) -> via::Result { todo!() }
-    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
-    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
-    /// # }
-    /// ```
-    pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Route<'_, App>
-    where
-        T: Middleware<App> + 'static,
-    {
-        self.push(path).assign(middleware)
-    }
-
-    /// Defines how the route should respond when it is visited.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # let mut app = via::app(());
-    /// #
-    /// // Define the /users resource as `path`.
-    /// let mut path = app.push("/users");
-    ///
-    /// path.assign(via::get(users::index))
-    /// //          ^^^^^^^^^^^^^^^^^^^^^
-    /// //   Called only when the request path matches /users.
-    /// //
-    ///     .push("/:id")
-    ///     .assign(via::get(users::show));
-    /// //          ^^^^^^^^^^^^^^^^^^^^^
-    /// //   Called only when the request path matches /users/:id.
-    /// //
-    /// #
-    /// # mod users {
-    /// #     use via::{Next, Request};
-    /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
-    /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
-    /// # }
-    /// ```
-    pub fn assign<T>(self, middleware: T) -> Self
-    where
-        T: Middleware<App> + 'static,
-    {
-        Self {
-            node: self.node.assign(Arc::new(middleware)),
-        }
-    }
-
     /// Takes ownership of self and then calls `op` with a mutable ref to self.
     ///
     /// Maping a route is particularly useful when you want to define routes in
@@ -242,5 +347,9 @@ impl<'a, App> Route<'a, App> {
     ///
     pub fn map<T>(self, op: impl FnOnce(Self) -> T) -> T {
         op(self)
+    }
+
+    pub fn scope<T>(self, op: impl FnOnce(Scope<'a, App>) -> T) -> T {
+        op(Scope { node: self.node })
     }
 }

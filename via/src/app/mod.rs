@@ -7,7 +7,7 @@ pub use shared::Shared;
 use delegate::delegate;
 
 use crate::middleware::Middleware;
-use crate::router::{Route, Router};
+use crate::router::{Route, Router, Scope};
 
 /// Configure routes and define shared global state.
 ///
@@ -105,7 +105,7 @@ impl<App> Via<App> {
             /// Returns a new route as a child of the root path `/`.
             ///
             /// See also the usage example in [`Route::route`].
-            pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Route<'_, App>
+            pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Scope<'_, App>
             where
                 T: Middleware<App> + 'static;
         }

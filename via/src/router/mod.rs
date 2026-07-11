@@ -3,7 +3,7 @@
 mod route;
 mod switch;
 
-pub use route::Route;
+pub use route::{Route, Scope};
 pub use switch::*;
 
 pub(crate) use switch::MethodNotAllowed;
@@ -80,11 +80,11 @@ impl<App> Router<App> {
         }
     }
 
-    pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Route<'_, App>
+    pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Scope<'_, App>
     where
         T: Middleware<App> + 'static,
     {
-        self.push(path).assign(middleware)
+        self.push(path).scope(|scope| scope.assign(middleware))
     }
 
     pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, Arc<dyn Middleware<App>>> {

@@ -1,5 +1,5 @@
 use diesel::deserialize::{self, FromSql, FromSqlRow};
-use diesel::dsl::{AsSelect, Select};
+use diesel::dsl::{AsSelect, Select, count};
 use diesel::expression::AsExpression;
 use diesel::pg::{Pg, PgValue};
 use diesel::serialize::{self, Output, ToSql};
@@ -162,6 +162,20 @@ impl User {
             .returning(Self::as_returning())
             .get_result(connection)
             .await
+    }
+
+    pub async fn exists(connection: &mut Connection<'_>, id: Id) -> via::Result<()> {
+        let total = users::table
+            .select(count(users::id))
+            .filter(by_id(&id))
+            .get_result::<i64>(connection)
+            .await?;
+
+        if total == 1 {
+            Ok(())
+        } else {
+            Err(Unauthorized.into())
+        }
     }
 
     pub fn query() -> Select<users::table, AsSelect<Self, Pg>> {

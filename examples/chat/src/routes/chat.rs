@@ -22,7 +22,7 @@ pub async fn chat(mut channel: Channel, request: ws::Request<Unicorn>) -> ws::Re
     log!("  info(examples/chat): setup ws recv loop.");
 
     // An active session is required to keep the web socket open.
-    let _session = request.session().copied().or_break()?;
+    let _me = request.me().or_break()?;
 
     while let Some(next) = channel.recv().await {
         // End the session if the next message is a close message or the active

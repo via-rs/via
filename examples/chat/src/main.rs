@@ -28,7 +28,7 @@ use via::{Server, cookies, rescue, router};
 use app::Unicorn;
 use routes::auth::{login, logout, me};
 use routes::{channels, reactions, threads, users};
-use util::session::{self, auth_required, authenticate};
+use util::session::{self, SESSION, auth_required, authenticate};
 
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
@@ -36,16 +36,16 @@ type Next = via::Next<Unicorn>;
 #[tokio::main]
 async fn main() -> via::Result<ExitCode> {
     // Setup our chat service, "Unicorn".
-    let mut unicorn = via::app(Unicorn::new().await?);
+    let mut app = via::app(Unicorn::new().await?);
 
     // The /api namespace.
-    let mut path = unicorn.push("/api");
+    let mut path = app.push("/api");
 
     // If an error occurs, respond with JSON.
     path.middleware(rescue::json().build());
 
     // Parse and persist updates to the session cookie.
-    path.middleware(cookies([app::SESSION]));
+    path.middleware(cookies([SESSION]));
 
     // Content negotiation, session restoration, and verification.
     path.middleware(guard::flat_map(
@@ -54,7 +54,7 @@ async fn main() -> via::Result<ExitCode> {
         // Then, initialize the active user session.
         via::before(
             // Restore an identity token from the session cookie.
-            session::restore,
+            app::restore_session,
             // If the request is read only or the session was verified in the
             // past hour, skip verifying that the user still has an account.
             //
@@ -63,7 +63,7 @@ async fn main() -> via::Result<ExitCode> {
             // the user deletes their account.
             guard::filter(
                 guard::or((method::is_mutation(), session::needs_verified())),
-                session::verify(),
+                session::verify,
             ),
         ),
     ));
@@ -114,5 +114,5 @@ async fn main() -> via::Result<ExitCode> {
         .route("/:user-id", users::member(auth_required));
 
     // Start listening at http://localhost:8080 for incoming requests.
-    Server::new(unicorn).listen(("127.0.0.1", 8080)).await
+    Server::new(app).listen(("127.0.0.1", 8080)).await
 }

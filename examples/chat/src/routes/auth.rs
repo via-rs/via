@@ -19,7 +19,7 @@ use crate::{Next, Request};
 /// response is returned.
 pub async fn login(request: Request, _: Next) -> via::Result {
     // Deny the request if it comes from an authenticated user.
-    if request.session().is_ok() {
+    if request.me().is_ok() {
         deny!(403, "session already exists");
     }
 
@@ -53,7 +53,7 @@ pub async fn login(request: Request, _: Next) -> via::Result {
 /// response is returned instead.
 pub async fn logout(request: Request, _: Next) -> via::Result {
     // If there is not an active session, pretend we don't exist.
-    if request.session().is_err() {
+    if request.me().is_err() {
         deny!(404, "not found");
     }
 

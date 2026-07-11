@@ -22,8 +22,7 @@ mod schema;
 mod util;
 
 use std::process::ExitCode;
-use via::guard::bytes::case_sensitive;
-use via::guard::{self, media, method, on};
+use via::guard::{self, media};
 use via::{Server, cookies, rescue, router};
 
 use app::Unicorn;

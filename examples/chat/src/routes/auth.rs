@@ -1,7 +1,8 @@
 //! The /api/auth namespace.
 
+use http::StatusCode;
 use via::request::Payloadz;
-use via::{Response, deny};
+use via::{Response, deny, err};
 use via_diesel::prelude::*;
 
 use crate::models::user::{User, by_id};
@@ -53,14 +54,17 @@ pub async fn login(request: Request, _: Next) -> via::Result {
 /// response is returned instead.
 pub async fn logout(request: Request, _: Next) -> via::Result {
     // If there is not an active session, pretend we don't exist.
-    if request.me().is_err() {
-        deny!(404, "not found");
-    }
+    let mut response = if request.me().is_ok() {
+        // Build an empty response with a 204 status code.
+        Response::build().status(StatusCode::NO_CONTENT).finish()?
+    } else {
+        // Build an eager error response so we can destroy the session.
+        Response::build()
+            .status(StatusCode::NOT_FOUND)
+            .errors(err!(404, "not found"))?
+    };
 
-    // Build an empty response with a 204 status code.
-    let mut response = Response::build().status(204).finish()?;
-
-    // Remove the session cookie.
+    // Instruct the client to remove the session cookie.
     request.app().logout(&mut response);
 
     Ok(response)

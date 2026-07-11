@@ -72,31 +72,45 @@ pub fn restore_session(request: &mut Request) -> Result<(), Catch> {
 }
 
 /// Verify that the active user still has an account.
-pub async fn verify_session(request: Request, next: Next) -> via::Result {
+pub async fn verify_session(mut request: Request, next: Next) -> via::Result {
     // Get the id of the active user from the session.
     let me = request.me()?;
 
-    {
+    // If `Ok(())`, the account is valid.
+    let result = {
         // Acquire a database connection.
         let mut connection = request.app().database().await?;
 
-        // Confirm that the user has an active account.
-        if let Err(error) = User::exists(&mut connection, me).await {
-            // If the user does not exist, destroy the session.
-            return if error.status() == StatusCode::UNAUTHORIZED {
-                // Build a response with the auth error as json.
-                let mut response = Response::build()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .errors(error)?;
+        // Execute the query.
+        User::exists(&mut connection, me).await
+    };
 
-                // Instruct the client to remove the session cookie.
-                request.app().logout(&mut response);
+    // Verify the active user's account and create a fresh identity token.
+    let identity = match result {
+        // The account is valid, create a fresh identity token.
+        Ok(_) => Identity::new(&me),
 
-                Ok(response)
-            } else {
-                Err(error)
-            };
+        // The user does not exist, destroy the session.
+        Err(error) if error.status() == StatusCode::UNAUTHORIZED => {
+            // Build a response with the auth error as json.
+            let mut response = Response::build()
+                .status(StatusCode::UNAUTHORIZED)
+                .errors(error)?;
+
+            // Instruct the client to remove the session cookie.
+            request.app().logout(&mut response);
+
+            // Return an error response that removes the session.
+            return Ok(response);
         }
+
+        // Some other error occurred during verification.
+        Err(error) => return Err(error),
+    };
+
+    // Swap the identity token in the extension with a clone of `identity`.
+    if let Some(ProtectFromForgery(protected)) = request.extensions_mut().get_mut() {
+        *protected = identity.clone();
     }
 
     // Get an owned handle to our application, Unicorn.
@@ -106,7 +120,7 @@ pub async fn verify_session(request: Request, next: Next) -> via::Result {
     let mut response = next.call(request).await?;
 
     // Update the session cookie with a new base64 encoded identity token.
-    refresh_session(&mut response, &app.signer, Identity::new(&me));
+    refresh_session(&mut response, &app.signer, identity);
 
     Ok(response)
 }

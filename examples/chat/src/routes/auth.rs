@@ -4,7 +4,6 @@ use via::request::Payloadz;
 use via::{Response, deny};
 use via_diesel::prelude::*;
 
-use crate::app::restore_session;
 use crate::models::user::{User, by_id};
 use crate::util::{Authenticator, Session};
 use crate::{Next, Request};
@@ -18,9 +17,9 @@ use crate::{Next, Request};
 ///
 /// If there is already a session associated with the request, a 403 Forbidden
 /// response is returned.
-pub async fn login(mut request: Request, _: Next) -> via::Result {
+pub async fn login(request: Request, _: Next) -> via::Result {
     // Deny the request if it comes from an authenticated user.
-    if restore_session(&mut request).is_ok() {
+    if request.me().is_ok() {
         deny!(403, "session already exists");
     }
 
@@ -52,9 +51,9 @@ pub async fn login(mut request: Request, _: Next) -> via::Result {
 ///
 /// If there is not a session associated with the request, a 404 Not Found
 /// response is returned instead.
-pub async fn logout(mut request: Request, _: Next) -> via::Result {
+pub async fn logout(request: Request, _: Next) -> via::Result {
     // If there is not an active session, pretend we don't exist.
-    if restore_session(&mut request).is_err() {
+    if request.me().is_err() {
         deny!(404, "not found");
     }
 

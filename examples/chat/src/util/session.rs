@@ -43,7 +43,7 @@ pub fn auth_required() -> impl for<'a> Predicate<Request, Error<'a> = &'a Unauth
     )
 }
 
-pub fn needs_verified() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
+pub fn is_stale() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
     guard::bool(on(Identity::is_expired, IdentityExtension).opt())
 }
 

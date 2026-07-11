@@ -41,15 +41,26 @@
 /// ```
 #[macro_export]
 macro_rules! content {
-    ($accepts:expr, $provides:expr) => {
+    ($accepts:expr, $provides:expr, $methods:expr) => {
         via::guard::if_else(
-            via::guard::method::is_mutation(),
+            via::guard::on::method($methods),
             via::guard::on::headers((
                 via::guard::header::accept($provides),
                 via::guard::header::content_type($accepts),
                 via::guard::header::content_length(),
             )),
             via::guard::on::headers(via::guard::header::accept($provides)),
+        )
+    };
+    ($accepts:expr, $provides:expr) => {
+        $crate::content!(
+            $accepts,
+            $provides,
+            (
+                via::guard::method::patch(),
+                via::guard::method::post(),
+                via::guard::method::put(),
+            )
         )
     };
     ($accepts:expr) => {

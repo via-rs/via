@@ -22,13 +22,15 @@ mod schema;
 mod util;
 
 use std::process::ExitCode;
-use via::guard::{self, media, method};
-use via::{Response, Server, cookies, rescue, router};
+use via::guard::{self, media, method, on};
+use via::{Server, cookies, rescue, router};
 
 use app::Unicorn;
 use routes::auth::{login, logout, me};
 use routes::{channels, reactions, threads, users};
 use util::session::{self, auth_required, authenticate};
+
+use crate::app::SESSION;
 
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
@@ -38,43 +40,49 @@ async fn main() -> via::Result<ExitCode> {
     // Setup our chat service, "Unicorn".
     let mut app = via::app(Unicorn::new().await?);
 
-    // A temporary workaround before we implement CORS.
-    app.route("/", via::get(async |_, _| Response::build().finish()));
-
-    // If an error occurs, respond with JSON.
-    app.middleware(rescue::json().build());
-
-    // First, validate the request. Then, apply the cookies middleware.
-    // The session cookie is managed by Via only if the request is valid.
-    app.middleware(guard::flat_map(
-        guard::content!(media::json()),
-        cookies([app::SESSION]),
-    ));
-
-    // The /auth namespace.
-    app.push("/auth").map(|path| {
-        path.assign(via::post(login).delete(logout))
-            .route("/me", via::get(me));
-    });
-
     // The /api namespace.
     let mut path = app.push("/api");
 
-    // Initialize the active user session.
-    path.middleware(via::before(
-        // Restore an identity token from the session cookie.
-        app::restore_session,
-        // If the request is read only or the session was verified in the
-        // past hour, skip verifying that the user still has an account.
-        //
-        // This is safe so long as your app is the authoritative source of
-        // truth for the session and you properly end websocket sessions if
-        // the user deletes their account.
-        guard::filter(
-            guard::or((method::is_mutation(), session::needs_verified())),
-            app::verify_session,
-        ),
-    ));
+    // If an error occurs, respond with JSON.
+    path.middleware(rescue::json().build());
+
+    // Parse and persist updates to the session cookie.
+    path.middleware(cookies([SESSION]));
+
+    // Content negotiation, session restoration, and verification.
+    path.middleware({
+        // Requests that satisfy the following predicate require that the
+        // session be verified unconditionally.
+        let verfication_required = guard::if_else(
+            method::delete(),
+            guard::not(on::path(guard::bytes::case_sensitive(b"/api/auth"))),
+            guard::bool(on::method(guard::or((method::patch(), method::post())))),
+        );
+
+        guard::flat_map(
+            // Confirm that the client speaks JSON.
+            guard::content!(media::json()),
+            // Then, initialize the active user session.
+            via::before(
+                // Restore an identity token from the session cookie.
+                app::restore_session,
+                // If the request is read only or the session was verified in the
+                // past hour, skip verifying that the user still has an account.
+                //
+                // This is safe so long as your app is the authoritative source of
+                // truth for the session and you properly end websocket sessions if
+                // the user deletes their account.
+                guard::filter(
+                    guard::or((verfication_required, session::is_stale())),
+                    app::verify_session,
+                ),
+            ),
+        )
+    });
+
+    // The /api/auth namespace.
+    path.route("/auth", via::post(login).delete(logout))
+        .route("/me", via::get(me));
 
     // The /api/chat route.
     #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]

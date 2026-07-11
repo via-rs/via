@@ -22,6 +22,7 @@ mod schema;
 mod util;
 
 use std::process::ExitCode;
+use via::guard::bytes::case_sensitive;
 use via::guard::{self, media, method, on};
 use via::{Server, cookies, rescue, router};
 
@@ -49,36 +50,24 @@ async fn main() -> via::Result<ExitCode> {
     // Parse and persist updates to the session cookie.
     path.middleware(cookies([SESSION]));
 
-    // Content negotiation, session restoration, and verification.
-    path.middleware({
-        // Requests that satisfy the following predicate require that the
-        // session be verified unconditionally.
-        let verfication_required = guard::if_else(
-            method::delete(),
-            guard::not(on::path(guard::bytes::case_sensitive(b"/api/auth"))),
-            guard::bool(on::method(guard::or((method::patch(), method::post())))),
-        );
-
-        guard::flat_map(
-            // Confirm that the client speaks JSON.
-            guard::content!(media::json()),
-            // Then, initialize the active user session.
-            via::before(
-                // Restore an identity token from the session cookie.
-                app::restore_session,
-                // If the request is read only or the session was verified in the
-                // past hour, skip verifying that the user still has an account.
-                //
-                // This is safe so long as your app is the authoritative source of
-                // truth for the session and you properly end websocket sessions if
-                // the user deletes their account.
-                guard::filter(
-                    guard::or((verfication_required, session::is_stale())),
-                    app::verify_session,
-                ),
-            ),
-        )
-    });
+    // Content negotiation, session restoration, and account verification.
+    path.middleware(guard::flat_map(
+        // Confirm that the client speaks JSON.
+        guard::content!(media::json()),
+        // Then, initialize the session.
+        via::before(
+            // First, restore an identity token from the session cookie.
+            app::restore_session,
+            // If the request is read only, targets the /api/auth namespace, or
+            // the session was verified in the past hour, skip verifying that
+            // the user still has an account.
+            //
+            // This is safe so long as your app is the authoritative source of
+            // truth for the session and you properly end websocket sessions if
+            // the user deletes their account.
+            guard::filter(session::needs_verified(), app::verify_session),
+        ),
+    ));
 
     // The /api/auth namespace.
     path.route("/auth", via::post(login).delete(logout))

@@ -1,7 +1,8 @@
 use base64::engine::{Engine, GeneralPurpose};
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
-use via::guard::{self, Predicate, on};
+use via::guard::bytes::case_sensitive;
+use via::guard::{self, Predicate, method, on};
 use via::{Middleware, Response, err};
 
 use super::id::Id;
@@ -43,8 +44,15 @@ pub fn auth_required() -> impl for<'a> Predicate<Request, Error<'a> = &'a Unauth
     )
 }
 
-pub fn is_stale() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
-    guard::bool(on(Identity::is_expired, IdentityExtension).opt())
+pub fn needs_verified() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
+    let is_auth_request = on::path(case_sensitive(b"/api/auth"));
+
+    guard::or((
+        // The request is a mutation and the target is not /api/auth.
+        (method::is_mutation(), guard::not(is_auth_request)),
+        // The active user account has not been verified in the past hour.
+        guard::bool(on(Identity::is_expired, IdentityExtension).opt()),
+    ))
 }
 
 #[inline(always)]

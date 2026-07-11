@@ -11,7 +11,7 @@ use crate::{Next, Request};
 
 /// Authenticates the user identified by the credentials in the request body.
 ///
-/// Responds to `POST /auth`.
+/// Responds to `POST /api/auth`.
 ///
 /// If successful, the authenticated user will be returned in the response
 /// and the session cookie will be set to the authenticated users identity.
@@ -46,12 +46,11 @@ pub async fn login(request: Request, _: Next) -> via::Result {
 
 /// Ends the session associated with the request.
 ///
-/// Responds to `DELETE /auth`.
+/// Responds to `DELETE /api/auth`.
 ///
 /// If successful, an empty 204 No Content response is returned.
 ///
-/// If there is not a session associated with the request, a 404 Not Found
-/// response is returned instead.
+/// If there is not a session associated with the request, 403 Forbidden.
 pub async fn logout(request: Request, _: Next) -> via::Result {
     // If there is not an active session, pretend we don't exist.
     let mut response = if request.me().is_ok() {
@@ -60,8 +59,8 @@ pub async fn logout(request: Request, _: Next) -> via::Result {
     } else {
         // Build an eager error response so we can destroy the session.
         Response::build()
-            .status(StatusCode::NOT_FOUND)
-            .errors(err!(404, "not found"))?
+            .status(StatusCode::FORBIDDEN)
+            .errors(err!(403, "forbidden"))?
     };
 
     // Instruct the client to remove the session cookie.
@@ -72,7 +71,7 @@ pub async fn logout(request: Request, _: Next) -> via::Result {
 
 /// Find the user associated with the request.
 ///
-/// Responds to `GET /auth/me`.
+/// Responds to `GET /api/auth/me`.
 ///
 /// If there is an session associated with the request, the user will be
 /// returned in the response along with a fresh identity token expiry.

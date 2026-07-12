@@ -30,7 +30,7 @@ async fn hello(request: Request, _: Next) -> via::Result {
     // Send a JSON response with our greeting message.
     Response::build().json(&Document {
         data: Greeting {
-            message: format!("Hello, {}!", &hello.data.name),
+            message: format!("Hello, {}!", hello.data.name),
         },
     })
 }

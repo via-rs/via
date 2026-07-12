@@ -124,7 +124,7 @@ impl<'a, App> Prefix<'a, App> {
     where
         T: Middleware<App> + 'static,
     {
-        self.node.middleware(Arc::new(middleware));
+        self.push(path).assign(middleware)
     }
 
     /// Takes ownership of self and then calls `op` with a mutable ref to self.

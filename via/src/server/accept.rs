@@ -50,17 +50,21 @@ where
     #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
     drop(acceptor);
 
-    if service.config().max_connections() <= 1 {
-        log!(error(accept = 0), "max_connections must be > 1");
-        return ExitCode::FAILURE;
-    }
-
     // Keep one connection slot available for `accept()` itself.
     //
     // When all permitted connection slots are occupied, accept and immediately
     // reset the next connection. This prevents kernel backlog queueing and allows
     // an upstream load balancer to retry another node.
-    let semaphore = Arc::new(Semaphore::new(service.config().max_connections() - 1));
+    let semaphore = {
+        let max_connections = service.config().max_connections();
+
+        if max_connections <= 1 {
+            log!(error(accept = 0), "max_connections must be > 10");
+            return ExitCode::FAILURE;
+        }
+
+        Arc::new(Semaphore::new(max_connections - 1))
+    };
 
     // A JoinSet to track and join active connections.
     let mut connections = JoinSet::new();

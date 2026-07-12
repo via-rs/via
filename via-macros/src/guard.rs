@@ -43,11 +43,11 @@
 macro_rules! content {
     ($accepts:expr, $provides:expr) => {
         via::guard::if_else(
-            via::guard::on::method((
+            via::guard::on::method(via::guard::or((
                 via::guard::method::patch(),
                 via::guard::method::post(),
                 via::guard::method::put(),
-            )),
+            ))),
             via::guard::on::headers((
                 via::guard::header::accept($provides),
                 via::guard::header::content_type($accepts),

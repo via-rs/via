@@ -167,6 +167,20 @@ pub trait ResultExt: Sized {
     }
 }
 
+impl<T> ResultExt for Option<T> {
+    type Output = T;
+
+    #[inline]
+    fn into_result(self) -> Result<Self::Output, Error> {
+        self.or_not_found()
+    }
+
+    #[inline]
+    fn or_not_found(self) -> Result<Self::Output, Error> {
+        self.ok_or_else(|| crate::err!(404, "not found"))
+    }
+}
+
 impl<T, E> ResultExt for Result<T, E>
 where
     Error: From<E>,

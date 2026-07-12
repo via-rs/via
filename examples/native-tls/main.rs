@@ -1,7 +1,7 @@
 use native_tls::Identity;
 use std::path::{Path, PathBuf};
 use std::{fs, process::ExitCode};
-use via::{Error, Next, Request, Response, ResultExt, Server};
+use via::{Error, Next, Request, Response, ResultExt, Router, Server};
 
 const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 const TLS_PKCS_PASSWORD: &str = "TLS_PKCS_PASSWORD";
@@ -71,11 +71,12 @@ async fn main() -> Result<ExitCode, Error> {
         path.route("/echo", via::get(via::ws(echo)));
     });
 
+    let example_dir = resolve_example_dir();
+
     // Load our .env file containing TLS_PKCS_PASSWORD.
     dotenvy::from_filename(example_dir.join(".env"))?;
 
     // Make sure that our TLS config is present and valid before we proceed.
-    let example_dir = resolve_example_dir();
     let tls_config = load_pkcs12(&example_dir)?;
 
     Server::new(router, ())

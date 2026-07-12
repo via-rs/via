@@ -4,19 +4,6 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use via::{Error, Next, Request, Router, Server};
 
-/// The maximum number of connections we are willing to accept before
-/// accounting for resources other than TCP connections.
-const MAX_CONNECTIONS: usize = 1024;
-
-/// The number of file descriptors required for the multi-threaded tokio
-/// runtime, a graceful shutdown signal, and a tcp listener.
-///
-/// This is used to provide padding for the runtime so we can deterministically
-/// calculate the number of file descriptors required for the server to never
-/// trigger an EMFILE.
-#[cfg(unix)]
-const RT_FD_REQUIREMENT: usize = 13;
-
 #[cfg_attr(not(feature = "fs"), allow(dead_code))]
 struct Bubblegum {
     /// The directory from which files can be served.
@@ -44,27 +31,6 @@ impl Bubblegum {
 
     fn semaphore(&self) -> &Arc<Semaphore> {
         &self.semaphore
-    }
-}
-
-/// Calculates how many files can be open concurrently and returns it along
-/// with the adjusted maximum number of connections.
-fn determine_resource_usage() -> via::Result<(usize, usize)> {
-    cfg_select! {
-        // On Windows, sockets are not files.
-        windows => Ok((MAX_CONNECTIONS.div_ceil(2), MAX_CONNECTIONS)),
-
-        // On POSIX, max_concurrency affects the max_connections budget.
-        //
-        // The default amount of padding provided by Via is 13. The maximum
-        // amount of concurrent file streams should not exceed the number of
-        // worker process in the tokio runtime.
-        _ => {{
-            let concurrency = std::thread::available_parallelism()?.get();
-            let adjusted_max = MAX_CONNECTIONS - RT_FD_REQUIREMENT - concurrency;
-
-            Ok((concurrency, adjusted_max))
-        }}
     }
 }
 
@@ -132,11 +98,11 @@ async fn main() -> Result<ExitCode, Error> {
     });
 
     // Setup our file serving application.
-    let (max_open_files, max_connections) = determine_resource_usage()?;
+    let max_open_files = std::thread::available_parallelism()?.get();
     let bubblegum = Bubblegum::new(max_open_files);
 
     Server::new(router, bubblegum)
-        .max_connections(max_connections)
+        .reserve_file_descriptors(max_open_files)
         .listen(("127.0.0.1", 8080))
         .await
 }

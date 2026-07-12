@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use via::{Error, Next, Request, Response, ResultExt, Server};
+use via::{Error, Next, Request, Response, ResultExt, Router, Server};
 
 const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -45,20 +45,22 @@ fn resolve_example_dir() -> PathBuf {
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Error> {
-    let example_dir = resolve_example_dir();
+    // Define the routes of our application.
+    let router = Router::new(|home| {
+        let mut path = home.prefix();
+
+        // Add our hello responder to the endpoint /hello/:name.
+        path.route("/hello/:name", via::get(hello));
+
+        #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+        path.route("/echo", via::get(via::ws(echo)));
+    });
 
     // Make sure that our TLS config is present and valid before we proceed.
+    let example_dir = resolve_example_dir();
     let tls_config = tls::server_config(&example_dir)?;
 
-    let mut app = via::app(());
-
-    // Add our hello responder to the endpoint /hello/:name.
-    app.route("/hello/:name", via::get(hello));
-
-    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    app.route("/echo", via::get(via::ws(echo)));
-
-    Server::new(app)
+    Server::new(router, ())
         .listen_rustls_23(("127.0.0.1", 8080), tls_config)
         .await
 }

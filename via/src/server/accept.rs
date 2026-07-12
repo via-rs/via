@@ -50,9 +50,17 @@ where
     #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
     drop(acceptor);
 
-    // Create a semaphore with a number of permits equal to the maximum number
-    // of connections that the server can handle concurrently.
-    let semaphore = Arc::new(Semaphore::new(service.config().max_connections()));
+    if service.config().max_connections() <= 1 {
+        log!(error(accept = 0), "max_connections must be > 1");
+        return ExitCode::FAILURE;
+    }
+
+    // Keep one connection slot available for `accept()` itself.
+    //
+    // When all permitted connection slots are occupied, accept and immediately
+    // reset the next connection. This prevents kernel backlog queueing and allows
+    // an upstream load balancer to retry another node.
+    let semaphore = Arc::new(Semaphore::new(service.config().max_connections() - 1));
 
     // A JoinSet to track and join active connections.
     let mut connections = JoinSet::new();
@@ -83,14 +91,8 @@ where
 
                             // EMFILE
                             //
-                            // The server is at capacity. Yield to the runtime.
-                            //
-                            // A connection task is likely using an fd that the
-                            // application developer did not account for.
-                            Some(24) => {
-                                tokio::task::yield_now().await;
-                                continue; // Retry after yield.
-                            }
+                            // This should never happen.
+                            Some(24) => ExitCode::from(24),
 
                             // All other codes are an opaque error.
                             //
@@ -116,11 +118,15 @@ where
             }
         };
 
-        // Permit acquired. Proceed with serving the connection.
+        // Acquire a permit and proceed with serving the connection.
+        //
+        // The maximum number of permits is 1 away from EMFILE on linux so we
+        // acquire the permit afterwards to determine if we should shed the
+        // load to mitigate the risk of an EMFILE entirely.
+        //
+        // We could instead, await the semaphore permit at the start of the
+        // loop but that would create a kernel backlog.
         let Ok(permit) = semaphore.clone().try_acquire_owned() else {
-            // The server is at capacity. Close the connection. Upstream load
-            // balancers take this as a hint that it is time to try another
-            // node.
             continue;
         };
 

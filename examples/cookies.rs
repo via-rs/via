@@ -1,13 +1,13 @@
 use cookie::{Cookie, Key, SameSite};
 use std::process::ExitCode;
 use std::time::Duration;
-use via::{Error, Next, Request, Response, ResultExt, Server};
+use via::{Error, Next, Request, Response, ResultExt, Router, Server, cookies};
 
-struct Unicorn {
+struct Buttercup {
     secret: Key,
 }
 
-async fn hello(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
+async fn hello(request: Request<Buttercup>, _: Next<Buttercup>) -> via::Result {
     let app = request.app_owned();
 
     // Get the value of the "counter" cookie from the request before passing
@@ -45,22 +45,34 @@ async fn hello(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Error> {
-    // Create a new application.
-    let mut app = via::app(Unicorn {
+    // Define the routes of our application, "Buttercup".
+    let router = Router::new(|mut home| {
+        // The cookies middleware can be added at any depth of the route tree.
+        //
+        // In this example, we add it at the root path of our application.
+        //
+        // This enables managed cookies for all of the subsequently defined
+        // routes.
+        home.middleware(cookies(["counter"]));
+
+        // Start defining descendants of "/".
+        let mut path = home.prefix();
+
+        // Add a route that responds with a greeting message.
+        path.route("/hello/:name", via::get(hello));
+    });
+
+    // Create our application.
+    let buttercup = Buttercup {
+        secret: Key::generate(),
         // secret: std::env::var("VIA_SECRET_KEY")
         //     .map(|secret| secret.as_bytes().try_into())
         //     .expect("missing required env var: VIA_SECRET_KEY")
         //     .expect("unexpected end of input while parsing VIA_SECRET_KEY"),
-        secret: Key::generate(),
-    });
+    };
 
-    // The Cookies middleware can be added at any depth of the route tree.
-    // In this example, we add it at the root path of our application. This
-    // enables cookie support for all of the subsequently defined middlewares.
-    app.middleware(via::cookies(["counter"]));
-
-    // Add a route that responds with a greeting message.
-    app.route("/hello/:name", via::get(hello));
-
-    Server::new(app).listen(("127.0.0.1", 8080)).await
+    // Start listening at http://localhost:8080/ for incoming requests.
+    Server::new(router, buttercup)
+        .listen(("127.0.0.1", 8080))
+        .await
 }

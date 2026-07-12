@@ -29,8 +29,8 @@ use crate::{BoxFuture, Continue, Error, Middleware, Next};
 ///
 /// ```no_run
 /// use std::process::ExitCode;
-/// use via::guard::method;
-/// use via::{Request, Next, Server, guard};
+/// use via::guard::{self, method};
+/// use via::{Next, Request, Router, Server};
 ///
 /// async fn cache(request: Request, next: Next) -> via::Result {
 ///     todo!("implement a simple response cache.");
@@ -38,12 +38,12 @@ use crate::{BoxFuture, Continue, Error, Middleware, Next};
 ///
 /// #[tokio::main]
 /// async fn main() -> via::Result<ExitCode> {
-///     let mut app = via::app(());
+///     let router = Router::new(|mut home| {
+///         // Non-idempotent requests will run the cache middleware.
+///         home.middleware(guard::filter(method::is_safe(), cache));
+///     });
 ///
-///     // Non-idempotent requests will run the cache middleware.
-///     app.middleware(guard::filter(method::is_safe(), cache));
-///
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///     Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 /// }
 /// ```
 pub struct Filter<T, U> {
@@ -63,7 +63,7 @@ pub struct Filter<T, U> {
 ///
 /// use std::process::ExitCode;
 /// use via::guard::{self, on};
-/// use via::{Error, Request, Server, err};
+/// use via::{Error, Request, Router, Server, err};
 ///
 /// trait Session {
 ///     fn session(&self) -> Option<&Identity>;
@@ -85,20 +85,25 @@ pub struct Filter<T, U> {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
-///     let mut app = via::app(());
-///     let mut api = app.push("/api");
+///     let router = Router::new(|home| {
+///         let mut path = home.prefix();
+///         let mut api = path.push("/api");
 ///
-///     api.push("/admin/graphql").assign(guard::flat_map(
-///         guard::into_error(
-///             |request: &Request| request.is_admin(),
-///             |_| err!(403, "admin permissions are required."),
-///         ),
-///         via::post(admin::graphql)
-///             .get(admin::graphql)
-///             .or_deny(),
-///     ));
+///         // Start defining the descendants of "/api".
+///         let mut path = api.prefix();
 ///
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///         path.push("/admin/graphql").assign(guard::flat_map(
+///             guard::into_error(
+///                 |request: &Request| request.is_admin(),
+///                 |_| err!(403, "admin permissions are required."),
+///             ),
+///             via::post(admin::graphql)
+///                 .get(admin::graphql)
+///                 .or_deny(),
+///         ));
+///     });
+///
+///     Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 /// }
 /// ```
 pub struct FlatMap<T, U> {
@@ -115,20 +120,25 @@ pub struct FlatMap<T, U> {
 ///
 /// ```rust
 /// use via::guard::{self, media};
+/// use via::Router;
 ///
-/// let mut app = via::app(());
-/// let mut api = app.push("/api");
+/// let router = Router::new(|home: via::Route| {
+///     let mut path = home.prefix();
+///     let mut api = path.push("/api");
 ///
-/// // If the client does not speak JSON, deny the request.
-/// api.middleware(guard::barrier(guard::content!(media::json())));
+///     // If the client does not speak JSON, deny the request.
+///     api.middleware(guard::barrier(guard::content!(media::json())));
+///     // Subsequent routes defined from `api` require:
+///     //   - accept: application/json [; charset=utf-8], */*
+///     //   - content-type: application/json [; charset=utf-8]
+///     //   - content-length: ^(\d+)$ <= Server::max_request_size
 ///
-/// // Subsequent routes defined from `api` require:
-/// //   - accept: application/json [; charset=utf-8], */*
-/// //   - content-type: application/json [; charset=utf-8]
-/// //   - content-length: ^(\d+)$ <= Server::max_request_size
+///     // Start defining the descendants of "/api".
+///     let mut path = api.prefix();
 ///
-/// api.push("/users").map(|mut users| {
-///     // Define the /api/users resource.
+///     path.push("/users").map(|mut users| {
+///         // Define the /api/users resource.
+///     });
 /// });
 /// ```
 pub fn barrier<T>(predicate: T) -> FlatMap<T, Continue> {

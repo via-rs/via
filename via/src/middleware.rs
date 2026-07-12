@@ -37,7 +37,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// but eventually some terminal middleware will generate a response.
 ///
 /// ```
-/// use via::{Next, Request, Response, ResultExt};
+/// use via::{Next, Request, Response, ResultExt, Route};
 ///
 /// async fn hello(request: Request, _: Next) -> via::Result {
 ///     //                           ^^^^^^^
@@ -178,7 +178,7 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 /// ```no_run
 /// use std::process::ExitCode;
 /// use via::guard::{self, media, method};
-/// use via::{Error, Server, cookies, rescue};
+/// use via::{Error, Router, Server, cookies, rescue};
 ///
 /// mod session {
 ///     // Implementations elided...
@@ -209,51 +209,58 @@ pub type Result<T = Response> = std::result::Result<T, Error>;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
-///     // Create a new application.
-///     let mut app = via::app(());
+///     // Define the routes that our application responds to.
+///     let router = Router::new(|mut home| {
+///         // Cookies are parsed and managed for every request.
+///         home.middleware(cookies([session::COOKIE]));
 ///
-///     // Cookies are parsed and managed for every request.
-///     app.middleware(cookies([session::COOKIE]));
+///         // Start defining the descendants of "/".
+///         let mut path = home.prefix();
 ///
-///     // Define the /api namespace. Middleware attached to
-///     // `api` only runs for requests to a nested resource
-///     // (i.e /api/users).
-///     let mut api = app.push("/api");
+///         // The /api namespace.
+///         //
+///         // Middleware attached to `api` only runs for requests to a
+///         // resource nested in /api (i.e /api/users).
+///         let mut api = path.push("/api");
 ///
-///     // Errors originating from the /api namespace generate a
-///     // JSON response.
-///     api.middleware(rescue::json().build());
+///         // Errors originating from the /api namespace generate a
+///         // JSON response.
+///         api.middleware(rescue::json().build());
 ///
-///     // Confirm the client speaks JSON. Then, restore their
-///     // session.
-///     //
-///     // We call this pattern a "side car". A guard paired with
-///     // middleware that only executes when the guard succeeds.
-///     //
-///     // In addition to eliminating the cost of the business
-///     // logic in the subsequent middleware when the guard
-///     // fails, the framework over head of the attached
-///     // middleware is completely erased.
-///     //
-///     // It is a best practice to give a guard a side car when
-///     // it makes sense. For example, we wouldn't want to
-///     // restore a user's session to our JSON API if they cannot
-///     // send and receive JSON.
-///     api.middleware(guard::flat_map(
-///         guard::content!(media::json()),
-///         session::restore(),
-///     ));
+///         // Confirm the client speaks JSON. Then, restore their
+///         // session.
+///         //
+///         // We call this pattern a "side car". A guard paired with
+///         // middleware that only executes when the guard succeeds.
+///         //
+///         // In addition to eliminating the cost of the business
+///         // logic in the subsequent middleware when the guard
+///         // fails, the framework over head of the attached
+///         // middleware is completely erased.
+///         //
+///         // It is a best practice to give a guard a side car when
+///         // it makes sense. For example, we wouldn't want to
+///         // restore a user's session to our JSON API if they cannot
+///         // send and receive JSON.
+///         api.middleware(guard::flat_map(
+///             guard::content!(media::json()),
+///             session::restore(),
+///         ));
 ///
-///     // If the request method cannot be cached or the session
-///     // has not been verified in the past hour, confirm that
-///     // the user exists and has an active account.
-///     api.middleware(guard::filter(
-///         guard::or((method::is_mutation(), session::is_expired)),
-///         session::verify(),
-///     ));
+///         // If the request method cannot be cached or the session
+///         // has not been verified in the past hour, confirm that
+///         // the user exists and has an active account.
+///         api.middleware(guard::filter(
+///             guard::or((method::is_mutation(), session::is_expired)),
+///             session::verify(),
+///         ));
+///
+///         // Start defining the descendants of "/api".
+///         let mut path = api.prefix();
+///     });
 ///
 ///     // Serve the application at http://localhost:8080/.
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///     Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 /// }
 /// ```
 ///

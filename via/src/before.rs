@@ -49,13 +49,13 @@ pub struct Before<T, U> {
 ///     # use via::guard::Predicate;
 ///     # use via::{Middleware, Request};
 ///     #
-///     # use super::Unicorn;
+///     # use super::Buttercup;
 ///     #
 ///     # pub const COOKIE: &str = "via-session";
 ///     #
-///     # pub fn needs_verified() -> fn(&Request<Unicorn>) -> bool { |_| true }
-///     # pub fn restore(_: &mut Request<Unicorn>) -> Result<(), Catch> { todo!() }
-///     # pub fn verify() -> impl Middleware<Unicorn> + 'static {
+///     # pub fn needs_verified() -> fn(&Request<Buttercup>) -> bool { |_| true }
+///     # pub fn restore(_: &mut Request<Buttercup>) -> Result<(), Catch> { todo!() }
+///     # pub fn verify() -> impl Middleware<Buttercup> + 'static {
 ///     #     via::middleware(|request, next| next.call(request))
 ///     # }
 /// }
@@ -63,55 +63,67 @@ pub struct Before<T, U> {
 /// use cookie::Key;
 /// use std::process::ExitCode;
 /// use via::guard::{self, media, method};
-/// use via::{Error, Server, cookies, rescue};
+/// use via::{Router, Server, cookies, rescue};
 ///
-/// struct Unicorn {
+/// struct Buttercup {
 ///     secret: Key,
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<ExitCode, Error> {
-///     let mut app = via::app(Unicorn {
+/// async fn main() -> via::Result<ExitCode> {
+///     // Define the routes that our application responds to.
+///     let router = Router::new(|home| {
+///         // Start defining descendants of "/".
+///         let mut path = home.prefix();
+///
+///         // The /api namespace.
+///         let mut api = path.push("api");
+///
+///         // If an error occurs, respond with JSON.
+///         api.middleware(rescue::json().build());
+///
+///         // Parse and track changes that are made to the session cookie.
+///         api.middleware(cookies([session::COOKIE]));
+///
+///         // Content negotiation and authentication guards.
+///         api.middleware(guard::flat_map(
+///             // Confirm that the client speaks JSON.
+///             guard::content!(media::json()),
+///             // Then, initialize the active user session.
+///             via::before(
+///                 // Restore an identity token from the session cookie.
+///                 session::restore,
+///                 // If the request is read only or the active users account has
+///                 // been confirmed to exist in the past hour, skip verification.
+///                 //
+///                 // Such an optimization is sound so long as your app is the
+///                 // authoritative source of truth for the session and you
+///                 // properly end websocket sessions when a user deletes their
+///                 // account.
+///                 guard::filter(
+///                     guard::or((method::is_mutation(), session::needs_verified())),
+///                     session::verify(),
+///                 ),
+///             ),
+///         ));
+///
+///         // Start defining descendants of "/api".
+///         let mut path = api.prefix();
+///     });
+///
+///     // Setup our application, "Buttercup".
+///     let buttercup = Buttercup {
 ///         secret: Key::generate(),
 ///         // secret: std::env::var("VIA_SECRET_KEY")
 ///         //     .map(|secret| secret.as_bytes().try_into())
 ///         //     .expect("missing required env var: VIA_SECRET_KEY")
 ///         //     .expect("unexpected end of input while parsing VIA_SECRET_KEY"),
-///     });
+///     };
 ///
-///     // The /api namespace.
-///     let mut api = app.push("api");
-///
-///     // If an error occurs, respond with JSON.
-///     api.middleware(rescue::json().build());
-///
-///     // Parse and track changes that are made to the session cookie.
-///     api.middleware(cookies([session::COOKIE]));
-///
-///     // Content negotiation and authentication guards.
-///     api.middleware(guard::flat_map(
-///         // Confirm that the client speaks JSON.
-///         guard::content!(media::json()),
-///         // Then, initialize the active user session.
-///         via::before(
-///             // Restore an identity token from the session cookie.
-///             session::restore,
-///             // If the request is read only or the active users account has
-///             // been confirmed to exist in the past hour, skip verification.
-///             //
-///             // Such an optimization is sound so long as your app is the
-///             // authoritative source of truth for the session and you
-///             // properly end websocket sessions when a user deletes their
-///             // account.
-///             guard::filter(
-///                 guard::or((method::is_mutation(), session::needs_verified())),
-///                 session::verify(),
-///             ),
-///         ),
-///     ));
-///
-///     // Serve the application at http://localhost:8080/.
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///     // Start listening at http://localhost:8080 for incoming requests.
+///     Server::new(router, buttercup)
+///         .listen(("127.0.0.1", 8080))
+///         .await
 ///}
 /// ```
 ///

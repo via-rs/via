@@ -18,7 +18,7 @@
 //!
 //! ```no_run
 //! use std::process::ExitCode;
-//! use via::{Error, Next, Request, Response, ResultExt, Server};
+//! use via::{Next, Request, Response, ResultExt, Router, Server};
 //!
 //! async fn hello(request: Request, _: Next) -> via::Result {
 //!     // Get a reference to the path parameter `name` from the request uri.
@@ -29,14 +29,18 @@
 //! }
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<ExitCode, Error> {
-//!     let mut app = via::app(());
+//! async fn main() -> via::Result<ExitCode> {
+//!     // Define the routes that our application responds to.
+//!     let router = Router::new(|home| {
+//!         // Start defining descendants of "/".
+//!         let mut path = home.prefix();
 //!
-//!     // Define a route that listens on /hello/:name.
-//!     app.route("/hello/:name", via::get(hello));
+//!         // Define a route that listens on /hello/:name.
+//!         path.route("/hello/:name", via::get(hello));
+//!     });
 //!
 //!     // Serve the application at http://localhost:8080/.
-//!     Server::new(app).listen(("127.0.0.1", 8080)).await
+//!     Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 //! }
 //! ```
 //!
@@ -79,7 +83,7 @@ mod util;
 
 pub use via_macros::resource;
 
-pub use app::{Shared, Via, app};
+pub use app::Shared;
 pub use before::{Before, before};
 pub use cookies::{Cookies, cookies};
 pub use error::{Error, ResultExt, rescue};
@@ -87,7 +91,7 @@ pub use middleware::{BoxFuture, Middleware, Result, middleware};
 pub use next::{Continue, Next};
 pub use request::{Payload, Request};
 pub use response::{Finalize, Response};
-pub use router::{delete, get, head, options, patch, post, put, trace};
+pub use router::{Route, Router, delete, get, head, options, patch, post, put, trace};
 pub use server::Server;
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]

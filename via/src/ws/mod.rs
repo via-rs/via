@@ -28,7 +28,7 @@ pub use upgrade::Ws;
 /// ```no_run
 /// use std::process::ExitCode;
 /// use via::ws::{self, Channel, Message};
-/// use via::{Error, Server};
+/// use via::{Error, Router, Server};
 ///
 /// async fn echo(mut channel: Channel, _: ws::Request) -> ws::Result {
 ///     while let Some(message) = channel.recv().await {
@@ -49,15 +49,18 @@ pub use upgrade::Ws;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
-///     let mut app = via::app(());
+///     let router = Router::new(|home| {
+///         // Start defining the descendats of "/".
+///         let mut path = home.prefix();
 ///
-///     // GET /echo ~> web socket upgrade.
-///     app.route("/echo", via::get(via::ws(echo)).or_deny());
+///         // GET /echo ~> web socket upgrade.
+///         path.route("/echo", via::get(via::ws(echo)).or_deny());
+///     });
 ///
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///     // Start listening at http://localhost:8080/ for incoming requests.
+///     Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 /// }
 ///```
-///
 pub fn ws<T, App, Await>(listener: T) -> Ws<T>
 where
     T: Fn(Channel, Request<App>) -> Await,

@@ -37,7 +37,7 @@ use params::PathParam;
 /// use serde::{Deserialize, Serialize};
 /// use std::process::ExitCode;
 /// use via::request::{Envelope, Payloadz};
-/// use via::{Error, Response, ResultExt, Server};
+/// use via::{Error, Response, ResultExt, Router, Server};
 /// use zeroize::Zeroizing;
 ///
 /// type Request = via::Request<Unicorn>;
@@ -106,18 +106,25 @@ use params::PathParam;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<ExitCode, Error> {
-///     // Define our application.
-///     let mut app = via::app(Unicorn {
-///         database: Database,
-///         telemetry: Telemetry,
+///     // Define the routes that our application responds to.
+///     let router = Router::new(|home| {
+///         // Start defining the descendants of "/".
+///         let mut path = home.prefix();
+///
+///         // Accept POST requests to /auth with the login fn.
+///         path.route("/auth", via::post(login).or_deny());
 ///     });
 ///
-///     // Accept POST requests to /auth with the login fn.
-///     app.route("/auth", via::post(login).or_deny());
+///     // Setup our application, "Unicorn".
+///     let unicorn = Unicorn {
+///         database: Database,
+///         telemetry: Telemetry,
+///     };
 ///
-///     // Listen for incoming connections at http://localhost:8080/.
-///     // We recommend enabling a TLS-backend in production.
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///     // Start listening at http://localhost:8080 for incoming requests.
+///     Server::new(router, unicorn)
+///         .listen(("127.0.0.1", 8080))
+///         .await
 /// }
 /// #
 /// # /// A placeholder type for your favorite database pool.
@@ -166,11 +173,13 @@ pub struct Envelope {
 ///
 /// The shared handle to your app provides a form of dependency injection,
 /// permitting per-request access to singleton resources such as a database
-/// pool. The argument passed to [`via::app`](crate::app::app) defines the
-/// resources that are made available to each request as the generic `App` type
+/// pool. The second argument passed to [`Server::new`] defines the resources
+/// that are made available to each request as the generic `App` type
 /// parameter. Connections tasks are processed asynchronously across worker
 /// threads with work-stealing scheduler. Therefore, `App` must be both
 /// [`Send`] and [`Sync`].
+///
+/// [`Server::new`]: crate::Server::new
 pub struct Request<App = ()> {
     envelope: Envelope,
     body: RequestBody,
@@ -308,14 +317,18 @@ impl<App> Request<App> {
         }
     }
 
-    /// Returns a reference to the argument passed to [`via::app`](crate::app).
+    /// Returns reference to the second argument passed to [`Server::new`].
+    ///
+    /// [`Server::new`]: crate::Server::new
     #[inline]
     pub fn app(&self) -> &App {
         &self.app
     }
 
-    /// Returns an owned, reference-counting pointer to the argument passed to
-    /// [`via::app`](crate::app).
+    /// Returns an owned, reference-counting pointer to the second argument
+    /// passed to [`Server::new`].
+    ///
+    /// [`Server::new`]: crate::Server::new
     pub fn app_owned(&self) -> Shared<App> {
         self.app.clone()
     }

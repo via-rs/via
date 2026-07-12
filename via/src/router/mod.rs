@@ -3,21 +3,21 @@
 mod route;
 mod switch;
 
-pub use route::Route;
+pub use route::{Prefix, Route};
 pub use switch::*;
 
 pub(crate) use switch::MethodNotAllowed;
 
 use std::sync::Arc;
-use via_router::Traverse;
+use via_router::{Router as Trie, Traverse};
 
 use crate::middleware::Middleware;
 
-pub(crate) struct Router<App> {
-    tree: via_router::Router<Arc<dyn Middleware<App>>>,
+pub struct Router<App> {
+    trie: Trie<Arc<dyn Middleware<App>>>,
 }
 
-/// Returns a partially applied function that attaches `middleware` to a route.
+/// Returns a partially applied function that attaches `middleware` to a path.
 ///
 /// This is intended to be used with [`Route::map`], allowing middleware to be
 /// composed into a route without having to write a closure.
@@ -25,25 +25,23 @@ pub(crate) struct Router<App> {
 /// # Example
 ///
 /// ```
-/// // Create a new application.
-/// let mut app = via::app(());
+/// # via::Router::new(|home| {
+/// # let mut path = home.prefix();
+/// // Define the /api namespace.
+/// let mut api = path.push("/api");
 ///
-/// // Define the /api namespace
-/// let mut path = app.push("/api");
+/// // Start defining descendants of "/api".
+/// let mut path = api.prefix();
 ///
-/// // Define the /api/auth namespace.
+/// // Define the /api/auth resource.
 /// path.route("/auth", via::post(login).delete(logout))
-///     //                        ^^^^^         ^^^^^^
-///     //
-///     // The `login` and `logout` middleware both terminate the
-///     // request.
-///     //
-///     // Therefore, `authenticate` can safely be applied after
-///     // them without changing their behavior.
+///     // Continue defining the /api/auth resource from /api/auth/me.
+///     .push("/me")
+///     // Requests to /api/auth/me require an authenticated user.
 ///     .map(via::router::apply(authenticate))
-///     // Requests to "/api/auth/me" or any descendant of "/auth"
-///     // require an authenticated user.
-///     .route("/me", via::get(me));
+///     // GET /api/auth/me responds with the active user as JSON.
+///     .assign(via::get(me));
+/// # });
 /// #
 /// # async fn authenticate(_: via::Request, _: via::Next) -> via::Result { unimplemented!() }
 /// # async fn login(_: via::Request, _: via::Next) -> via::Result { unimplemented!() }
@@ -61,33 +59,15 @@ where
 }
 
 impl<App> Router<App> {
-    pub fn new() -> Self {
-        Self {
-            tree: via_router::Router::new(),
-        }
+    pub fn new(router: impl FnOnce(Route<'_, App>)) -> Self {
+        let mut trie = via_router::Router::new();
+        let node = trie.route("/");
+
+        router(Route { node });
+        Self { trie }
     }
 
-    pub fn middleware<T>(&mut self, middleware: T)
-    where
-        T: Middleware<App> + 'static,
-    {
-        self.tree.middleware(Arc::new(middleware))
-    }
-
-    pub fn push(&mut self, path: &'static str) -> Route<'_, App> {
-        Route {
-            node: self.tree.route(path),
-        }
-    }
-
-    pub fn route<T>(&mut self, path: &'static str, middleware: T) -> Route<'_, App>
-    where
-        T: Middleware<App> + 'static,
-    {
-        self.push(path).assign(middleware)
-    }
-
-    pub fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, Arc<dyn Middleware<App>>> {
-        self.tree.traverse(path)
+    pub(crate) fn traverse<'b>(&self, path: &'b str) -> Traverse<'_, 'b, Arc<dyn Middleware<App>>> {
+        self.trie.traverse(path)
     }
 }

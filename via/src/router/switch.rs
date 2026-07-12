@@ -29,7 +29,7 @@ pub struct Deny {
 /// ```no_run
 /// use http::Method;
 /// use std::process::ExitCode;
-/// use via::{Error, Next, Request, Response, ResultExt, Server};
+/// use via::{Next, Request, Response, ResultExt, Router, Server};
 ///
 /// async fn update(request: Request, _: Next) -> via::Result {
 ///     let id = request.param("user-id").parse::<u64>().or_bad_request()?;
@@ -46,17 +46,20 @@ pub struct Deny {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<ExitCode, Error> {
-///     let mut app = via::app(());
+/// async fn main() -> via::Result<ExitCode> {
+///     let router = Router::new(|home| {
+///         // Start defining descendants of "/".
+///         let mut path = home.prefix();
 ///
-///     // The route "/users/:user-id" accepts PATCH and PUT requests.
-///     app.push("/users/:user-id").assign(
-///         via::patch(update)
-///             .put(update)
-///             .or_deny(), // All other methods are a 405 Method Not Allowed.
-///     );
+///         // The route "/users/:user-id" accepts PATCH and PUT requests.
+///         path.push("/users/:user-id").assign(
+///             via::patch(update)
+///                 .put(update)
+///                 .or_deny(), // All other methods are a 405 Method Not Allowed.
+///         );
+///     });
 ///
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///     Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 /// }
 /// ```
 pub struct Switch<T, U> {
@@ -153,7 +156,7 @@ impl<T, U> Switch<T, U> {
     /// # Example
     ///
     /// ```
-    /// # use via::{Next, Request, Response, ResultExt};
+    /// # use via::{Next, Request, Response, ResultExt, Route};
     /// #
     /// # async fn greet(request: Request, _: Next) -> via::Result {
     /// #   let name = request.param("name").into_result()?;
@@ -161,10 +164,12 @@ impl<T, U> Switch<T, U> {
     /// # }
     /// #
     /// # fn main() {
-    /// # let mut app = via::app(());
-    /// app.route("/hello/:name", via::get(greet).or_deny());
+    /// # via::Router::new(|home| {
+    /// # let mut path = home.prefix();
+    /// path.route("/hello/:name", via::get(greet).or_deny());
     /// // curl -XPOST http://localhost:8080/hello/world
     /// // => method not allowed: "POST"
+    /// # });
     /// # }
     /// ```
     ///

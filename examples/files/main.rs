@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
-use via::{Error, Next, Request, Server};
+use via::{Error, Next, Request, Router, Server};
 
 /// The maximum number of connections we are willing to accept before
 /// accounting for resources other than TCP connections.
@@ -18,7 +18,7 @@ const MAX_CONNECTIONS: usize = 1024;
 const RT_FD_REQUIREMENT: usize = 13;
 
 #[cfg_attr(not(feature = "fs"), allow(dead_code))]
-struct Unicorn {
+struct Bubblegum {
     /// The directory from which files can be served.
     public_dir: Box<Path>,
 
@@ -27,8 +27,17 @@ struct Unicorn {
     semaphore: Arc<Semaphore>,
 }
 
+impl Bubblegum {
+    fn new(max_open_files: usize) -> Self {
+        Self {
+            public_dir: resolve_public_dir().into_boxed_path(),
+            semaphore: Arc::new(Semaphore::new(max_open_files)),
+        }
+    }
+}
+
 #[cfg_attr(not(feature = "fs"), allow(dead_code))]
-impl Unicorn {
+impl Bubblegum {
     fn public_dir(&self) -> &Path {
         &self.public_dir
     }
@@ -61,7 +70,7 @@ fn determine_resource_usage() -> via::Result<(usize, usize)> {
 
 /// Extracts the relative path to the requested file from the request.
 #[cfg(feature = "fs")]
-fn extract_file_path(request: &Request<Unicorn>) -> via::Result<PathBuf> {
+fn extract_file_path(request: &Request<Bubblegum>) -> via::Result<PathBuf> {
     let public_dir = request.app().public_dir();
 
     if let Some(path_param) = request.param("path").ok()?.as_deref() {
@@ -83,7 +92,7 @@ fn resolve_public_dir() -> PathBuf {
 }
 
 #[cfg(feature = "fs")]
-async fn serve_dir(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
+async fn serve_dir(request: Request<Bubblegum>, _: Next<Bubblegum>) -> via::Result {
     use std::ffi::OsStr;
     use via::response::File;
 
@@ -105,27 +114,28 @@ async fn serve_dir(request: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
 }
 
 #[cfg(not(feature = "fs"))]
-async fn serve_dir(_: Request<Unicorn>, _: Next<Unicorn>) -> via::Result {
+async fn serve_dir(_: Request<Bubblegum>, _: Next<Bubblegum>) -> via::Result {
     panic!("the \"fs\" feature flag is required in order to run the files example.");
 }
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Error> {
-    let (max_open_files, max_connections) = determine_resource_usage()?;
-    let mut app = via::app(Unicorn {
-        public_dir: resolve_public_dir().into_boxed_path(),
-        semaphore: Arc::new(Semaphore::new(max_open_files)),
-    });
-
-    app.route("/*path", via::get(serve_dir));
-
     if cfg!(not(feature = "fs")) {
         eprintln!("    the \"fs\" feature flag is required in order to run the files example.");
         eprintln!("    re-run this example with cargo run --example files --feature=\"fs\"");
         return Ok(ExitCode::FAILURE);
     }
 
-    Server::new(app)
+    // Define the routes of our file serving application, "Bubblegum".
+    let router = Router::new(|home| {
+        home.prefix().route("/*path", via::get(serve_dir));
+    });
+
+    // Setup our file serving application.
+    let (max_open_files, max_connections) = determine_resource_usage()?;
+    let bubblegum = Bubblegum::new(max_open_files);
+
+    Server::new(router, bubblegum)
         .max_connections(max_connections)
         .listen(("127.0.0.1", 8080))
         .await

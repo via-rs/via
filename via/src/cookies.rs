@@ -27,7 +27,7 @@ struct SetCookieError;
 /// use cookie::{Cookie, SameSite};
 /// use std::process::ExitCode;
 /// use std::time::Duration;
-/// use via::{Error, Next, Request, Response, ResultExt, Server, cookies};
+/// use via::{Next, Request, Response, ResultExt, Router, Server, cookies};
 ///
 /// async fn greet(request: Request, _: Next) -> via::Result {
 ///     // `should_set_name` indicates whether "name" was sourced from the
@@ -60,17 +60,21 @@ struct SetCookieError;
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<ExitCode, Error> {
-///     let mut app = via::app(());
+/// async fn main() -> via::Result<ExitCode> {
+///     // Define the routes that our application responds to.
+///     let router = Router::new(|mut home| {
+///         // Provide cookie support for downstream middleware.
+///         home.middleware(via::cookies(["name"]).decode());
 ///
-///     // Provide cookie support for downstream middleware.
-///     app.middleware(via::cookies(["name"]).decode());
+///         // Start defining descendants of "/".
+///         let mut path = home.prefix();
 ///
-///     // Respond with a greeting when a user visits /hello/:name.
-///     app.route("/hello/:name", via::get(greet));
+///         // Respond with a greeting when a user visits /hello/:name.
+///         path.route("/hello/:name", via::get(greet));
+///     });
 ///
 ///     // Start serving our application from http://localhost:8080/.
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///     Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 /// }
 /// ```
 ///
@@ -132,7 +136,7 @@ struct SetCookieError;
 /// use serde::Deserialize;
 /// use std::process::ExitCode;
 /// use std::time::Duration;
-/// use via::{Error, Next, Payload, Request, Response, Server, cookies};
+/// use via::{Next, Payload, Request, Response, Router, Server, cookies};
 ///
 /// #[derive(Deserialize)]
 /// struct Login {
@@ -173,17 +177,21 @@ struct SetCookieError;
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<ExitCode, Error> {
-///     let mut app = via::app(());
+/// async fn main() -> via::Result<ExitCode> {
+///     // Define the routes that our application responds to.
+///     let router = Router::new(|mut home| {
+///         // Unencoded cookie support.
+///         home.middleware(via::cookies(["session"]));
 ///
-///     // Unencoded cookie support.
-///     app.middleware(via::cookies(["session"]));
+///         // Start defining descendants of "/".
+///         let mut path = home.prefix();
 ///
-///     // Add our login route to our application.
-///     app.route("/auth/login", via::post(login));
+///         // Add our login route to our application.
+///         path.route("/auth/login", via::post(login));
+///     });
 ///
 ///     // Start serving our application from http://localhost:8080/.
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///     Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 /// }
 /// ```
 ///
@@ -203,8 +211,9 @@ pub struct Cookies {
 /// # Example
 ///
 /// ```
-/// # let mut app = via::app(());
+/// # via::Router::new(|mut app: via::Route| {
 /// app.middleware(via::cookies(["session"]));
+/// # });
 /// ```
 ///
 pub fn cookies<I>(allow: I) -> Cookies
@@ -231,8 +240,9 @@ impl Cookies {
     /// # Example
     ///
     /// ```
-    /// # let mut app = via::app(());
+    /// # via::Router::new(|mut app: via::Route| {
     /// app.middleware(via::cookies(["session"]).decode());
+    /// # });
     /// ```
     ///
     pub fn decode(mut self) -> Self {

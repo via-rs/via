@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::process::ExitCode;
 use via::guard::{self, media};
-use via::{Next, Payload, Request, Response, Server, rescue};
+use via::{Next, Request, Response, Router, Server, rescue};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Document<T> {
@@ -19,6 +19,8 @@ struct Hello {
 }
 
 async fn hello(request: Request, _: Next) -> via::Result {
+    use via::request::Payload;
+
     // A future that resolves with the frames that compose the request body.
     let (body, _app) = request.into_future();
 
@@ -35,16 +37,21 @@ async fn hello(request: Request, _: Next) -> via::Result {
 
 #[tokio::main]
 async fn main() -> via::Result<ExitCode> {
-    let mut app = via::app(());
+    // Define the routes that our application responds to.
+    let router = Router::new(|mut home| {
+        // Errors that occur further down the stack generate a JSON response.
+        home.middleware(rescue::json().build());
 
-    // Errors that occur further down the stack generate a JSON response.
-    app.middleware(rescue::json().build());
+        // If the client does not speak JSON, deny the request.
+        home.middleware(guard::barrier(guard::content!(media::json())));
 
-    // If the client does not speak JSON, deny the request.
-    app.middleware(guard::barrier(guard::content!(media::json())));
+        // Start defining descendants of "/".
+        let mut path = home.prefix();
 
-    // Define a route that responds to POST /hello.
-    app.route("/hello", via::post(hello).or_deny());
+        // Define a route that listens on /hello/:name.
+        path.route("/hello", via::post(hello).or_deny());
+    });
 
-    Server::new(app).listen(("127.0.0.1", 8080)).await
+    // Start listening at http://localhost:8080/ for incoming requests.
+    Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 }

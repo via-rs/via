@@ -182,28 +182,28 @@ pub struct Any;
 /// use http::Method;
 /// use std::process::ExitCode;
 /// use via::guard::{self, method, on};
-/// use via::{Error, Request, Server};
+/// use via::{Request, Router, Server};
 ///
 /// #[tokio::main]
-/// async fn main() -> Result<ExitCode, Error> {
-///     // Create a new application.
-///     let mut app = via::app(());
-///
-///     // If the request method is safe, cache the response.
-///     app.middleware(guard::filter(
-///         on::method(guard::or((
-///             method::get(),
-///             method::head(),
-///             method::options(),
-///             method::trace(),
-///         ))),
-///         async |request, next| {
-///             todo!("implement response caching");
-///         },
-///     ));
+/// async fn main() -> via::Result<ExitCode> {
+///     // Define the routes that our application responds to.
+///     let router = Router::new(|mut home| {
+///         // If the request method is safe, cache the response.
+///         home.middleware(guard::filter(
+///             on::method(guard::or((
+///                 method::get(),
+///                 method::head(),
+///                 method::options(),
+///                 method::trace(),
+///             ))),
+///             async |request, next| {
+///                 todo!("implement response caching");
+///             },
+///         ));
+///     });
 ///
 ///     // Serve the application at http://localhost:8080/.
-///     Server::new(app).listen(("127.0.0.1", 8080)).await
+///     Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 /// }
 /// ```
 ///
@@ -260,16 +260,16 @@ pub struct IfElse<P, T, E> {
 ///
 /// ```
 /// use http::Version;
-/// use via::{Request, guard};
+/// use via::{Request, Router, guard};
 ///
-/// // Create a new application.
-/// let mut app = via::app(());
-///
-/// // Only support request made with HTTP versions >= 1.1.
-/// app.middleware(guard::barrier(guard::into_error(
-///     |request: &Request| request.version() > Version::HTTP_10,
-///     |_| via::err!(400, "http version not supported"),
-/// )));
+/// // Define the routes that our application responds to.
+/// let router = Router::new(|mut home| {
+///     // Only support request made with HTTP versions >= 1.1.
+///     home.middleware(guard::barrier(guard::into_error(
+///         |request: &Request| request.version() > Version::HTTP_10,
+///         |_| via::err!(400, "http version not supported"),
+///     )));
+/// });
 /// ```
 pub struct IntoError<T, F> {
     predicate: T,
@@ -367,50 +367,53 @@ pub fn any() -> Any {
 /// # Example
 ///
 /// ```
-/// use via::error::Propagate;
+/// use via::error::{Error, Propagate};
 /// use via::guard::{self, Predicate, method, on};
 /// use via::ws::{self, Channel, Request};
-/// use via::{Error, err};
+/// use via::{Router, err};
 ///
 /// #[derive(Clone)]
 /// struct Session {
 ///     user_id: Option<u64>,
 /// }
 ///
-/// // Create a new application.
-/// let mut app = via::app(());
+/// // Define the routes that our application responds to.
+/// let router = Router::new(|home| {
+///     // Start defining the descendants of "/".
+///     let mut path = home.prefix();
 ///
-/// // Returns a contextual, extension-based auth predicate.
-/// let authenticate = || {
-///     guard::into_error(
-///         on::extension(|session: &Session| session.user_id.is_some()),
-///         |_| err!(401, "unauthorized.")
-///     )
-/// };
+///     // Returns a contextual, extension-based auth predicate.
+///     let authenticate = || {
+///         guard::into_error(
+///             on::extension(|session: &Session| session.user_id.is_some()),
+///             |_| err!(401, "unauthorized.")
+///         )
+///     };
 ///
-/// // Authenticated GET requests can open a web socket.
-/// app.push("/chat").assign(guard::filter(
-///     guard::or((guard::bool(method::get()), guard::bool(authenticate()))),
-///     //                                            ^^^^
-///     // The contextual predicate error is never constructed. The ErrorThunk
-///     // is dropped when the output is coerced to a boolean.
-///     //
-///     // This keeps the guard to the /chat route allocation free all while
-///     // maintaining compatibility with guards that require a contextual
-///     // predicate such as `barrier` or `flat_map`.
-///     via::ws(async |mut channel: Channel, request: Request| {
-///         while let Some(message) = channel.recv().await {
-///             if message.is_binary() || message.is_text() {
-///                 let text = message.to_text().or_continue()?;
-///                 println!("message received: {}", &text);
-///             } else if message.is_close() {
-///                 break;
+///     // Authenticated GET requests can open a web socket.
+///     path.push("/chat").assign(guard::filter(
+///         guard::or((guard::bool(method::get()), guard::bool(authenticate()))),
+///         //                                            ^^^^
+///         // The contextual predicate error is never constructed. The ErrorThunk
+///         // is dropped when the output is coerced to a boolean.
+///         //
+///         // This keeps the guard to the /chat route allocation free all while
+///         // maintaining compatibility with guards that require a contextual
+///         // predicate such as `barrier` or `flat_map`.
+///         via::ws(async |mut channel: Channel, request: Request| {
+///             while let Some(message) = channel.recv().await {
+///                 if message.is_binary() || message.is_text() {
+///                     let text = message.to_text().or_continue()?;
+///                     println!("message received: {}", &text);
+///                 } else if message.is_close() {
+///                     break;
+///                 }
 ///             }
-///         }
 ///
-///         Ok(())
-///     }),
-/// ));
+///             Ok(())
+///         }),
+///     ));
+/// });
 /// ```
 pub fn bool<T>(predicate: T) -> Bool<T> {
     Bool { predicate }
@@ -432,16 +435,16 @@ pub fn if_else<P, T, E>(predicate: P, if_true: T, or_else: E) -> IfElse<P, T, E>
 ///
 /// ```
 /// use http::Version;
-/// use via::{Request, guard};
+/// use via::{Request, Router, guard};
 ///
-/// // Create a new application.
-/// let mut app = via::app(());
-///
-/// // Only support request made with HTTP versions >= 1.1.
-/// app.middleware(guard::barrier(guard::into_error(
-///     |request: &Request| request.version() > Version::HTTP_10,
-///     |_| via::err!(400, "http version not supported"),
-/// )));
+/// // Define the routes that our application responds to.
+/// let router = Router::new(|mut home| {
+///     // Only support request made with HTTP versions >= 1.1.
+///     home.middleware(guard::barrier(guard::into_error(
+///         |request: &Request| request.version() > Version::HTTP_10,
+///         |_| via::err!(400, "http version not supported"),
+///     )));
+/// });
 /// ```
 pub fn into_error<T, F>(predicate: T, op: F) -> IntoError<T, F> {
     IntoError { predicate, op }

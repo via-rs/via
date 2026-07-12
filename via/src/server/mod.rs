@@ -12,6 +12,7 @@ use tokio::net::{TcpListener, ToSocketAddrs};
 
 use crate::app::{ServiceAdapter, Via};
 use crate::error::Error;
+use crate::router::Router;
 
 use accept::accept;
 use tls::TcpAcceptor;
@@ -72,10 +73,10 @@ impl<App> Server<App>
 where
     App: Send + Sync + 'static,
 {
-    /// Creates a new server for the provided app.
-    pub fn new(app: Via<App>) -> Self {
+    /// Create a new server for `router` and `app`.
+    pub fn new(router: Router<App>, app: App) -> Self {
         Self {
-            app,
+            app: Via::new(router, app),
             config: Default::default(),
         }
     }

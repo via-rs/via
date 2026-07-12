@@ -28,13 +28,14 @@
 //! before a responder is reached:
 //!
 //! ```
-//! # use via::{Next, Request, guard};
+//! # use via::{Next, Request, Router, guard};
 //! # use via::guard::method;
 //! # async fn cache(request: Request, next: Next) -> via::Result {
 //! #     next.call(request).await
 //! # }
-//! # let mut app = via::app(());
-//! app.middleware(guard::filter(method::is_safe(), cache));
+//! let router = Router::new(|mut home| {
+//!     home.middleware(guard::filter(method::is_safe(), cache));
+//! });
 //! ```
 //!
 //! Prefer a router switch when different HTTP methods should be handled by
@@ -47,13 +48,18 @@
 //! #   pub async fn create(_: Request, _: Next) -> via::Result { todo!() }
 //! # }
 //! #
-//! # let mut app = via::app(());
+//! # use via::Router;
 //! #
-//! app.push("/users").assign(
-//!     via::get(users::show)
-//!         .post(users::create)
-//!         .or_deny()
-//! );
+//! let router = Router::new(|home| {
+//!     // Start defining the descendants of "/".
+//!     let mut path = home.prefix();
+//!
+//!     path.push("/users").assign(
+//!         via::get(users::show)
+//!             .post(users::create)
+//!             .or_deny()
+//!     );
+//! });
 //! ```
 //!
 //! [`Method`]: http::Method

@@ -21,6 +21,9 @@ const SESSION_SECRET: &str = "VIA_SECRET_KEY";
 /// The cookie name used to store an encoded identity token.
 pub const SESSION: &str = "via-chat-session";
 
+/// The maximum number of connections in the database pool.
+pub const BB8_POOL_SIZE: u32 = 10;
+
 pub type Postgres = AsyncDieselConnectionManager<AsyncPgConnection>;
 pub type Connection<'a> = PooledConnection<'a, Postgres>;
 
@@ -154,7 +157,10 @@ impl Unicorn {
     pub async fn new() -> via::Result<Self> {
         let manager = Postgres::new(&*require_env(DATABASE_URL)?);
         let secret = require_env(SESSION_SECRET)?;
-        let pool = Pool::builder().build(manager).await?;
+        let pool = Pool::builder()
+            .max_size(BB8_POOL_SIZE)
+            .build(manager)
+            .await?;
 
         Ok(Self {
             database: pool,

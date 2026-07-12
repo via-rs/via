@@ -154,6 +154,28 @@ where
         self
     }
 
+    /// Reserve the exact number of file descriptors used in your application.
+    ///
+    /// Determinism is the backbone of high assurance.
+    ///
+    /// If you know the exact number of resources your application uses, set
+    /// this value to ensure the exact amount of backpressure is applied in
+    /// accept.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `len` is >= to the maximum number of connections.
+    pub fn reserve_file_descriptors(mut self, len: usize) -> Self {
+        assert!(
+            len < self.config.max_connections,
+            "reserved fd len must be < max_connections ({})",
+            self.config.max_connections,
+        );
+
+        self.config.max_connections -= len;
+        self
+    }
+
     /// Set the maximum request body size in bytes.
     ///
     /// **Default:** `100 MB`

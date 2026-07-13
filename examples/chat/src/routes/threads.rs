@@ -27,8 +27,8 @@ async fn index(request: Request, _: Next) -> via::Result {
     // Clone the subscription we loaded during authorization.
     let subscription = request.channel().cloned().or_not_found()?;
 
-    // Parse an Option<Id> from the :reply-id path parameter.
-    let reply_id = request.param("reply-id").ok_and_then(str::parse)?;
+    // Parse an Option<Id> from the :thread-id path parameter.
+    let thread_id = request.param("thread-id").ok_and_then(str::parse)?;
 
     // Get pagination params from the URI query.
     let keyset = request.query::<LimitAndOffset>()?;
@@ -41,9 +41,9 @@ async fn index(request: Request, _: Next) -> via::Result {
         // Borrow the channel id from `subscription`.
         let channel_id = subscription.channel().id();
 
-        if let Some(reply_id) = reply_id.as_ref() {
+        if let Some(parent_id) = thread_id.as_ref() {
             ThreadWithUser::query()
-                .filter(by_channel(channel_id).and(by_thread(reply_id)))
+                .filter(by_channel(channel_id).and(by_thread(parent_id)))
                 .page(keyset)
                 .load(&mut connection)
                 .await?

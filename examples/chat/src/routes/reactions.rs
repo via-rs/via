@@ -1,26 +1,16 @@
 via::resource!(app = Unicorn);
 
-use serde::Serialize;
 use via::Error;
 use via::request::PathParams;
 
-use super::channels::ChannelMemberParams;
+use super::threads::ThreadParams;
 use crate::util::Id;
 use crate::{Next, Request, Unicorn};
 
-#[derive(Clone, Debug, Serialize)]
-pub struct ReactionCollectionParams {
-    channel: ChannelMemberParams,
-    reply_id: Option<Id>,
-    thread_id: Id,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct ReactionMemberParams {
-    channel: ChannelMemberParams,
-    reply_id: Option<Id>,
-    thread_id: Id,
+#[derive(Debug)]
+pub struct ReactionParams {
     reaction_id: Id,
+    thread: ThreadParams,
 }
 
 async fn index(_: Request, _: Next) -> via::Result {
@@ -43,27 +33,13 @@ async fn destroy(_: Request, _: Next) -> via::Result {
     via::deny!(500, "todo!")
 }
 
-impl<'a> TryFrom<PathParams<'a>> for ReactionCollectionParams {
+impl<'a> TryFrom<PathParams<'a>> for ReactionParams {
     type Error = Error;
 
     fn try_from(params: PathParams<'a>) -> Result<Self, Self::Error> {
         Ok(Self {
-            channel: params.try_into()?,
-            reply_id: params.get("reply-id").parse().ok(),
-            thread_id: params.get("thread-id").parse()?,
-        })
-    }
-}
-
-impl<'a> TryFrom<PathParams<'a>> for ReactionMemberParams {
-    type Error = Error;
-
-    fn try_from(params: PathParams<'a>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            channel: params.try_into()?,
-            reply_id: params.get("reply-id").parse().ok(),
-            thread_id: params.get("thread-id").parse()?,
             reaction_id: params.get("reaction-id").parse()?,
+            thread: params.try_into()?,
         })
     }
 }

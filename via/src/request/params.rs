@@ -150,6 +150,15 @@ impl<'a, 'b> PathParam<'a, 'b> {
             .map(|value| self.encoding.decode_as(self.name, value))
             .transpose()
     }
+
+    pub fn ok_and_then<F, T, E>(self, op: F) -> Result<Option<T>, Error>
+    where
+        F: FnOnce(&str) -> Result<T, E>,
+        Error: From<E>,
+    {
+        self.ok()
+            .and_then(|option| option.as_deref().map(op).transpose().or_bad_request())
+    }
 }
 
 impl<'a, 'b> ResultExt for PathParam<'a, 'b> {
@@ -207,6 +216,15 @@ impl<'a, 'b> QueryParam<'a, 'b> {
         self.slice()
             .map(|value| self.encoding.decode_as(self.name, value))
             .transpose()
+    }
+
+    pub fn ok_and_then<F, T, E>(self, op: F) -> Result<Option<T>, Error>
+    where
+        F: FnOnce(&str) -> Result<T, E>,
+        Error: From<E>,
+    {
+        self.ok()
+            .and_then(|option| option.as_deref().map(op).transpose().or_bad_request())
     }
 }
 

@@ -1,19 +1,27 @@
+use diesel::deserialize::FromSql;
 use diesel::expression::{Selectable, SelectableHelper};
-use serde::{Deserialize, Serialize};
+use diesel::pg::{Pg, PgValue};
+use diesel::{AsExpression, FromSqlRow, deserialize, sql_types};
+use serde::{Deserialize, Serialize, Serializer};
+use std::sync::Arc;
 use time::OffsetDateTime;
 use via_diesel::prelude::*;
 
-use super::subscription::{ChannelSubscription, NewSubscription};
-use super::{ThreadDetails, UserPreview};
+use super::subscription::NewSubscription;
+use super::{ChannelSubscription, ThreadDetails};
 use crate::app::Connection;
 use crate::schema::{channels, subscriptions};
 use crate::util::Id;
+
+#[derive(AsExpression, Clone, Debug, FromSqlRow)]
+#[diesel(sql_type = sql_types::Text)]
+pub struct Name(Arc<str>);
 
 #[derive(Clone, Identifiable, Queryable, Selectable, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Channel {
     id: Id,
-    name: Option<String>,
+    name: Option<Name>,
 
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
@@ -70,10 +78,45 @@ impl Channel {
             Ok(channel)
         })
     }
+
+    pub async fn destroy(connection: &mut Connection<'_>, id: Id) -> via::Result<usize> {
+        diesel::delete(channels::table)
+            .filter(by_id(&id))
+            .execute(connection)
+            .await
+    }
+
+    pub async fn update(
+        connection: &mut Connection<'_>,
+        id: Id,
+        changes: ChangeSet,
+    ) -> via::Result<Self> {
+        diesel::update(channels::table)
+            .filter(by_id(&id))
+            .set(changes)
+            .returning(Self::as_returning())
+            .get_result(connection)
+            .await
+    }
 }
 
 impl ChannelWithThreads {
     pub fn new(channel: ChannelSubscription, threads: Vec<ThreadDetails>) -> Self {
         Self { channel, threads }
+    }
+}
+
+impl FromSql<sql_types::Text, Pg> for Name {
+    fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
+        let bytes = value.as_bytes();
+        let value = str::from_utf8(bytes)?;
+
+        Ok(Self(value.to_owned().into()))
+    }
+}
+
+impl Serialize for Name {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
     }
 }

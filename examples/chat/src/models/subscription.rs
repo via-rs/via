@@ -19,15 +19,10 @@ type JoinChannels = InnerJoin<subscriptions::table, channels::table>;
 pub struct Subscription {
     id: Id,
     claims: AuthClaims,
-
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
-
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
-
-    #[serde(skip)]
-    user_id: Id,
 }
 
 #[derive(Clone, Deserialize, Insertable)]
@@ -97,7 +92,7 @@ diesel::define_sql_function! {
     fn has_flags(lhs: sql_types::Integer, rhs: sql_types::Integer) -> sql_types::Bool;
 }
 
-pub fn claims_can_participate() -> has_flags<subscriptions::claims, i32> {
+pub fn can_participate() -> has_flags<subscriptions::claims, i32> {
     let participate = AuthClaims::READ | AuthClaims::WRITE;
     has_flags(subscriptions::claims, participate.bits())
 }
@@ -157,9 +152,5 @@ impl ChannelSubscription {
 
     pub fn claims(&self) -> &AuthClaims {
         &self.subscription.claims
-    }
-
-    pub fn user_id(&self) -> &Id {
-        &self.subscription.user_id
     }
 }

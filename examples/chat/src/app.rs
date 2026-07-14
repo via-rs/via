@@ -11,6 +11,7 @@ use via::{Response, deny};
 use zeroize::Zeroizing;
 
 use crate::models::User;
+use crate::util::pubsub::{self, Pubsub};
 use crate::util::session::{CODEC, Identity, Unauthorized};
 use crate::util::{Authenticator, Id, Session};
 use crate::{Next, Request};
@@ -31,6 +32,7 @@ pub type Connection<'a> = PooledConnection<'a, Postgres>;
 /// This type defines the resources that are available to each request.
 pub struct Unicorn {
     database: Pool<Postgres>,
+    pubsub: Pubsub,
     signer: Key,
 }
 
@@ -164,6 +166,7 @@ impl Unicorn {
 
         Ok(Self {
             database: pool,
+            pubsub: Pubsub::connect(BB8_POOL_SIZE as usize).await,
             signer: Key::from(secret.as_bytes()),
         })
     }
@@ -173,6 +176,10 @@ impl Unicorn {
             log!(error(database), "{}", &error);
             via::err!(500, "internal server error")
         })
+    }
+
+    pub fn subscribe(&self) -> pubsub::PubsubHandle {
+        self.pubsub.subscribe()
     }
 }
 

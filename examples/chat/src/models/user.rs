@@ -1,5 +1,5 @@
 use diesel::deserialize::{self, FromSql, FromSqlRow};
-use diesel::dsl::{AsSelect, Select, count};
+use diesel::dsl::{AsSelect, InnerJoin, InnerJoinOn, Select, count};
 use diesel::expression::AsExpression;
 use diesel::pg::{Pg, PgValue};
 use diesel::serialize::{self, Output, ToSql};
@@ -11,8 +11,14 @@ use via_diesel::prelude::*;
 use zeroize::Zeroizing;
 
 use crate::app::Connection;
-use crate::schema::users;
+use crate::models::subscription::{self, ChannelSubscription};
+use crate::schema::{channels, subscriptions, users};
 use crate::util::{Id, session::Unauthorized};
+
+type JoinSubscriptions = InnerJoin<users::table, subscriptions::table>;
+
+type JoinChannels = InnerJoinOn<JoinSubscriptions, channels::table, ThroughSubscriptions>;
+type ThroughSubscriptions = diesel::dsl::Eq<subscriptions::channel_id, channels::id>;
 
 #[derive(Clone, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,12 +49,19 @@ pub struct ChangeSet {
     username: Option<String>,
 }
 
-#[derive(Deserialize, Queryable, Selectable, Serialize)]
+#[derive(Debug, Deserialize, Queryable, Selectable, Serialize)]
 #[diesel(table_name = users)]
 pub struct UserPreview {
     id: Id,
     email: String,
     username: String,
+}
+
+pub struct UserWithSubscriptions {
+    id: Id,
+    email: String,
+    username: String,
+    subscriptions: Vec<ChannelSubscription>,
 }
 
 #[derive(Deserialize)]
@@ -164,6 +177,10 @@ impl User {
             .await
     }
 
+    pub fn query() -> Select<users::table, AsSelect<Self, Pg>> {
+        users::table.select(Self::as_select())
+    }
+
     pub async fn exists(connection: &mut Connection<'_>, id: Id) -> via::Result<()> {
         let total = users::table
             .select(count(users::id))
@@ -178,8 +195,55 @@ impl User {
         }
     }
 
+    pub async fn with_subscriptions(
+        mut connection: Connection<'_>,
+        id: Id,
+    ) -> via::Result<UserWithSubscriptions> {
+        let user = UserPreview::query()
+            .filter(by_id(&id))
+            .first(&mut connection)
+            .await?;
+
+        let subscriptions = ChannelSubscription::query()
+            .filter(subscription::by_user(id).and(subscription::can_participate()))
+            .limit(100)
+            .load(&mut connection)
+            .await?;
+
+        Ok(UserWithSubscriptions {
+            id: user.id,
+            email: user.email,
+            username: user.username,
+            subscriptions,
+        })
+    }
+}
+
+impl UserPreview {
     pub fn query() -> Select<users::table, AsSelect<Self, Pg>> {
         users::table.select(Self::as_select())
+    }
+
+    pub fn id(&self) -> Id {
+        self.id
+    }
+}
+
+impl UserWithSubscriptions {
+    pub fn id(&self) -> Id {
+        self.id
+    }
+
+    pub fn subscriptions(&self) -> impl Iterator<Item = &ChannelSubscription> {
+        self.subscriptions.iter()
+    }
+
+    pub fn to_preview(&self) -> UserPreview {
+        UserPreview {
+            id: self.id,
+            email: self.email.clone(),
+            username: self.username.clone(),
+        }
     }
 }
 

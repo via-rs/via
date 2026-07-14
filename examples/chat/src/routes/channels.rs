@@ -33,7 +33,7 @@ pub async fn authorization(mut request: Request, next: Next) -> via::Result {
 
         // Execute the query.
         ChannelSubscription::query()
-            .filter(subscription::by_channel(&id).and(subscription::by_user(&me)))
+            .filter(subscription::by_channel(id).and(subscription::by_user(me)))
             .filter(subscription::can_participate())
             .first(&mut connection)
             .await?
@@ -65,7 +65,7 @@ async fn index(request: Request, _: Next) -> via::Result {
         subscriptions::table
             .inner_join(channels::table)
             .select(Channel::as_select())
-            .filter(subscription::by_user(&me))
+            .filter(subscription::by_user(me))
             .page(limit_and_offset)
             .load(&mut connection)
             .await?

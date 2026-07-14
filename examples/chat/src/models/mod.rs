@@ -6,6 +6,6 @@ pub mod user;
 
 pub use channel::{Channel, ChannelWithThreads};
 pub use reaction::{Reaction, ReactionPreview, ReactionWithUser};
-pub use subscription::{ChannelSubscription, Subscription, UserSubscription};
+pub use subscription::{ChannelSubscription, Subscription};
 pub use thread::{Thread, ThreadDetails, ThreadWithUser};
 pub use user::{User, UserPreview};

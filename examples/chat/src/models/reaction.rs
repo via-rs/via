@@ -16,7 +16,7 @@ use via_diesel::{filters, sorts};
 
 use super::{ThreadWithUser, User, UserPreview};
 use crate::app::Connection;
-use crate::schema::{reactions, users};
+use crate::schema::reactions;
 use crate::util::Id;
 
 #[derive(Debug)]
@@ -29,7 +29,7 @@ pub struct Emoji {
     len: usize,
 }
 
-#[derive(Associations, Identifiable, Queryable, Selectable, Serialize)]
+#[derive(Associations, Debug, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
 #[diesel(belongs_to(ThreadWithUser, foreign_key = thread_id))]
 #[diesel(belongs_to(User))]
 #[diesel(table_name = reactions)]
@@ -38,17 +38,14 @@ pub struct Reaction {
     id: Id,
     emoji: Emoji,
 
+    thread_id: Id,
+    user_id: Id,
+
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
 
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
-
-    #[serde(skip)]
-    thread_id: Id,
-
-    #[serde(skip)]
-    user_id: Id,
 }
 
 #[derive(AsChangeset, Deserialize)]
@@ -57,13 +54,27 @@ pub struct ChangeSet {
     emoji: Emoji,
 }
 
-#[derive(Deserialize, Insertable)]
+#[derive(Debug, Deserialize, Insertable)]
 #[diesel(table_name = reactions)]
 #[serde(rename_all = "camelCase")]
 pub struct NewReaction {
     pub thread_id: Option<Id>,
     pub user_id: Option<Id>,
+
     emoji: Emoji,
+}
+
+#[derive(Debug, Deserialize, Insertable)]
+#[diesel(table_name = reactions)]
+#[serde(rename_all = "camelCase")]
+pub struct NewReactionInChannel {
+    pub user_id: Option<Id>,
+
+    emoji: Emoji,
+
+    #[diesel(skip_insertion)]
+    channel_id: Id,
+    thread_id: Id,
 }
 
 #[derive(Associations, Clone, Deserialize, QueryableByName, Serialize)]
@@ -83,7 +94,7 @@ pub struct ReactionPreview {
     thread_id: Id,
 }
 
-#[derive(Queryable, Selectable, Serialize)]
+#[derive(Debug, Deserialize, Queryable, Selectable, Serialize)]
 #[diesel(check_for_backend(Pg))]
 pub struct ReactionWithUser {
     #[diesel(embed)]
@@ -104,12 +115,19 @@ sorts! {
 }
 
 impl Reaction {
-    pub fn query() -> reactions::table {
-        reactions::table
+    pub async fn create<T>(
+        connection: &mut Connection<'_>,
+        init: NewReaction,
+    ) -> via::Result<Self> {
+        diesel::insert_into(reactions::table)
+            .values(init)
+            .returning(Self::as_returning())
+            .get_result(connection)
+            .await
     }
 
-    pub fn with_user() -> InnerJoin<reactions::table, users::table> {
-        Self::query().inner_join(users::table)
+    pub fn query() -> reactions::table {
+        reactions::table
     }
 
     pub async fn to_threads<'a>(
@@ -126,11 +144,24 @@ impl Reaction {
 
         AsyncQueryDsl::load(query, connection).await
     }
+
+    pub fn with_user(self, user: UserPreview) -> ReactionWithUser {
+        ReactionWithUser {
+            reaction: self,
+            user,
+        }
+    }
 }
 
 impl ReactionPreview {
     pub fn to_id(&self) -> Id {
         self.thread_id.clone()
+    }
+}
+
+impl NewReactionInChannel {
+    pub fn channel_id(&self) -> Id {
+        self.channel_id
     }
 }
 

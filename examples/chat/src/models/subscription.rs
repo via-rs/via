@@ -13,14 +13,24 @@ use crate::schema::{channels, subscriptions, users};
 use crate::util::Id;
 
 type JoinChannels = InnerJoin<subscriptions::table, channels::table>;
+type JoinChannelsAndUsers = InnerJoin<JoinChannels, users::table>;
 
 #[derive(Clone, Debug, Identifiable, Queryable, Selectable, Serialize)]
+#[diesel(check_for_backend(Pg))]
 #[serde(rename_all = "camelCase")]
 pub struct Subscription {
     id: Id,
     claims: AuthClaims,
+
+    #[serde(skip)]
+    user_id: Id,
+
+    #[serde(skip)]
+    channel_id: Id,
+
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
 }
@@ -44,7 +54,6 @@ pub struct ChangeSet {
 
 #[derive(Clone, Queryable, Selectable, Serialize)]
 #[diesel(table_name = subscriptions)]
-#[diesel(check_for_backend(Pg))]
 pub struct ChannelSubscription {
     #[diesel(embed)]
     #[serde(flatten)]
@@ -52,18 +61,6 @@ pub struct ChannelSubscription {
 
     #[diesel(embed)]
     subscription: Subscription,
-}
-
-#[derive(Queryable, Selectable, Serialize)]
-#[diesel(table_name = subscriptions)]
-#[diesel(check_for_backend(Pg))]
-pub struct UserSubscription {
-    #[diesel(embed)]
-    #[serde(flatten)]
-    subscription: Subscription,
-
-    #[diesel(embed)]
-    user: UserPreview,
 }
 
 bitflags! {
@@ -78,9 +75,9 @@ bitflags! {
 }
 
 via_diesel::filters! {
-    pub fn by_id(id == &Id) on subscriptions;
-    pub fn by_user(user_id == &Id) on subscriptions;
-    pub fn by_channel(channel_id == &Id) on subscriptions;
+    pub fn by_id(id == Id) on subscriptions;
+    pub fn by_user(user_id == Id) on subscriptions;
+    pub fn by_channel(channel_id == Id) on subscriptions;
 }
 
 via_diesel::sorts! {
@@ -142,8 +139,8 @@ impl ChannelSubscription {
         ChannelWithThreads::new(self, threads)
     }
 
-    pub fn id(&self) -> &Id {
-        &self.subscription.id
+    pub fn id(&self) -> Id {
+        self.subscription.id
     }
 
     pub fn channel(&self) -> &Channel {

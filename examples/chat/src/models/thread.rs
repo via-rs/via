@@ -2,17 +2,18 @@ use diesel::associations::HasTable;
 use diesel::dsl::{AsSelect, Select};
 use diesel::helper_types::InnerJoin;
 use diesel::pg::Pg;
-use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use via_diesel::prelude::*;
 
 use super::{Channel, ReactionPreview, User, UserPreview};
+use crate::app::Connection;
 use crate::schema::{threads, users};
 use crate::util::Id;
 
 type JoinUsers = InnerJoin<threads::table, users::table>;
 
-#[derive(Associations, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
+#[derive(Associations, Debug, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
 #[diesel(belongs_to(Channel))]
 #[diesel(belongs_to(Thread, foreign_key = thread_id))]
 #[diesel(belongs_to(User))]
@@ -35,7 +36,7 @@ pub struct Thread {
     user_id: Id,
 }
 
-#[derive(Deserialize, Insertable)]
+#[derive(Debug, Deserialize, Insertable)]
 #[diesel(table_name = threads)]
 #[serde(rename_all = "camelCase")]
 pub struct NewThread {
@@ -51,7 +52,7 @@ pub struct ChangeSet {
     body: String,
 }
 
-#[derive(Queryable, Selectable, Serialize)]
+#[derive(Debug, Deserialize, Queryable, Selectable, Serialize)]
 #[diesel(table_name = threads)]
 #[diesel(check_for_backend(Pg))]
 pub struct ThreadWithUser {
@@ -77,7 +78,7 @@ pub struct ThreadDetails {
 }
 
 via_diesel::filters! {
-    pub fn by_id(id == &Id) on threads;
+    pub fn by_id(id == Id) on threads;
     pub fn by_user(user_id == &Id) on threads;
     pub fn by_thread(thread_id == &Id) on threads;
     pub fn by_channel(channel_id == &Id) on threads;
@@ -133,12 +134,24 @@ impl Thread {
     //     Ok(thread.into_thread(own_reactions, replies))
     // }
 
+    pub async fn create(connection: &mut Connection<'_>, init: NewThread) -> via::Result<Self> {
+        diesel::insert_into(threads::table)
+            .values(init)
+            .returning(Self::as_returning())
+            .get_result(connection)
+            .await
+    }
+
     pub fn query() -> threads::table {
         threads::table
     }
 
-    pub fn with_author() -> InnerJoin<threads::table, users::table> {
-        Self::query().inner_join(users::table)
+    pub fn with_user(self, user: UserPreview) -> ThreadWithUser {
+        ThreadWithUser { thread: self, user }
+    }
+
+    pub fn channel_id(&self) -> Id {
+        self.channel_id
     }
 }
 

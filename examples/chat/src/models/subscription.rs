@@ -143,6 +143,10 @@ impl ChannelSubscription {
         self.subscription.id
     }
 
+    pub fn channel_id(&self) -> Id {
+        *self.channel.id()
+    }
+
     pub fn channel(&self) -> &Channel {
         &self.channel
     }

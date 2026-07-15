@@ -1,16 +1,15 @@
-use diesel::Identifiable;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use via::deny;
 use via::error::Propagate;
 use via::ws::{self, Channel, Message};
-use via_diesel::prelude::*;
+use via_pubsub::{Event, Publish};
 
-use crate::app::Unicorn;
-use crate::models::reaction::{NewReactionInChannel, Reaction, ReactionWithUser};
-use crate::models::thread::{self, NewThread, Thread, ThreadWithUser};
+use crate::app::{Connection, Notification, Unicorn};
+use crate::models::reaction::{NewReactionInChannel, Reaction};
+use crate::models::thread::{NewThread, Thread};
 use crate::models::user::User;
-use crate::schema::threads;
-use crate::util::Session;
-use crate::util::pubsub::{Action, Event, SharedStr};
+use crate::models::{ChannelSubscription, UserPreview};
+use crate::util::{Id, Session};
 
 type Request = via::ws::Request<Unicorn>;
 
@@ -21,62 +20,57 @@ enum ClientEvent {
     Reply(NewThread),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(content = "data", rename_all = "lowercase", tag = "type")]
-pub enum ClientUpdate {
-    Reaction(ReactionWithUser),
-    Reply(ThreadWithUser),
-}
-
 pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
     log!(info(chat), "setup recv loop");
 
-    // Get an owned pubsub handle to comminucate with other unicorn instances.
-    let mut pubsub = request.app().subscribe();
+    // An authenticated user is required.
+    let me = request.me().or_break()?;
 
-    // Load the active user along with the channels they are subscribed to.
-    let me = {
-        let future = async {
-            // An authenticated user is required.
-            let id = request.me()?;
+    // Load a user preview for the current user along with their channels.
+    let user = {
+        // Acquire a database connection.
+        let mut connection = request.app().database().await.or_break()?;
 
-            // Acquire a database connection.
-            let connection = request.app().database().await?;
-
-            // Execute the query.
-            User::with_subscriptions(connection, id).await
-        };
-
-        future.await.or_break()?
+        // Execute the query.
+        User::with_subscriptions(&mut connection, me)
+            .await
+            .or_break()?
     };
 
+    // Get a subscription scoped to the current user.
+    let mut subscription = request.app().pubsub().subscribe(me);
+
     // Register interest in the channels that the user is subscribed to.
-    for subscription in me.subscriptions() {
-        pubsub.subscribe(*subscription.channel().id());
-    }
+    user.subscriptions()
+        .map(ChannelSubscription::channel_id)
+        .for_each(|interest| subscription.register(interest));
 
     // Start receiving messages from the client and peers.
     loop {
         tokio::select! {
             // client <- self <- peers
-            result = pubsub.recv() => {
+            result = subscription.recv() => {
                 let Some(event) = result? else {
-                    continue; // Event filtered by pubsub handle.
+                    continue; // Event filtered by subscription.
                 };
 
-                match event.action() {
-                    // Update received from peer.
-                    Action::Update(update) => {
-                        let update = update.clone();
-                        channel.send(update).await?;
+                match event {
+                    // The user logged out.
+                    Event::Logout(_) => {
+                        log!(info(chat = 1), "ws session ended");
+                        return Ok(()); // End the session.
+                    }
+                    // Notification received from a peer.
+                    Event::Relay(_, notification) => {
+                        channel.send(notification).await?
                     }
                     // The user was invited to a channel.
-                    Action::Subscribe => {
-                        pubsub.subscribe(event.interest());
+                    Event::Register(interest, _) => {
+                        subscription.register(interest);
                     }
                     // The user was removed from a channel.
-                    Action::Unsubscribe => {
-                        pubsub.subscribe(event.interest());
+                    Event::Deregister(interest, _) => {
+                        subscription.deregister(&interest);
                     }
                 }
             }
@@ -108,54 +102,19 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                     }
                 };
 
-                // Persist the client event.
-                let persist = async {
-                    let (interest, update) = match event {
-                        // Insert a thread into the threads table.
-                        ClientEvent::Reply(mut new_thread) => {
-                            // Acquire a database connection.
-                            let mut connection = request.app().database().await?;
+                // Persist the client event and prepare to notify peers.
+                let notification = {
+                    // Acquire a database connection.
+                    let mut connection = request.app().database().await.or_break()?;
 
-                            // The authenticated user owns the thread.
-                            new_thread.user_id = Some(me.id());
-
-                            // Perform the insert.
-                            let thread = Thread::create(&mut connection, new_thread).await?;
-                            let interest = thread.channel_id();
-
-                            (interest, ClientUpdate::Reply(thread.with_user(me.to_preview())))
-                        }
-
-                        // Insert a reaction into the reactions table.
-                        ClientEvent::Reaction(mut new_reaction) => {
-                            // Acquire a database connection.
-                            let mut connection = request.app().database().await?;
-
-                            // The authenticated user owns the reaction.
-                            new_reaction.user_id = Some(me.id());
-
-                            // Confirm the thread is an channel that the user is subscribed to.
-                            let interest = Thread::query()
-                                .filter(thread::by_id(thread_id))
-                                .select(threads::channel_id)
-                                .first(&mut connection)
-                                .await?;
-
-                            // Perform the insert.
-                            let reaction = Reaction::create(&mut connection, new_reaction).await?;
-
-                            (interest, ClientUpdate::Reaction(reaction.with_user(me.to_preview())))
-                        }
-                    };
-
-                    let payload = SharedStr::from(serde_json::to_string(&update)?);
-
-                    Ok(Event::new(interest, Action::Update(payload)))
+                    // Perform the insert.
+                    persist_client_event(&mut connection, user.to_preview(), event)
+                        .await
+                        .or_continue()? // If an occurs, restart `chat`.
                 };
 
-                let event = persist.await.or_continue()?;
-
-                pubsub.publish(event).await?;
+                // Publish the notification to subscribers.
+                subscription.send(notification).await?;
             }
         }
     }
@@ -175,11 +134,45 @@ fn extract_client_event(message: &Message) -> via::Result<ClientEvent> {
     Ok(serde_json::from_str(text)?)
 }
 
-impl ClientEvent {
-    pub fn interest(&self) -> Id {
-        match self {
-            Self::Reaction(reaction) => reaction.channel_id(),
-            Self::Reply(thread) => thread.channel_id,
+async fn persist_client_event(
+    connection: &mut Connection<'_>,
+    actor: UserPreview,
+    event: ClientEvent,
+) -> via::Result<Publish<Id, Notification>> {
+    match event {
+        // Insert a thread into the threads table.
+        ClientEvent::Reply(mut new_thread) => {
+            // The authenticated user owns the thread.
+            new_thread.user_id = Some(actor.id());
+
+            // Store the channel id so we can use it as a pubsub interest.
+            let Some(interest) = new_thread.channel_id else {
+                deny!(500, "thread is missing required field channel_id");
+            };
+
+            // Perform the insert.
+            let thread = Thread::create(connection, new_thread).await?;
+            let thread = thread.with_user(actor);
+
+            // Create a publishable event containing a reply notification
+            // scoped to the channel.
+            Ok(Publish::relay(interest, Notification::Reply(thread)))
+        }
+        // Insert a reaction into the reactions table.
+        ClientEvent::Reaction(mut new_reaction) => {
+            // The authenticated user owns the reaction.
+            new_reaction.user_id = Some(actor.id());
+
+            // Store the channel id so we can use it as a pubsub interest.
+            let interest = new_reaction.channel_id();
+
+            // Perform the insert.
+            let reaction = Reaction::create_in(connection, new_reaction).await?;
+            let reaction = reaction.with_user(actor);
+
+            // Create a publishable event containing a reaction notification
+            // scoped to the channel.
+            Ok(Publish::relay(interest, Notification::Reaction(reaction)))
         }
     }
 }

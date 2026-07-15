@@ -126,6 +126,17 @@ impl Reaction {
             .await
     }
 
+    pub async fn create_in(
+        connection: &mut Connection<'_>,
+        init: NewReactionInChannel,
+    ) -> via::Result<Self> {
+        diesel::insert_into(reactions::table)
+            .values(init)
+            .returning(Self::as_returning())
+            .get_result(connection)
+            .await
+    }
+
     pub fn query() -> reactions::table {
         reactions::table
     }

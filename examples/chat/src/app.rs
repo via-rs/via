@@ -4,20 +4,23 @@ use cookie::{Cookie, Key, SameSite};
 use diesel_async::AsyncPgConnection;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use http::StatusCode;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use via::error::{Catch, Propagate};
 use via::guard::{Project, error::UnknownExtension};
 use via::{Response, deny};
+use via_pubsub::Pubsub;
+use via_pubsub::backend::Redis;
 use zeroize::Zeroizing;
 
-use crate::models::User;
-use crate::util::pubsub::{self, Pubsub};
+use crate::models::{ReactionWithUser, ThreadWithUser, User};
 use crate::util::session::{CODEC, Identity, Unauthorized};
 use crate::util::{Authenticator, Id, Session};
 use crate::{Next, Request};
 
-const DATABASE_URL: &str = "DATABASE_URL";
 const SESSION_SECRET: &str = "VIA_SECRET_KEY";
+const DATABASE_URL: &str = "DATABASE_URL";
+const REDIS_URL: &str = "REDIS_URL";
 
 /// The cookie name used to store an encoded identity token.
 pub const SESSION: &str = "via-chat-session";
@@ -28,11 +31,19 @@ pub const BB8_POOL_SIZE: u32 = 10;
 pub type Postgres = AsyncDieselConnectionManager<AsyncPgConnection>;
 pub type Connection<'a> = PooledConnection<'a, Postgres>;
 
+/// A change notification.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(content = "data", rename_all = "lowercase", tag = "type")]
+pub enum Notification {
+    Reaction(ReactionWithUser),
+    Reply(ThreadWithUser),
+}
+
 /// Our billion dollar chat application.
 /// This type defines the resources that are available to each request.
 pub struct Unicorn {
     database: Pool<Postgres>,
-    pubsub: Pubsub,
+    pubsub: Pubsub<Id, Notification>,
     signer: Key,
 }
 
@@ -159,6 +170,13 @@ impl Unicorn {
     pub async fn new() -> via::Result<Self> {
         let manager = Postgres::new(&*require_env(DATABASE_URL)?);
         let secret = require_env(SESSION_SECRET)?;
+
+        let redis = Redis::<_, Notification>::builder(&*require_env(REDIS_URL)?)
+            .capacity(BB8_POOL_SIZE as usize)
+            .version(1)
+            .name("unicorn")
+            .build()?;
+
         let pool = Pool::builder()
             .max_size(BB8_POOL_SIZE)
             .build(manager)
@@ -166,7 +184,7 @@ impl Unicorn {
 
         Ok(Self {
             database: pool,
-            pubsub: Pubsub::connect(BB8_POOL_SIZE as usize).await,
+            pubsub: Pubsub::new(redis).await?,
             signer: Key::from(secret.as_bytes()),
         })
     }
@@ -178,8 +196,8 @@ impl Unicorn {
         })
     }
 
-    pub fn subscribe(&self) -> pubsub::PubsubHandle {
-        self.pubsub.subscribe()
+    pub fn pubsub(&self) -> &Pubsub<Id, Notification> {
+        &self.pubsub
     }
 }
 

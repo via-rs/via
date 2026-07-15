@@ -7,6 +7,7 @@ use diesel::sql_types::BigInt;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
+use via_pubsub::Interest;
 
 #[derive(
     AsExpression, Clone, Copy, Debug, Deserialize, Eq, FromSqlRow, Hash, PartialEq, Serialize,
@@ -26,6 +27,9 @@ impl Id {
         self.0
     }
 }
+
+// A marker trait that means Copy + Eq + Hash.
+impl Interest for Id {}
 
 impl Display for Id {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {

@@ -196,6 +196,10 @@ impl ThreadWithUser {
             user: self.user,
         }
     }
+
+    pub fn channel_id(&self) -> Id {
+        self.thread.channel_id
+    }
 }
 
 impl HasTable for ThreadWithUser {

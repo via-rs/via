@@ -196,18 +196,18 @@ impl User {
     }
 
     pub async fn with_subscriptions(
-        mut connection: Connection<'_>,
+        connection: &mut Connection<'_>,
         id: Id,
     ) -> via::Result<UserWithSubscriptions> {
         let user = UserPreview::query()
             .filter(by_id(&id))
-            .first(&mut connection)
+            .first(connection)
             .await?;
 
         let subscriptions = ChannelSubscription::query()
             .filter(subscription::by_user(id).and(subscription::can_participate()))
             .limit(100)
-            .load(&mut connection)
+            .load(connection)
             .await?;
 
         Ok(UserWithSubscriptions {

@@ -1,3 +1,5 @@
+use std::thread::available_parallelism;
+
 use base64::engine::Engine;
 use bb8::{Pool, PooledConnection};
 use cookie::{Cookie, Key, SameSite};
@@ -9,8 +11,7 @@ use time::OffsetDateTime;
 use via::error::{Catch, Propagate};
 use via::guard::{Project, error::UnknownExtension};
 use via::{Response, deny};
-use via_pubsub::Pubsub;
-use via_pubsub::backend::Redis;
+use via_pubsub::{Pubsub, backend::Redis};
 use zeroize::Zeroizing;
 
 use crate::models::{ReactionWithUser, ThreadWithUser, User};
@@ -24,9 +25,6 @@ const REDIS_URL: &str = "REDIS_URL";
 
 /// The cookie name used to store an encoded identity token.
 pub const SESSION: &str = "via-chat-session";
-
-/// The maximum number of connections in the database pool.
-pub const BB8_POOL_SIZE: u32 = 10;
 
 pub type Postgres = AsyncDieselConnectionManager<AsyncPgConnection>;
 pub type Connection<'a> = PooledConnection<'a, Postgres>;
@@ -43,7 +41,7 @@ pub enum Notification {
 /// This type defines the resources that are available to each request.
 pub struct Unicorn {
     database: Pool<Postgres>,
-    pubsub: Pubsub<Id, Notification>,
+    pubsub: Pubsub<Redis<Id, Notification>>,
     signer: Key,
 }
 
@@ -159,34 +157,56 @@ fn refresh_session(response: &mut Response, signer: &Key, identity: Identity) {
     response.cookies_mut().signed_mut(signer).add(cookie);
 }
 
-fn require_env(name: &str) -> via::Result<Zeroizing<String>> {
-    dotenvy::var(name).map_or_else(
-        |_| deny!(500, "missing required env variable: {}", name),
-        |value| Ok(Zeroizing::new(value)),
-    )
+fn require_env(name: &str) -> via::Result<String> {
+    dotenvy::var(name).or_else(|_| deny!(500, "missing required env variable: {}", name))
+}
+
+fn require_secret(name: &str) -> via::Result<Zeroizing<String>> {
+    require_env(name).map(Zeroizing::new)
 }
 
 impl Unicorn {
-    pub async fn new() -> via::Result<Self> {
-        let manager = Postgres::new(&*require_env(DATABASE_URL)?);
-        let secret = require_env(SESSION_SECRET)?;
+    pub async fn new() -> via::Result<(usize, Self)> {
+        // Get the suggested amount of parallelism from the environment.
+        //
+        // We use this value to determine the size of our connection pool, the
+        // capacity of our PubSub channels, and the server connection margin.
+        //
+        // Deterministic resource usage is how we re-route load to other nodes
+        // before connections start to queue in the kernel backlog on Linux.
+        let num_workers = available_parallelism()?.get();
 
-        let redis = Redis::<_, Notification>::builder(&*require_env(REDIS_URL)?)
-            .capacity(BB8_POOL_SIZE as usize)
-            .version(1)
-            .name("unicorn")
-            .build()?;
+        let database = {
+            let connection_string = require_secret(DATABASE_URL)?;
+            let manager = Postgres::new(&*connection_string);
 
-        let pool = Pool::builder()
-            .max_size(BB8_POOL_SIZE)
-            .build(manager)
-            .await?;
+            Pool::builder()
+                .max_size(num_workers as u32)
+                .build(manager)
+                .await?
+        };
 
-        Ok(Self {
-            database: pool,
-            pubsub: Pubsub::new(redis).await?,
-            signer: Key::from(secret.as_bytes()),
-        })
+        let pubsub = {
+            let redis_url = require_env(REDIS_URL)?;
+
+            Redis::builder(num_workers)
+                .version(1)
+                .topic("unicorn")
+                .connect(redis_url)
+                .await?
+        };
+
+        let app = Self {
+            database,
+            pubsub,
+            signer: Key::from(require_secret(SESSION_SECRET)?.as_bytes()),
+        };
+
+        Ok((num_workers + 1, app))
+        //  ^^^^^^^^^^^^^^^
+        //
+        // Add 1 to the number of workers to account for the additional fd used
+        // by the PubSub redis client.
     }
 
     pub async fn database(&self) -> via::Result<Connection<'_>> {
@@ -196,7 +216,7 @@ impl Unicorn {
         })
     }
 
-    pub fn pubsub(&self) -> &Pubsub<Id, Notification> {
+    pub fn pubsub(&self) -> &Pubsub<Redis<Id, Notification>> {
         &self.pubsub
     }
 }

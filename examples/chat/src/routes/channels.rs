@@ -1,9 +1,12 @@
 via::resource!(app = Unicorn, guard = collection);
 
+use std::ops::ControlFlow;
+
 use via::{Payload, Response};
 use via::{ResultExt, deny};
 use via_diesel::LimitAndOffset;
 use via_diesel::prelude::*;
+use via_pubsub::Event;
 
 use crate::models::subscription::{self, AuthClaims, ChannelSubscription};
 use crate::models::thread::{self, ThreadDetails, ThreadWithUser};
@@ -93,6 +96,12 @@ async fn create(request: Request, _: Next) -> via::Result {
         // Insert the channel.
         Channel::create(&mut connection, me, new_channel).await?
     };
+
+    // Subscribe the user to the channel they created.
+    app.pubsub().dispatch({
+        let interest = *channel.id();
+        Event::register(Some(me), interest)
+    });
 
     Response::build().status(201).data(channel)
 }
@@ -192,11 +201,15 @@ async fn destroy(request: Request, _: Next) -> via::Result {
         // Acquire a database connection.
         let mut connection = request.app().database().await?;
 
-        // Borrow the channel id from `subscription`.
-        let id = subscription.channel().id();
+        // Get the channel id from `subscription`.
+        let id = subscription.channel_id();
+
+        // Unsubscribe all users from the channel.
+        let event = Event::deregister(None, id);
+        request.app().pubsub().dispatch(event);
 
         // Destroy the channel.
-        Channel::destroy(&mut connection, *id).await?;
+        Channel::destroy(&mut connection, id).await?;
     }
 
     Response::build().status(204).finish()

@@ -1,15 +1,14 @@
 use bytes::Bytes;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Error as JsonError;
 use std::fmt::{self, Debug, Formatter};
 
 /// An opaque type that represents a serialized update from a peer.
 #[derive(Clone)]
 pub struct Opaque(Bytes);
 
-impl Opaque {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
+pub(crate) fn serialize(value: &impl Serialize) -> Result<Opaque, JsonError> {
+    serde_json::to_string(value).map(|string| Opaque(string.into()))
 }
 
 impl Debug for Opaque {

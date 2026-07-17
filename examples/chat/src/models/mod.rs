@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 pub mod channel;
 pub mod reaction;
 pub mod subscription;

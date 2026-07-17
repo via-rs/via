@@ -1,23 +1,21 @@
+macro_rules! log {
+    ($level:tt, $fmt:literal $(, $($arg:expr),+)?) => {
+        $($(#[cfg(not(debug_assertions))] drop($arg);)*)?
+
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "{}(pubsub): {}",
+            stringify!($level),
+            format_args!($fmt $(, $($arg),*)?),
+        );
+    };
+}
+
 pub mod backend;
 
-mod opaque;
 mod pubsub;
+mod util;
 
-pub use backend::{Event, Interest, Publish};
-pub use opaque::Opaque;
+pub use backend::{Event, PeerEvent};
 pub use pubsub::{Pubsub, Subscription};
-
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use util::opaque::Opaque;

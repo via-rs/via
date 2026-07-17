@@ -198,9 +198,8 @@ impl<'a, App> Route<'a, App> {
     /// //   Called only when the request path matches /users/:id.
     /// # });
     /// #
-    /// # mod posts {
+    /// # mod users {
     /// #     use via::{Next, Request};
-    /// #     pub async fn trending(_: Request, _: Next) -> via::Result { todo!() }
     /// #     pub async fn index(_: Request, _: Next) -> via::Result { todo!() }
     /// #     pub async fn show(_: Request, _: Next) -> via::Result { todo!() }
     /// # }

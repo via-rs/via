@@ -25,7 +25,7 @@ use std::process::ExitCode;
 use via::guard::{self, media};
 use via::{Router, Server, cookies, rescue};
 
-use app::{BB8_POOL_SIZE, SESSION, Unicorn};
+use app::{SESSION, Unicorn};
 use routes::auth::{login, logout, me};
 use routes::{channels, reactions, threads, users};
 use util::session::{self, auth_required, authenticate};
@@ -39,11 +39,11 @@ async fn main() -> via::Result<ExitCode> {
     let router = Router::new(routes);
 
     // Setup our chat application, "Unicorn".
-    let unicorn = Unicorn::new().await?;
+    let (margin, unicorn) = Unicorn::new().await?;
 
     // Start listening at http://localhost:8080 for incoming requests.
     Server::new(router, unicorn)
-        .reserve_file_descriptors(BB8_POOL_SIZE as usize)
+        .reserve_file_descriptors(margin)
         .listen(("127.0.0.1", 8080))
         .await
 }

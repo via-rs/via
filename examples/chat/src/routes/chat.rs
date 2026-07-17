@@ -2,7 +2,7 @@ use serde::Deserialize;
 use via::deny;
 use via::error::Propagate;
 use via::ws::{self, Channel, Message};
-use via_pubsub::{Event, Publish};
+use via_pubsub::{Event, PeerEvent};
 
 use crate::app::{Connection, Notification, Unicorn};
 use crate::models::reaction::{NewReactionInChannel, Reaction};
@@ -56,21 +56,21 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
 
                 match event {
                     // The user logged out.
-                    Event::Logout(_) => {
+                    PeerEvent::Logout(_) => {
                         log!(info(chat = 1), "ws session ended");
                         return Ok(()); // End the session.
                     }
                     // Notification received from a peer.
-                    Event::Relay(_, notification) => {
+                    PeerEvent::Relay(_, notification) => {
                         channel.send(notification).await?
                     }
                     // The user was invited to a channel.
-                    Event::Register(interest, _) => {
+                    PeerEvent::Register(_, interest) => {
                         subscription.register(interest);
                     }
                     // The user was removed from a channel.
-                    Event::Deregister(interest, _) => {
-                        subscription.deregister(&interest);
+                    PeerEvent::Deregister(_, ref interest) => {
+                        subscription.deregister(interest);
                     }
                 }
             }
@@ -138,7 +138,7 @@ async fn persist_client_event(
     connection: &mut Connection<'_>,
     actor: UserPreview,
     event: ClientEvent,
-) -> via::Result<Publish<Id, Notification>> {
+) -> via::Result<Event<Id, Notification>> {
     match event {
         // Insert a thread into the threads table.
         ClientEvent::Reply(mut new_thread) => {
@@ -156,7 +156,7 @@ async fn persist_client_event(
 
             // Create a publishable event containing a reply notification
             // scoped to the channel.
-            Ok(Publish::relay(interest, Notification::Reply(thread)))
+            Ok(Event::relay(interest, Notification::Reply(thread)))
         }
         // Insert a reaction into the reactions table.
         ClientEvent::Reaction(mut new_reaction) => {
@@ -172,7 +172,7 @@ async fn persist_client_event(
 
             // Create a publishable event containing a reaction notification
             // scoped to the channel.
-            Ok(Publish::relay(interest, Notification::Reaction(reaction)))
+            Ok(Event::relay(interest, Notification::Reaction(reaction)))
         }
     }
 }

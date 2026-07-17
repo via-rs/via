@@ -1,9 +1,11 @@
 //! The /api/auth namespace.
 
 use http::StatusCode;
+use std::ops::ControlFlow;
 use via::request::Payloadz;
-use via::{Response, deny, err};
+use via::{Error, Response, deny, err};
 use via_diesel::prelude::*;
+use via_pubsub::Event;
 
 use crate::models::user::{User, by_id};
 use crate::util::{Authenticator, Session};
@@ -52,19 +54,26 @@ pub async fn login(request: Request, _: Next) -> via::Result {
 ///
 /// If there is not a session associated with the request, 403 Forbidden.
 pub async fn logout(request: Request, _: Next) -> via::Result {
+    let me = request.me();
+
     // If there is not an active session, pretend we don't exist.
-    let mut response = if request.me().is_ok() {
+    let mut response = if me.is_ok() {
         // Build an empty response with a 204 status code.
         Response::build().status(StatusCode::NO_CONTENT).finish()?
     } else {
         // Build an eager error response so we can destroy the session.
         Response::build()
             .status(StatusCode::FORBIDDEN)
-            .errors(err!(403, "forbidden"))?
+            .errors(Error::new("forbidden".to_owned()))?
     };
 
     // Instruct the client to remove the session cookie.
     request.app().logout(&mut response);
+
+    // Dispatch a logout event to end ws sessions.
+    if let Ok(event) = me.map(Event::logout) {
+        request.app().pubsub().dispatch(event);
+    }
 
     Ok(response)
 }

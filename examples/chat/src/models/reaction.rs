@@ -115,10 +115,7 @@ sorts! {
 }
 
 impl Reaction {
-    pub async fn create<T>(
-        connection: &mut Connection<'_>,
-        init: NewReaction,
-    ) -> via::Result<Self> {
+    pub async fn create(connection: &mut Connection<'_>, init: NewReaction) -> via::Result<Self> {
         diesel::insert_into(reactions::table)
             .values(init)
             .returning(Self::as_returning())
@@ -141,7 +138,7 @@ impl Reaction {
         reactions::table
     }
 
-    pub async fn to_threads<'a>(
+    pub async fn to_threads(
         connection: &mut Connection<'_>,
         ids: Vec<Id>,
     ) -> via::Result<Vec<ReactionPreview>> {
@@ -166,7 +163,7 @@ impl Reaction {
 
 impl ReactionPreview {
     pub fn to_id(&self) -> Id {
-        self.thread_id.clone()
+        self.thread_id
     }
 }
 

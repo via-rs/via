@@ -4,70 +4,76 @@ mod redis;
 #[cfg(feature = "redis")]
 pub use redis::Redis;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
+use via::error::Catch;
 
-use crate::opaque::Opaque;
-use crate::pubsub::{Receiver, Sender};
+use crate::util::opaque::{self, Opaque};
 
-pub trait Backend<T, U> {
+#[derive(Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct Event<T, U>(RawEvent<T, U>);
+
+pub trait Backend {
+    type Interest: Copy + Eq + Hash + DeserializeOwned + Serialize;
+    type Payload: DeserializeOwned + Serialize;
+
+    fn subscribe(&self) -> Self;
+
+    fn dispatch(&self, event: Event<Self::Interest, Self::Payload>);
+
     #[allow(async_fn_in_trait)]
-    async fn connect(&self) -> via::Result<(Sender<T, U>, Receiver<T>)>;
-}
+    async fn send(&self, event: Event<Self::Interest, Self::Payload>) -> Result<(), Catch>;
 
-pub trait Interest: Copy + Eq + Hash + Serialize {}
+    #[allow(async_fn_in_trait)]
+    async fn recv(&mut self) -> Result<PeerEvent<Self::Interest>, Catch>;
+}
 
 #[derive(Clone, Debug)]
-pub enum Event<T> {
+pub enum PeerEvent<T> {
     Logout(T),
     Relay(T, Opaque),
-    Register(T, T),
-    Deregister(T, T),
-}
-
-#[derive(Serialize)]
-pub struct Publish<T, U> {
-    interest: T,
-    action: RawAction<T, U>,
+    Register(Option<T>, T),
+    Deregister(Option<T>, T),
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(content = "data", rename_all = "lowercase", tag = "type")]
-enum RawAction<T, U> {
-    Logout,
-    Relay(U),
-    Register(T),
-    Deregister(T),
+enum RawEvent<T, U> {
+    Logout(T),
+    Relay(T, U),
+    Register(Option<T>, T),
+    Deregister(Option<T>, T),
 }
 
-impl<T, U> Publish<T, U> {
+impl<T, U> Event<T, U> {
     pub fn logout(actor: T) -> Self {
-        Self {
-            interest: actor,
-            action: RawAction::Logout,
-        }
+        Self(RawEvent::Logout(actor))
     }
 
     pub fn relay(interest: T, payload: U) -> Self {
-        Self {
-            interest,
-            action: RawAction::Relay(payload),
-        }
+        Self(RawEvent::Relay(interest, payload))
     }
 
-    pub fn register(interest: T, actor: T) -> Self {
-        Self {
-            interest,
-            action: RawAction::Register(actor),
-        }
+    pub fn register(actor: Option<T>, interest: T) -> Self {
+        Self(RawEvent::Register(actor, interest))
     }
 
-    pub fn deregister(interest: T, actor: T) -> Self {
-        Self {
-            interest,
-            action: RawAction::Deregister(actor),
-        }
+    pub fn deregister(actor: Option<T>, interest: T) -> Self {
+        Self(RawEvent::Deregister(actor, interest))
     }
 }
 
-impl Interest for i64 {}
+impl<T: Serialize, U: Serialize> Event<T, U> {
+    fn into_event(self) -> Result<PeerEvent<T>, serde_json::Error> {
+        Ok(match self.0 {
+            RawEvent::Logout(actor) => PeerEvent::Logout(actor),
+            RawEvent::Relay(interest, ref data) => {
+                PeerEvent::Relay(interest, opaque::serialize(data)?)
+            }
+            RawEvent::Register(actor, interest) => PeerEvent::Register(actor, interest),
+            RawEvent::Deregister(actor, interest) => PeerEvent::Deregister(actor, interest),
+        })
+    }
+}

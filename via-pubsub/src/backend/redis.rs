@@ -1,108 +1,240 @@
+use redis::aio::{ConnectionManager, ConnectionManagerConfig, SendError};
+use redis::{AsyncTypedCommands, Client, PushInfo, PushKind, RedisResult, Value};
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Error as JsonError;
+use std::hash::Hash;
 use std::marker::PhantomData;
+use std::ops::ControlFlow;
+use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
-use via::Error;
+use via::{Error, error::Catch};
 
-use super::{Backend, Interest, Publish};
-use crate::pubsub::{Receiver, Sender};
+use super::{Backend, Event, PeerEvent};
+use crate::pubsub::Pubsub;
+use crate::util::error;
 
 pub struct Builder<T, U> {
-    url: String,
-    name: Option<String>,
+    capacity: usize,
     version: Option<u32>,
-    capacity: Option<usize>,
-    _schema: PhantomData<U>,
-    _interest: PhantomData<T>,
+    topic: Option<String>,
+    _ty: PhantomData<(T, U)>,
 }
 
 pub struct Redis<T, U> {
-    url: String,
-    topic: String,
-    capacity: usize,
-    _schema: PhantomData<U>,
-    _interest: PhantomData<T>,
+    sender: mpsc::Sender<Event<T, U>>,
+    receiver: broadcast::Receiver<PeerEvent<T>>,
+    _schema_ty: PhantomData<U>,
+}
+
+struct Dispatcher<T, U> {
+    cast: broadcast::Sender<PeerEvent<T>>,
+    inbound: mpsc::Receiver<PushInfo>,
+    outbound: mpsc::Receiver<Event<T, U>>,
+}
+
+fn deserialize_event<T, U>(input: &str) -> Result<PeerEvent<T>, JsonError>
+where
+    T: DeserializeOwned + Serialize,
+    U: DeserializeOwned + Serialize,
+{
+    serde_json::from_str(input).and_then(Event::<T, U>::into_event)
 }
 
 fn require_argument(arg: &str) -> Error {
     Error::new(format!("missing required argument: \"{}\"", arg))
 }
 
-impl<T, U> Redis<T, U> {
-    pub fn builder(url: &str) -> Builder<T, U> {
-        Builder {
-            url: url.to_owned(),
-            name: None,
-            version: None,
-            capacity: None,
-            _schema: PhantomData,
-            _interest: PhantomData,
+fn value_as_str(value: &Value) -> Option<&str> {
+    if let Value::BulkString(data) = value {
+        str::from_utf8(data.as_ref()).ok()
+    } else {
+        None
+    }
+}
+
+async fn connect(url: &str) -> RedisResult<(ConnectionManager, mpsc::Receiver<PushInfo>)> {
+    // The channel used internally by the redis client.
+    let (tx, pushes) = mpsc::channel(1);
+    let config = ConnectionManagerConfig::new()
+        .set_push_sender(move |info| tx.try_send(info).or(Err(SendError)))
+        .set_automatic_resubscription()
+        .set_connection_timeout(Some(Duration::from_secs(5)))
+        .set_response_timeout(Some(Duration::from_secs(5)));
+
+    let client = Client::open(url)?
+        .get_connection_manager_with_config(config)
+        .await?;
+
+    Ok((client, pushes))
+}
+
+async fn recv<T, U>(mut dispatcher: Dispatcher<T, U>, mut client: ConnectionManager, topic: String)
+where
+    T: DeserializeOwned + Serialize,
+    U: DeserializeOwned + Serialize,
+{
+    loop {
+        tokio::select! {
+            incoming = dispatcher.outbound.recv() => {
+                let Some(event) = incoming else {
+                    break;
+                };
+
+                let json = match serde_json::to_string(&event) {
+                    Ok(string) => string,
+                    Err(error) => {
+                        log!(error, "{}", &error);
+                        continue;
+                    }
+                };
+
+                if let Err(error) = client.publish(&topic, &json).await {
+                    log!(error, "{}", error);
+                }
+            }
+            outgoing = dispatcher.inbound.recv() => {
+                let Some(push) = outgoing else {
+                    break;
+                };
+
+                if let PushKind::Message = &push.kind
+                    && let [t, payload] = &*push.data
+                    && value_as_str(t).is_some_and(|s| s == topic)
+                    && let Some(input) = value_as_str(payload)
+                {
+                    match deserialize_event::<T, U>(input) {
+                        Ok(event) => {
+                            // TODO: implement checksum verification.
+                            let _ = dispatcher.cast.send(event);
+                        }
+                        Err(error) => {
+                            log!(error, "{}", error);
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-impl<T, U> Backend<T, U> for Redis<T, U>
-where
-    T: Interest + Send + Sync + 'static,
-    U: DeserializeOwned + Serialize + Send + Sync + 'static,
-{
-    async fn connect(&self) -> via::Result<(Sender<T, U>, Receiver<T>)> {
-        let (tx, task_rx) = mpsc::channel::<Publish<T, U>>(self.capacity);
-        let (task_tx, rx) = broadcast::channel(self.capacity);
-
-        tokio::spawn({
-            let _tx = task_tx;
-            let mut rx = task_rx;
-
-            Box::pin(async move {
-                // TODO:
-                // Deserialize message we receive from redis as Publish<T, U>
-                // to confirm that it's validity once and then convert it to
-                // an event that can be cloned without copying it's payload.
-                while let Some(event) = rx.recv().await {
-                    match serde_json::to_string_pretty(&event) {
-                        Ok(publish) => {
-                            println!("publish: {:#?}", publish)
-                        }
-                        Err(error) => {
-                            eprintln!("{}", error);
-                        }
-                    }
-                }
-            })
-        });
-
-        Ok((tx, rx))
+impl<T, U> Redis<T, U> {
+    pub fn builder(capacity: usize) -> Builder<T, U> {
+        Builder {
+            capacity,
+            version: None,
+            topic: None,
+            _ty: PhantomData,
+        }
     }
 }
 
-impl<T, U> Builder<T, U> {
-    pub fn build(self) -> via::Result<Redis<T, U>> {
-        let url = self.url;
-        let name = self.name.as_ref().ok_or_else(|| require_argument("name"))?;
-        let version = self.version.ok_or_else(|| require_argument("version"))?;
-        let capacity = self.capacity.ok_or_else(|| require_argument("capacity"))?;
+impl<T, U> Backend for Redis<T, U>
+where
+    T: Copy + Eq + Hash + DeserializeOwned + Serialize + Send + 'static,
+    U: DeserializeOwned + Serialize + Send + 'static,
+{
+    type Interest = T;
+    type Payload = U;
 
-        Ok(Redis {
-            url,
-            capacity,
-            topic: format!("via-pubsub:{}:{}", name, version),
-            _schema: PhantomData,
-            _interest: PhantomData,
+    fn subscribe(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            receiver: self.receiver.resubscribe(),
+            _schema_ty: PhantomData,
+        }
+    }
+
+    fn dispatch(&self, event: Event<Self::Interest, Self::Payload>) {
+        let tx = self.sender.clone();
+
+        tokio::spawn(async move {
+            if tx.send(event).await.is_err() {
+                log!(warn, "unable to send from detached task. sender dropped.");
+            }
+        });
+    }
+
+    async fn send(&self, event: Event<T, U>) -> Result<(), Catch> {
+        self.sender.send(event).await.map_err(error::sender_dropped)
+    }
+
+    #[inline]
+    async fn recv(&mut self) -> Result<PeerEvent<T>, Catch> {
+        self.receiver.recv().await.map_err(|error| {
+            if let broadcast::error::RecvError::Lagged(n) = error {
+                let message = format!("capacity too small. skipped {} messages.", n);
+                ControlFlow::Continue(Error::new(message))
+            } else {
+                error::sender_dropped(0)
+            }
         })
     }
+}
 
-    pub fn name(mut self, name: &str) -> Self {
-        self.name = Some(name.to_owned());
-        self
-    }
-
+impl<T, U> Builder<T, U>
+where
+    T: Copy + Eq + Hash + DeserializeOwned + Serialize + Send + Sync + 'static,
+    U: DeserializeOwned + Serialize + Send + Sync + 'static,
+{
     pub fn version(mut self, version: u32) -> Self {
         self.version = Some(version);
         self
     }
 
-    pub fn capacity(mut self, capacity: usize) -> Self {
-        self.capacity = Some(capacity);
+    pub fn topic(mut self, topic: &str) -> Self {
+        self.topic = Some(topic.to_owned());
         self
+    }
+
+    pub async fn connect(self, url: String) -> via::Result<Pubsub<Redis<T, U>>> {
+        // Build namespaced topic name with the topic and version args.
+        let topic = format!(
+            "via-pub-sub:{}:{}",
+            self.topic.ok_or_else(|| require_argument("topic"))?,
+            self.version.ok_or_else(|| require_argument("version"))?,
+        );
+
+        // Used by subscribers to receive updates from the redis task.
+        let (cast, receiver) = broadcast::channel(1);
+
+        // Used by subscribers to send updates to the redis task.
+        let (sender, outbound) = mpsc::channel(self.capacity);
+
+        tokio::spawn({
+            // Create the redis client and establish a connection.
+            let (mut client, inbound) = connect(&url).await?;
+
+            // Create a dispatcher with the channel deps of the redis task.
+            let dispatcher = Dispatcher::new(cast, inbound, outbound);
+
+            // Subscribe to the update topic.
+            client.subscribe(&topic).await?;
+
+            // Pin the task on the heap. It should live as long as the process.
+            Box::pin(async {
+                // Start receiving updates from peers.
+                recv(dispatcher, client, topic).await;
+            })
+        });
+
+        Ok(Pubsub::new(Redis {
+            sender,
+            receiver,
+            _schema_ty: PhantomData,
+        }))
+    }
+}
+
+impl<T, U> Dispatcher<T, U> {
+    fn new(
+        cast: broadcast::Sender<PeerEvent<T>>,
+        inbound: mpsc::Receiver<PushInfo>,
+        outbound: mpsc::Receiver<Event<T, U>>,
+    ) -> Self {
+        Self {
+            cast,
+            inbound,
+            outbound,
+        }
     }
 }

@@ -1,52 +1,46 @@
 use redis::aio::{ConnectionManager, ConnectionManagerConfig, SendError};
 use redis::{AsyncTypedCommands, Client, PushInfo, PushKind, RedisResult, Value};
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::Error as JsonError;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::ControlFlow;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
-use via::{Error, error::Catch};
+use via::error::{Catch, Error};
 
-use super::{Backend, Event, PeerEvent};
+use super::{Backend, Event, RawPeerEvent, Signer};
 use crate::pubsub::Pubsub;
 use crate::util::error;
 
 pub struct Builder<T, U> {
     capacity: usize,
     version: Option<u32>,
+    signer: Result<Option<Signer>, Error>,
     topic: Option<String>,
     _ty: PhantomData<(T, U)>,
 }
 
 pub struct Redis<T, U> {
     sender: mpsc::Sender<Event<T, U>>,
-    receiver: broadcast::Receiver<PeerEvent<T>>,
-    _schema_ty: PhantomData<U>,
+    receiver: broadcast::Receiver<RawPeerEvent<T>>,
 }
 
 struct Dispatcher<T, U> {
-    cast: broadcast::Sender<PeerEvent<T>>,
+    cast: broadcast::Sender<RawPeerEvent<T>>,
     inbound: mpsc::Receiver<PushInfo>,
     outbound: mpsc::Receiver<Event<T, U>>,
-}
-
-fn deserialize_event<T, U>(input: &str) -> Result<PeerEvent<T>, JsonError>
-where
-    T: DeserializeOwned + Serialize,
-    U: DeserializeOwned + Serialize,
-{
-    serde_json::from_str(input).and_then(Event::<T, U>::into_event)
 }
 
 fn require_argument(arg: &str) -> Error {
     Error::new(format!("missing required argument: \"{}\"", arg))
 }
 
-fn value_as_str(value: &Value) -> Option<&str> {
-    if let Value::BulkString(data) = value {
-        str::from_utf8(data.as_ref()).ok()
+fn push_as_message(info: &PushInfo) -> Option<(&str, &[u8])> {
+    if let PushKind::Message = &info.kind
+        && let [Value::BulkString(topic), Value::BulkString(payload)] = &*info.data
+        && let Ok(topic) = str::from_utf8(topic)
+    {
+        Some((topic, payload.as_ref()))
     } else {
         None
     }
@@ -68,8 +62,12 @@ async fn connect(url: &str) -> RedisResult<(ConnectionManager, mpsc::Receiver<Pu
     Ok((client, pushes))
 }
 
-async fn recv<T, U>(mut dispatcher: Dispatcher<T, U>, mut client: ConnectionManager, topic: String)
-where
+async fn recv<T, U>(
+    mut dispatcher: Dispatcher<T, U>,
+    mut client: ConnectionManager,
+    signer: Signer,
+    topic: String,
+) where
     T: DeserializeOwned + Serialize,
     U: DeserializeOwned + Serialize,
 {
@@ -80,31 +78,28 @@ where
                     break;
                 };
 
-                let json = match serde_json::to_string(&event) {
-                    Ok(string) => string,
+                let topic = topic.as_bytes();
+
+                match signer.serialize(topic, &event) {
+                    Ok(json) => {
+                        if let Err(error) = client.publish(topic, json).await {
+                            log!(error, "{}", error);
+                        }
+                    }
                     Err(error) => {
                         log!(error, "{}", &error);
-                        continue;
                     }
-                };
-
-                if let Err(error) = client.publish(&topic, &json).await {
-                    log!(error, "{}", error);
                 }
+
             }
             outgoing = dispatcher.inbound.recv() => {
                 let Some(push) = outgoing else {
                     break;
                 };
 
-                if let PushKind::Message = &push.kind
-                    && let [t, payload] = &*push.data
-                    && value_as_str(t).is_some_and(|s| s == topic)
-                    && let Some(input) = value_as_str(payload)
-                {
-                    match deserialize_event::<T, U>(input) {
+                if let Some((t, payload)) = push_as_message(&push) && t == &*topic {
+                    match signer.deserialize::<T, U>(topic.as_bytes(), payload) {
                         Ok(event) => {
-                            // TODO: implement checksum verification.
                             let _ = dispatcher.cast.send(event);
                         }
                         Err(error) => {
@@ -122,6 +117,7 @@ impl<T, U> Redis<T, U> {
         Builder {
             capacity,
             version: None,
+            signer: Ok(None),
             topic: None,
             _ty: PhantomData,
         }
@@ -140,7 +136,6 @@ where
         Self {
             sender: self.sender.clone(),
             receiver: self.receiver.resubscribe(),
-            _schema_ty: PhantomData,
         }
     }
 
@@ -159,7 +154,7 @@ where
     }
 
     #[inline]
-    async fn recv(&mut self) -> Result<PeerEvent<T>, Catch> {
+    async fn recv(&mut self) -> Result<RawPeerEvent<T>, Catch> {
         self.receiver.recv().await.map_err(|error| {
             if let broadcast::error::RecvError::Lagged(n) = error {
                 let message = format!("capacity too small. skipped {} messages.", n);
@@ -176,17 +171,10 @@ where
     T: Copy + Eq + Hash + DeserializeOwned + Serialize + Send + Sync + 'static,
     U: DeserializeOwned + Serialize + Send + Sync + 'static,
 {
-    pub fn version(mut self, version: u32) -> Self {
-        self.version = Some(version);
-        self
-    }
-
-    pub fn topic(mut self, topic: &str) -> Self {
-        self.topic = Some(topic.to_owned());
-        self
-    }
-
     pub async fn connect(self, url: String) -> via::Result<Pubsub<Redis<T, U>>> {
+        // Confirm that the a valid signer was provided.
+        let signer = self.signer?.ok_or_else(|| require_argument("signer"))?;
+
         // Build namespaced topic name with the topic and version args.
         let topic = format!(
             "via-pub-sub:{}:{}",
@@ -213,21 +201,32 @@ where
             // Pin the task on the heap. It should live as long as the process.
             Box::pin(async {
                 // Start receiving updates from peers.
-                recv(dispatcher, client, topic).await;
+                recv(dispatcher, client, signer, topic).await;
             })
         });
 
-        Ok(Pubsub::new(Redis {
-            sender,
-            receiver,
-            _schema_ty: PhantomData,
-        }))
+        Ok(Pubsub::new(Redis { sender, receiver }))
+    }
+
+    pub fn version(mut self, version: u32) -> Self {
+        self.version = Some(version);
+        self
+    }
+
+    pub fn signer(mut self, bytes: &[u8]) -> Self {
+        self.signer = Signer::new(bytes).map(Some);
+        self
+    }
+
+    pub fn topic(mut self, topic: &str) -> Self {
+        self.topic = Some(topic.to_owned());
+        self
     }
 }
 
 impl<T, U> Dispatcher<T, U> {
     fn new(
-        cast: broadcast::Sender<PeerEvent<T>>,
+        cast: broadcast::Sender<RawPeerEvent<T>>,
         inbound: mpsc::Receiver<PushInfo>,
         outbound: mpsc::Receiver<Event<T, U>>,
     ) -> Self {

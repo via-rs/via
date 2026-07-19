@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use via::error::Catch;
 
-use crate::backend::{Backend, Event, PeerEvent};
+use crate::backend::{Backend, Event, PeerEvent, RawPeerEvent};
 
 pub struct Pubsub<T> {
     backend: T,
@@ -37,12 +37,23 @@ impl<T: Backend> Subscription<T> {
     }
 
     pub async fn recv(&mut self) -> Result<Option<PeerEvent<T::Interest>>, Catch> {
-        self.backend.recv().await.map(|event| {
-            if self.interested_in(&event) {
-                Some(event)
-            } else {
-                None
-            }
+        self.backend.recv().await.map(|event| match event {
+            RawPeerEvent::Logout(ref actor) => (&self.actor == actor).then_some(PeerEvent::Logout),
+
+            RawPeerEvent::Relay(ref interest, payload) => self
+                .interests
+                .contains(interest)
+                .then(|| PeerEvent::Relay(payload)),
+
+            RawPeerEvent::Register(ref actor, ref interest) => actor
+                .as_ref()
+                .is_none_or(|id| &self.actor == id)
+                .then(|| PeerEvent::Register(*interest)),
+
+            RawPeerEvent::Deregister(ref actor, ref interest) => actor
+                .as_ref()
+                .is_none_or(|id| &self.actor == id)
+                .then(|| PeerEvent::Register(*interest)),
         })
     }
 
@@ -52,17 +63,5 @@ impl<T: Backend> Subscription<T> {
 
     pub fn deregister(&mut self, interest: &T::Interest) {
         self.interests.remove(interest);
-    }
-}
-
-impl<T: Backend> Subscription<T> {
-    fn interested_in(&self, event: &PeerEvent<T::Interest>) -> bool {
-        match event {
-            PeerEvent::Logout(actor) => &self.actor == actor,
-            PeerEvent::Relay(interest, _) => self.interests.contains(interest),
-            PeerEvent::Register(actor, _) | PeerEvent::Deregister(actor, _) => {
-                actor.as_ref().is_none_or(|id| &self.actor == id)
-            }
-        }
     }
 }

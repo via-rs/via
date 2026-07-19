@@ -120,6 +120,17 @@ impl Error {
         Self::from_source_with_status(status, Box::new(error))
     }
 
+    pub fn from_json(error: serde_json::Error) -> Self {
+        Self::from_json_with_status(StatusCode::INTERNAL_SERVER_ERROR, error)
+    }
+
+    pub fn from_json_with_status(status: StatusCode, source: serde_json::Error) -> Self {
+        Self {
+            status,
+            source: ErrorSource::Json(source),
+        }
+    }
+
     /// Returns an `Error` from a boxed [`Error` trait](std::error::Error)
     /// object.
     pub fn from_source(source: BoxError) -> Self {

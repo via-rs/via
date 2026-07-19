@@ -19,9 +19,11 @@ use crate::util::session::{CODEC, Identity, Unauthorized};
 use crate::util::{Authenticator, Id, Session};
 use crate::{Next, Request};
 
-const SESSION_SECRET: &str = "VIA_SECRET_KEY";
 const DATABASE_URL: &str = "DATABASE_URL";
 const REDIS_URL: &str = "REDIS_URL";
+
+const SESSION_SIGNER: &str = "SESSION_SIGNER";
+const PUBSUB_SIGNER: &str = "PUBSUB_SIGNER";
 
 /// The cookie name used to store an encoded identity token.
 pub const SESSION: &str = "via-chat-session";
@@ -188,10 +190,12 @@ impl Unicorn {
 
         let pubsub = {
             let redis_url = require_env(REDIS_URL)?;
+            let signing_key = require_secret(PUBSUB_SIGNER)?;
 
             Redis::builder(num_workers)
                 .version(1)
                 .topic("unicorn")
+                .signer(signing_key.as_bytes())
                 .connect(redis_url)
                 .await?
         };
@@ -199,7 +203,7 @@ impl Unicorn {
         let app = Self {
             database,
             pubsub,
-            signer: Key::from(require_secret(SESSION_SECRET)?.as_bytes()),
+            signer: Key::from(require_secret(SESSION_SIGNER)?.as_bytes()),
         };
 
         Ok((num_workers + 1, app))

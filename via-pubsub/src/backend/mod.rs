@@ -1,8 +1,12 @@
+mod signed;
+
 #[cfg(feature = "redis")]
 mod redis;
 
 #[cfg(feature = "redis")]
 pub use redis::Redis;
+
+pub(crate) use signed::Signer;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -27,11 +31,19 @@ pub trait Backend {
     async fn send(&self, event: Event<Self::Interest, Self::Payload>) -> Result<(), Catch>;
 
     #[allow(async_fn_in_trait)]
-    async fn recv(&mut self) -> Result<PeerEvent<Self::Interest>, Catch>;
+    async fn recv(&mut self) -> Result<RawPeerEvent<Self::Interest>, Catch>;
 }
 
 #[derive(Clone, Debug)]
 pub enum PeerEvent<T> {
+    Logout,
+    Relay(Opaque),
+    Register(T),
+    Deregister(T),
+}
+
+#[derive(Clone)]
+pub enum RawPeerEvent<T> {
     Logout(T),
     Relay(T, Opaque),
     Register(Option<T>, T),
@@ -65,15 +77,15 @@ impl<T, U> Event<T, U> {
     }
 }
 
-impl<T: Serialize, U: Serialize> Event<T, U> {
-    fn into_event(self) -> Result<PeerEvent<T>, serde_json::Error> {
-        Ok(match self.0 {
-            RawEvent::Logout(actor) => PeerEvent::Logout(actor),
+impl<T, U: Serialize> Event<T, U> {
+    fn into_raw(self) -> via::Result<RawPeerEvent<T>> {
+        match self.0 {
+            RawEvent::Logout(actor) => Ok(RawPeerEvent::Logout(actor)),
             RawEvent::Relay(interest, ref data) => {
-                PeerEvent::Relay(interest, opaque::serialize(data)?)
+                opaque::serialize(data).map(|payload| RawPeerEvent::Relay(interest, payload))
             }
-            RawEvent::Register(actor, interest) => PeerEvent::Register(actor, interest),
-            RawEvent::Deregister(actor, interest) => PeerEvent::Deregister(actor, interest),
-        })
+            RawEvent::Register(actor, interest) => Ok(RawPeerEvent::Register(actor, interest)),
+            RawEvent::Deregister(actor, interest) => Ok(RawPeerEvent::Deregister(actor, interest)),
+        }
     }
 }

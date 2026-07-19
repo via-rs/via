@@ -56,20 +56,23 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
 
                 match event {
                     // The user logged out.
-                    PeerEvent::Logout(_) => {
+                    PeerEvent::Logout => {
                         log!(info(chat = 1), "ws session ended");
                         return Ok(()); // End the session.
                     }
                     // Notification received from a peer.
-                    PeerEvent::Relay(_, notification) => {
+                    PeerEvent::Relay(notification) => {
+                        log!(info(chat = 1), "relay notification");
                         channel.send(notification).await?
                     }
                     // The user was invited to a channel.
-                    PeerEvent::Register(_, interest) => {
+                    PeerEvent::Register(interest) => {
+                        log!(info(chat = 1), "joining channel {}", interest);
                         subscription.register(interest);
                     }
                     // The user was removed from a channel.
-                    PeerEvent::Deregister(_, ref interest) => {
+                    PeerEvent::Deregister(ref interest) => {
+                        log!(info(chat = 1), "leaving channel {}", interest);
                         subscription.deregister(interest);
                     }
                 }
@@ -102,19 +105,24 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                     }
                 };
 
+                log!(info(chat = 1), "event received from client");
+
                 // Persist the client event and prepare to notify peers.
                 let notification = {
                     // Acquire a database connection.
                     let mut connection = request.app().database().await.or_break()?;
+                    let future = persist_client_event(&mut connection, user.to_preview(), event);
 
                     // Perform the insert.
-                    persist_client_event(&mut connection, user.to_preview(), event)
-                        .await
-                        .or_continue()? // If an occurs, restart `chat`.
+                    future.await.or_continue()? // <- If an occurs, restart `chat`.
                 };
+
+                log!(info(chat = 1), "event saved to database");
 
                 // Publish the notification to subscribers.
                 subscription.send(notification).await?;
+
+                log!(info(chat = 2), "event published");
             }
         }
     }

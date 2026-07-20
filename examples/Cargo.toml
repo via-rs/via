@@ -79,6 +79,6 @@ time = { version = "0.3", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 via = { path = "../via", version = "=2.0.0-gm.59" }
-via-diesel = { version = "=0.1.0-beta.1" }
+via-diesel = { path = "../via-diesel", version = "=0.1.0-beta.1" }
 via-pubsub = { path = "../via-pubsub", version = "0.1", features = ["redis"] }
 zeroize = { version = "1", features = ["serde"] }

@@ -51,14 +51,19 @@
 //!
 
 macro_rules! log {
-    ($level:tt($name:ident = $indent:expr), $fmt:literal $($arg:tt)*) => {
+    ($level:tt($name:ident = $indent:expr), $fmt:literal $(, $($arg:expr)*)?) => {
+        $($(
+            #[cfg(not(debug_assertions))]
+            let _ = $arg;
+        )*)?
+
         #[cfg(debug_assertions)]
         eprintln!(
             "{:indent$}{}({}): {}",
             "",
             stringify!($level),
             stringify!($name),
-            format_args!($fmt $($arg)*),
+            format_args!($fmt $(, $($arg),*)?),
             indent = $indent * 2,
         );
     };

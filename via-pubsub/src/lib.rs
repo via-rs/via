@@ -1,7 +1,5 @@
 macro_rules! log {
     ($level:tt, $fmt:literal $(, $($arg:expr),+)?) => {
-        $($(#[cfg(not(debug_assertions))] drop($arg);)*)?
-
         #[cfg(debug_assertions)]
         eprintln!(
             "{}(pubsub): {}",

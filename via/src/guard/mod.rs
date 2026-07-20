@@ -1,6 +1,6 @@
 //! Predicate-based request filters that define the middleware stack shape.
 //!
-//! Guards are stateless higher-order middleware. They classify a request before
+//! Guards are a form of stateless middleware. They classify a request before
 //! asynchronous work begins and decide whether middleware should be entered or
 //! skipped entirely.
 

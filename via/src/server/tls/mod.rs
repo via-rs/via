@@ -5,6 +5,7 @@ mod native;
 mod rustls;
 
 #[cfg(feature = "native-tls")]
+/// TLS acceptor backed by `native-tls`.
 pub use native::NativeTlsAcceptor;
 
 #[cfg(all(
@@ -31,14 +32,18 @@ use tokio::net::TcpStream;
 
 use crate::error::ServerError;
 
+/// Accepts a TCP stream and optionally upgrades it to a TLS stream.
 pub trait Acceptor {
+    /// Error returned when accepting a stream fails.
     type Error: Into<ServerError>;
+    /// Stream type produced by the acceptor.
     type Stream: AsyncRead + AsyncWrite + NegotiateAlpn;
 
     #[cfg_attr(
         not(any(feature = "native-tls", feature = "rustls-23")),
         allow(dead_code)
     )]
+    /// Accept an inbound TCP stream.
     fn accept(
         &self,
         io: TcpStream,
@@ -49,13 +54,17 @@ pub trait Acceptor {
     not(any(feature = "native-tls", feature = "rustls-23")),
     allow(dead_code)
 )]
+/// Reports the application protocol negotiated for a stream.
 pub trait NegotiateAlpn {
+    /// Return the preferred or negotiated ALPN protocol.
     fn preferred_alpn(&self) -> &Alpn;
 }
 
 #[derive(Eq, PartialEq)]
+/// Application-layer protocol negotiated for a connection.
 pub struct Alpn(Version);
 
+/// Plain TCP acceptor used when TLS is disabled.
 pub struct TcpAcceptor;
 
 impl Acceptor for TcpAcceptor {
@@ -63,6 +72,7 @@ impl Acceptor for TcpAcceptor {
     type Stream = TcpStream;
 
     #[allow(clippy::manual_async_fn)]
+    /// Accept an inbound TCP stream.
     fn accept(
         &self,
         _: TcpStream,
@@ -79,6 +89,8 @@ impl NegotiateAlpn for TcpStream {
 
 #[allow(dead_code)]
 impl Alpn {
+    /// HTTP/2 ALPN marker.
     pub const HTTP_2: Self = Self(Version::HTTP_2);
+    /// HTTP/1.1 ALPN marker.
     pub const HTTP_11: Self = Self(Version::HTTP_11);
 }

@@ -2,9 +2,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
+/// Receives graceful-shutdown cancellation notifications.
 #[derive(Clone)]
 pub struct Cancellation(Arc<Inner>);
 
+/// Sends graceful-shutdown cancellation notifications.
 pub struct Remote(Arc<Inner>);
 
 struct Inner {
@@ -13,6 +15,7 @@ struct Inner {
 }
 
 impl Cancellation {
+    /// Create a linked cancellation receiver and remote.
     pub fn new() -> (Self, Remote) {
         let inner = Arc::new(Inner {
             cancelled: AtomicBool::new(false),
@@ -22,6 +25,7 @@ impl Cancellation {
         (Self(Arc::clone(&inner)), Remote(inner))
     }
 
+    /// Wait until cancellation is requested.
     pub async fn wait(&self) {
         let inner = &*self.0;
 

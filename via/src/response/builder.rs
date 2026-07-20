@@ -22,9 +22,11 @@ use crate::error::Error;
 /// ```
 ///
 pub trait Finalize {
+    /// Finalize `response` using `self` as the response body or payload source.
     fn finalize(self, response: ResponseBuilder) -> Result<Response, Error>;
 }
 
+/// Builder for constructing Via responses.
 #[derive(Debug, Default)]
 pub struct ResponseBuilder {
     response: http::response::Builder,
@@ -42,6 +44,7 @@ struct JsonErrors {
 
 impl ResponseBuilder {
     #[inline]
+    /// Set the HTTP status code.
     pub fn status<T>(mut self, status: T) -> Self
     where
         StatusCode: TryFrom<T>,
@@ -52,12 +55,14 @@ impl ResponseBuilder {
     }
 
     #[inline]
+    /// Set the HTTP protocol version.
     pub fn version(mut self, version: Version) -> Self {
         self.response = self.response.version(version);
         self
     }
 
     #[inline]
+    /// Append a header to the response.
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -70,6 +75,7 @@ impl ResponseBuilder {
     }
 
     #[inline]
+    /// Insert an extension into the response.
     pub fn extension<T>(mut self, extension: T) -> Self
     where
         T: Clone + Send + Sync + 'static,
@@ -79,11 +85,13 @@ impl ResponseBuilder {
     }
 
     #[inline]
+    /// Finalize the response with an explicit body.
     pub fn body(self, body: ResponseBody) -> Result<Response, Error> {
         Ok(self.response.body(body)?.into())
     }
 
     #[inline]
+    /// Serialize `body` as JSON and finalize the response.
     pub fn data<T>(self, data: T) -> Result<Response, Error>
     where
         T: Serialize,
@@ -106,6 +114,7 @@ impl ResponseBuilder {
     }
 
     #[inline]
+    /// Finalize the response with an HTML body.
     pub fn html(self, body: impl Into<String>) -> Result<Response, Error> {
         let body = body.into();
 
@@ -115,6 +124,7 @@ impl ResponseBuilder {
     }
 
     #[inline]
+    /// Finalize the response with a plain text body.
     pub fn text(self, body: impl Into<String>) -> Result<Response, Error> {
         let body = body.into();
 

@@ -220,11 +220,13 @@ pub struct Aggregate {
     _unsend: PhantomData<Rc<()>>,
 }
 
+/// Future returned by [`RequestBody::coalesce`].
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Coalesce {
     body: RequestBody,
 }
 
+/// Streaming HTTP request body with a configured remaining byte budget.
 #[derive(Debug)]
 pub struct RequestBody {
     remaining: usize,
@@ -232,6 +234,7 @@ pub struct RequestBody {
     frames: Option<Vec<Bytes>>,
 }
 
+/// Future that aggregates request body frames and HTTP trailers.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct WithTrailers {
     body: RequestBody,
@@ -284,14 +287,19 @@ unsafe fn zeroize_bytes(frame: &mut Bytes) {
 }
 
 impl Aggregate {
+    /// Return the trailers received with the request body, if any.
     pub fn trailers(&self) -> Option<&HeaderMap> {
         self.payload.trailers.as_ref()
     }
 
+    /// Return `true` when the aggregate contains no body bytes.
     pub fn is_empty(&self) -> bool {
         self.len().is_some_and(|len| len == 0)
     }
 
+    /// Return the total number of remaining body bytes.
+    ///
+    /// Returns `None` if the total length overflows `usize`.
     #[inline]
     pub fn len(&self) -> Option<usize> {
         self.payload
@@ -502,6 +510,7 @@ fn unknown_frame_type() -> Error {
 }
 
 impl Coalesce {
+    /// Include HTTP trailers in the aggregated request body.
     pub fn with_trailers(self) -> WithTrailers {
         WithTrailers {
             body: self.body,

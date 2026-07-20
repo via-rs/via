@@ -14,8 +14,10 @@ use crate::{BoxFuture, Next, err};
 
 const MAX_URI_PATH_LEN: usize = 8092; // 8 KB
 
+/// Future returned by Via's Hyper service adapter.
 pub struct FutureResponse(BoxFuture);
 
+/// Hyper service adapter for a Via application.
 pub struct ServiceAdapter<App> {
     service: Arc<ViaService<App>>,
 }

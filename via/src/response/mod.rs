@@ -9,16 +9,17 @@ mod file;
 
 pub use body::ResponseBody;
 pub use builder::{Finalize, ResponseBuilder};
-use delegate::delegate;
 pub use redirect::Redirect;
 
 #[cfg(feature = "fs")]
 pub use file::File;
 
 use cookie::CookieJar;
+use delegate::delegate;
 use http::{Extensions, HeaderMap, StatusCode, Version};
 use std::fmt::{self, Debug, Formatter};
 
+/// HTTP response type returned by middleware.
 pub struct Response {
     inner: http::Response<ResponseBody>,
     cookies: CookieJar,
@@ -26,6 +27,7 @@ pub struct Response {
 
 impl Response {
     #[inline]
+    /// Create a response from an existing response body.
     pub fn new(body: ResponseBody) -> Self {
         Self {
             inner: http::Response::new(body),
@@ -34,25 +36,31 @@ impl Response {
     }
 
     #[inline]
+    /// Start building a response.
     pub fn build() -> ResponseBuilder {
         Default::default()
     }
 
     delegate! {
         to self.inner() {
+            /// Return the response status code.
             pub fn status(&self) -> StatusCode;
         }
 
         to self.inner_mut() {
+            /// Return a mutable reference to the response status code.
             pub fn status_mut(&mut self) -> &mut StatusCode;
         }
 
         to self.inner() {
+            /// Return the response HTTP version.
             pub fn version(&self) -> Version;
+            /// Return the response headers.
             pub fn headers(&self) -> &HeaderMap;
         }
 
         to self.inner_mut() {
+            /// Return a mutable reference to the response headers.
             pub fn headers_mut(&mut self) -> &mut HeaderMap;
         }
     }
@@ -69,10 +77,12 @@ impl Response {
 
     delegate! {
         to self.inner() {
+            /// Return the response extensions.
             pub fn extensions(&self) -> &Extensions;
         }
 
         to self.inner_mut() {
+            /// Return a mutable reference to the response extensions.
             pub fn extensions_mut(&mut self) -> &mut Extensions;
         }
     }

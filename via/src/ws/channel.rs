@@ -12,6 +12,7 @@ use std::task::{Context, Poll};
 use super::error::already_closed;
 use super::util::poll_immediate_no_wake;
 
+/// Bidirectional channel used by a WebSocket listener.
 pub struct Channel {
     tx: Sender<Message>,
     rx: Receiver<Message>,
@@ -42,6 +43,7 @@ fn poll_ready(tx: &mut Sender<Message>, cx: &mut Context) -> Poll<super::Result>
 }
 
 impl Channel {
+    /// Send a message to the connected peer.
     pub fn send(&mut self, message: impl Into<Message>) -> impl Future<Output = super::Result> {
         Send {
             sender: &mut self.tx,
@@ -49,6 +51,7 @@ impl Channel {
         }
     }
 
+    /// Receive the next message from the connected peer.
     pub fn recv(&mut self) -> impl Future<Output = Option<Message>> {
         Recv {
             recv: self.rx.recv(),

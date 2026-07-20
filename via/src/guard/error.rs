@@ -31,7 +31,10 @@ pub struct MethodNotAllowed<'a> {
 /// An error originating from a field projection or predicate.
 #[derive(Debug)]
 pub enum OnError<T, U> {
+    /// The projected field failed to satisfy the predicate.
     Predicate(T),
+
+    /// The field could not be projected.
     Project(U),
 }
 

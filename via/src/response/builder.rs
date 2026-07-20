@@ -32,6 +32,16 @@ pub struct ResponseBuilder {
     response: http::response::Builder,
 }
 
+#[derive(Serialize)]
+struct JsonData<T> {
+    data: T,
+}
+
+#[derive(Serialize)]
+struct JsonErrors {
+    errors: [Error; 1],
+}
+
 impl ResponseBuilder {
     #[inline]
     /// Set the HTTP status code.
@@ -82,6 +92,19 @@ impl ResponseBuilder {
 
     #[inline]
     /// Serialize `body` as JSON and finalize the response.
+    pub fn data<T>(self, data: T) -> Result<Response, Error>
+    where
+        T: Serialize,
+    {
+        self.json(&JsonData { data })
+    }
+
+    #[inline]
+    pub fn errors(self, error: Error) -> Result<Response, Error> {
+        self.json(&JsonErrors { errors: [error] })
+    }
+
+    #[inline]
     pub fn json(self, body: &impl Serialize) -> Result<Response, Error> {
         let body = serde_json::to_vec(body).map_err(Error::ser_json)?;
 

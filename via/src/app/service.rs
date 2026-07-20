@@ -6,10 +6,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::Via;
 use crate::request::{Envelope, Request, RequestBody};
 use crate::response::{Response, ResponseBody};
 use crate::server::ServerConfig;
-use crate::{BoxFuture, Next, Via, err};
+use crate::{BoxFuture, Next, err};
 
 const MAX_URI_PATH_LEN: usize = 8092; // 8 KB
 

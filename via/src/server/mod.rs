@@ -12,6 +12,7 @@ use tokio::net::{TcpListener, ToSocketAddrs};
 
 use crate::app::{ServiceAdapter, Via};
 use crate::error::Error;
+use crate::router::Router;
 
 use accept::accept;
 use tls::TcpAcceptor;
@@ -41,6 +42,9 @@ pub(crate) type IoStream = io::IoWithPermit<tls::RustlsStream>;
     not(any(feature = "native-tls", feature = "rustls-23"))
 ))]
 pub(crate) type IoStream = io::IoWithPermit<tokio::net::TcpStream>;
+
+const DEFAULT_MAX_CONNECTIONS: usize = 1024;
+const RUNTIME_FD_BUDGET: usize = 10;
 
 /// Serve an app over HTTP.
 ///
@@ -72,10 +76,10 @@ impl<App> Server<App>
 where
     App: Send + Sync + 'static,
 {
-    /// Creates a new server for the provided app.
-    pub fn new(app: Via<App>) -> Self {
+    /// Create a new server for `router` and `app`.
+    pub fn new(router: Router<App>, app: App) -> Self {
         Self {
-            app,
+            app: Via::new(router, app),
             config: Default::default(),
         }
     }
@@ -113,10 +117,42 @@ where
     /// Sets the maximum number of concurrent connections that the server can
     /// accept.
     ///
-    /// **Default:** `1000`
-    /// Return the maximum number of concurrent accepted connections.
+    /// An idle Via application uses 10 file descriptors on POSIX platforms.
+    ///
+    /// Rather than making you do math for no reason, we subtract 10 from the
+    /// provided connection budget.
+    ///
+    /// **Default:** `1024`
     pub fn max_connections(mut self, max_connections: usize) -> Self {
-        self.config.max_connections = max_connections;
+        assert!(
+            max_connections > RUNTIME_FD_BUDGET,
+            "max_connections must be > {}",
+            RUNTIME_FD_BUDGET,
+        );
+
+        self.config.max_connections = max_connections - RUNTIME_FD_BUDGET;
+        self
+    }
+
+    /// Reserve the exact number of file descriptors used in your application.
+    ///
+    /// Determinism is the backbone of high assurance.
+    ///
+    /// If you know the exact number of resources your application uses, set
+    /// this value to ensure the exact amount of backpressure is applied in
+    /// accept.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `len` is >= to the maximum number of connections.
+    pub fn reserve_file_descriptors(mut self, len: usize) -> Self {
+        assert!(
+            len < self.config.max_connections,
+            "reserved fd len must be < max_connections ({})",
+            self.config.max_connections,
+        );
+
+        self.config.max_connections -= len;
         self
     }
 
@@ -385,7 +421,7 @@ impl Default for ServerConfig {
         Self {
             keep_alive: true,
             max_buf_size: 16384, // 16 KB
-            max_connections: 1000,
+            max_connections: DEFAULT_MAX_CONNECTIONS - RUNTIME_FD_BUDGET,
             max_request_size: 104_857_600, // 100 MB
             shutdown_timeout: Duration::from_secs(10),
             http1_header_read_timeout: Duration::from_secs(10),

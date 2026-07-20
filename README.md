@@ -15,7 +15,7 @@ Add the following to dependencies section of your `Cargo.toml`:
 
 ```toml
 [dependencies]
-via = "=2.0.0-gm.56"
+via = "=2.0.0-gm.59"
 http = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -26,25 +26,29 @@ Below is a basic example to demonstrate how to use Via to create a simple web se
 
 ```rust
 use std::process::ExitCode;
-use via::{Error, Next, Request, Response, ResultExt, Server};
+use via::{Next, Request, Response, ResultExt, Router, Server};
 
 async fn hello(request: Request, _: Next) -> via::Result {
-    // Get a reference to `name` from the request uri path.
+    // Get a reference to the path parameter `name` from the request uri.
     let name = request.param("name").percent_decode().into_result()?;
 
     // Send a plain text response with our greeting message.
-    Response::build().text(format!("Hello, {}!", name.as_ref()))
+    Response::build().text(format!("Hello, {}!", name))
 }
 
 #[tokio::main]
-async fn main() -> Result<ExitCode, Error> {
-    let mut app = via::app(());
+async fn main() -> via::Result<ExitCode> {
+    // Define the routes that our application responds to.
+    let router = Router::new(|home| {
+        // Start defining descendants of "/".
+        let mut path = home.prefix();
 
-    // Define a route that listens on /hello/:name.
-    app.route("/hello/:name", via::get(hello));
+        // Define a route that listens on /hello/:name.
+        path.route("/hello/:name", via::get(hello));
+    });
 
     // Serve the application at http://localhost:8080/.
-    Server::new(app).listen(("127.0.0.1", 8080)).await
+    Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 }
 ```
 

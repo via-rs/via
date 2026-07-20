@@ -1,5 +1,5 @@
 use std::process::ExitCode;
-use via::{Error, Finalize, Next, Request, Response, Server};
+use via::{Error, Finalize, Next, Request, Response, Router, Server};
 
 async fn echo(request: Request, _: Next) -> via::Result {
     request.finalize(Response::build())
@@ -36,12 +36,18 @@ async fn relay(mut channel: via::ws::Channel, _: via::ws::Request) -> via::ws::R
 
 #[tokio::main]
 async fn main() -> Result<ExitCode, Error> {
-    let mut app = via::app(());
+    // Define the routes that our application responds to.
+    let router = Router::new(|home| {
+        // Start defining descendants of "/".
+        let mut path = home.prefix();
 
-    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    let relay = via::ws(relay);
+        // If a ws backend is enabled, GET /echo opens a ws relay.
+        #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+        let relay = via::ws(relay);
 
-    app.route("/echo", via::post(echo).get(relay));
+        path.route("/echo", via::post(echo).get(relay));
+    });
 
-    Server::new(app).listen(("127.0.0.1", 8080)).await
+    // Start listening at http://localhost:8080/ for incoming requests.
+    Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 }

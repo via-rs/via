@@ -2,6 +2,7 @@ use bytes::{Buf, Bytes};
 use http::HeaderMap;
 use http_body::{Body, Frame, SizeHint};
 use hyper::body::Incoming;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -11,23 +12,14 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 use zeroize::Zeroize;
 
+#[cfg(feature = "tokio-tungstenite")]
+use tungstenite::protocol::Message;
+
+#[cfg(feature = "tokio-websockets")]
+use tokio_websockets::Message;
+
+use crate::util::sealed;
 use crate::{Error, err};
-
-mod sealed {
-    /// Prevents external implementations of Payload. Allowing us to make
-    /// assumptions about the data contained by implementations of Payload.
-    pub trait Sealed {}
-
-    impl Sealed for super::Aggregate {}
-
-    impl Sealed for bytes::Bytes {}
-
-    #[cfg(feature = "tokio-tungstenite")]
-    impl Sealed for tungstenite::protocol::Message {}
-
-    #[cfg(feature = "tokio-websockets")]
-    impl Sealed for tokio_websockets::Message {}
-}
 
 /// Represents an optionally contiguous source of data received from a client.
 ///
@@ -44,6 +36,20 @@ pub trait Payload: sealed::Sealed + Sized {
     /// Coalesces all non-contiguous bytes into a single contiguous `Vec<u8>`.
     ///
     fn coalesce(self) -> Vec<u8>;
+
+    /// Extracts type `T` from a top-level "data" field of a JSON object
+    /// contained in `self` and returns it.
+    ///
+    /// # Errors
+    ///
+    /// - `Err(Error)` if `T` cannot be deserialized from the "data" in `self`
+    ///
+    fn data<T>(self) -> Result<T, Error>
+    where
+        T: DeserializeOwned,
+    {
+        self.json().map(|json: JsonData<T>| json.data)
+    }
 
     /// Deserialize the payload as JSON into the specified type `T`.
     ///
@@ -105,6 +111,28 @@ pub trait Payloadz: Payload {
     /// frame buffer, `self` is returned to the caller. This allows users to
     /// yield to the runtime and retry zeriozation, add `Connection: close` to
     /// the response header, or panic.
+    fn z_data<T>(self) -> Result<Result<T, Error>, Self>
+    where
+        T: DeserializeOwned,
+    {
+        self.z_json()
+            .map(|result| result.map(|json: JsonData<T>| json.data))
+    }
+
+    /// Deserialize the payload as JSON into the specified type `T`, zeroizing
+    /// the original data from which the `T` is deserialized.
+    ///
+    /// # Errors
+    ///
+    /// - `Err(Self)` if zeroization is impossible due to non-unique access
+    /// - `Ok(Err(Error))` if `T` cannot be deserialized from the data in `self`
+    ///
+    /// ## Unique Access
+    ///
+    /// If zeroization is impossible due to non-unique access of an underlying
+    /// frame buffer, `self` is returned to the caller. This allows users to
+    /// yield to the runtime and retry zeriozation, add `Connection: close` to
+    /// the response header, or panic.
     fn z_json<T>(self) -> Result<Result<T, Error>, Self>
     where
         T: DeserializeOwned,
@@ -130,6 +158,27 @@ pub trait Payloadz: Payload {
     /// the response header, or panic.
     fn z_utf8(self) -> Result<Result<String, Error>, Self> {
         self.z_coalesce().map(deserialize_utf8)
+    }
+
+    /// Deserialize the payload as JSON into the specified type `T`, zeroizing
+    /// the original data from which the `T` is deserialized.
+    ///
+    /// # Errors
+    ///
+    /// - `Err(Self)` if zeroization is impossible due to non-unique access
+    /// - `Ok(Err(Error))` if `T` cannot be deserialized from the data in `self`
+    ///
+    /// ## Unique Access
+    ///
+    /// If zeroization is impossible due to non-unique access of an underlying
+    /// frame buffer, `self` is returned to the caller. This allows users to
+    /// yield to the runtime and retry zeriozation, add `Connection: close` to
+    /// the response header, or panic.
+    fn be_z_data<T>(self) -> Result<T, Error>
+    where
+        T: DeserializeOwned,
+    {
+        self.z_data().unwrap_or_else(Self::data)
     }
 
     /// Deserialize the payload as JSON into the specified type `T`, zeroizing
@@ -196,6 +245,17 @@ struct RequestPayload {
     frames: Vec<Bytes>,
     trailers: Option<HeaderMap>,
 }
+
+#[derive(Deserialize)]
+struct JsonData<T> {
+    data: T,
+}
+
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+sealed!(Aggregate, Bytes, Message);
+
+#[cfg(not(any(feature = "tokio-tungstenite", feature = "tokio-websockets")))]
+sealed!(Aggregate, Bytes);
 
 #[inline]
 fn deserialize_json<T>(buf: &[u8]) -> Result<T, Error>
@@ -384,14 +444,10 @@ impl Payloadz for Aggregate {
 }
 
 #[cfg(feature = "tokio-tungstenite")]
-impl_payload_for_bytes_like!(tungstenite::protocol::Message);
+impl_payload_for_bytes_like!(Message);
 
 #[cfg(feature = "tokio-websockets")]
-impl_payload_for_bytes_like!(
-    tokio_websockets::Message,
-    tokio_websockets::Message::into_payload,
-    tokio_websockets::Message::binary
-);
+impl_payload_for_bytes_like!(Message, Message::into_payload, Message::binary);
 
 impl Payload for Bytes {
     fn coalesce(mut self) -> Vec<u8> {

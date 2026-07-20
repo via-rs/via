@@ -30,10 +30,7 @@ struct Dispatcher<T, U> {
     outbound: mpsc::Receiver<Event<T, U>>,
 }
 
-async fn connect(
-    capacity: usize,
-    url: &str,
-) -> RedisResult<(ConnectionManager, mpsc::Receiver<PushInfo>)> {
+async fn connect(url: &str) -> RedisResult<(ConnectionManager, mpsc::Receiver<PushInfo>)> {
     // The channel used internally by the redis client.
     //
     // A send error means that the recveiver was dropped or the subscriber
@@ -42,7 +39,7 @@ async fn connect(
 
     let config = ConnectionManagerConfig::new()
         .set_pipeline_buffer_size(1)
-        .set_concurrency_limit(capacity)
+        .set_concurrency_limit(1)
         .set_push_sender(move |info| tx.try_send(info).or(Err(SendError)))
         //                                                ^^^^^^^^^^^^^^
         // Invalidate the connection; Automatic reconnection and resubscription
@@ -238,7 +235,7 @@ where
         // Spawn a detached task to process dispatch messages.
         tokio::spawn({
             // Create the redis client and establish a connection.
-            let (mut redis, inbound) = connect(self.capacity, url).await?;
+            let (mut redis, inbound) = connect(url).await?;
 
             // Subscribe to the update topic.
             redis.subscribe(signer.scope()).await?;

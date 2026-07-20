@@ -37,49 +37,16 @@ impl<T: Backend> Subscription<T> {
     }
 
     pub async fn recv(&mut self) -> Result<Option<PeerEvent<T::Interest>>, Catch> {
-        self.backend.recv().await.map(|event| match event {
-            RawPeerEvent::Logout(ref actor) => (&self.actor == actor).then_some(PeerEvent::Logout),
-
-            RawPeerEvent::Relay(ref interest, payload) => self
-                .interests
-                .contains(interest)
-                .then(|| PeerEvent::Relay(payload)),
-
-            RawPeerEvent::Register(ref actor, ref interest) => actor
-                .as_ref()
-                .is_none_or(|id| &self.actor == id)
-                .then(|| PeerEvent::Register(*interest)),
-
-            RawPeerEvent::Deregister(ref actor, ref interest) => actor
-                .as_ref()
-                .is_none_or(|id| &self.actor == id)
-                .then(|| PeerEvent::Register(*interest)),
-        })
+        self.backend
+            .recv()
+            .await
+            .map(|event| self.interested_in(event))
     }
 
     pub fn try_recv(&mut self) -> Result<Option<PeerEvent<T::Interest>>, Catch> {
-        self.backend.try_recv().map(|option| {
-            option.and_then(|event| match event {
-                RawPeerEvent::Logout(ref actor) => {
-                    (&self.actor == actor).then_some(PeerEvent::Logout)
-                }
-
-                RawPeerEvent::Relay(ref interest, payload) => self
-                    .interests
-                    .contains(interest)
-                    .then(|| PeerEvent::Relay(payload)),
-
-                RawPeerEvent::Register(ref actor, ref interest) => actor
-                    .as_ref()
-                    .is_none_or(|id| &self.actor == id)
-                    .then(|| PeerEvent::Register(*interest)),
-
-                RawPeerEvent::Deregister(ref actor, ref interest) => actor
-                    .as_ref()
-                    .is_none_or(|id| &self.actor == id)
-                    .then(|| PeerEvent::Register(*interest)),
-            })
-        })
+        self.backend
+            .try_recv()
+            .map(|option| option.and_then(|event| self.interested_in(event)))
     }
 
     pub fn register(&mut self, interest: T::Interest) {
@@ -88,5 +55,27 @@ impl<T: Backend> Subscription<T> {
 
     pub fn deregister(&mut self, interest: &T::Interest) {
         self.interests.remove(interest);
+    }
+}
+
+impl<T: Backend> Subscription<T> {
+    #[inline]
+    fn interested_in(&self, event: RawPeerEvent<T::Interest>) -> Option<PeerEvent<T::Interest>> {
+        match event {
+            RawPeerEvent::Logout(actor) => (actor == self.actor).then_some(PeerEvent::Logout),
+
+            RawPeerEvent::Relay(interest, payload) => self
+                .interests
+                .contains(&interest)
+                .then(|| PeerEvent::Relay(payload)),
+
+            RawPeerEvent::Register(actor, interest) => actor
+                .is_none_or(|id| self.actor == id)
+                .then(|| PeerEvent::Register(interest)),
+
+            RawPeerEvent::Deregister(actor, interest) => actor
+                .is_none_or(|id| self.actor == id)
+                .then(|| PeerEvent::Deregister(interest)),
+        }
     }
 }

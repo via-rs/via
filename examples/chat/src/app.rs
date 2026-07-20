@@ -193,10 +193,9 @@ impl Unicorn {
             let signing_key = require_secret(PUBSUB_SIGNER)?;
 
             Redis::builder(num_workers)
+                .signing_key(signing_key.as_bytes())
                 .version(1)
-                .topic("unicorn")
-                .signer(signing_key.as_bytes())
-                .connect(redis_url)
+                .connect(&*redis_url, "unicorn")
                 .await?
         };
 

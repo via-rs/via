@@ -6,8 +6,6 @@ mod redis;
 #[cfg(feature = "redis")]
 pub use redis::Redis;
 
-pub(crate) use signed::Signer;
-
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;

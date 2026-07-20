@@ -4,19 +4,18 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::ControlFlow;
-use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use via::error::{Catch, Error};
 
-use super::{Backend, Event, RawPeerEvent, Signer};
+use super::signed::{Key, Signer};
+use super::{Backend, Event, RawPeerEvent};
 use crate::pubsub::Pubsub;
 use crate::util::error;
 
 pub struct Builder<T, U> {
     capacity: usize,
+    signing_key: Result<Option<Key>, Error>,
     version: Option<u32>,
-    signer: Result<Option<Signer>, Error>,
-    topic: Option<String>,
     _ty: PhantomData<(T, U)>,
 }
 
@@ -26,35 +25,28 @@ pub struct Redis<T, U> {
 }
 
 struct Dispatcher<T, U> {
-    cast: broadcast::Sender<RawPeerEvent<T>>,
+    fanout: broadcast::Sender<RawPeerEvent<T>>,
     inbound: mpsc::Receiver<PushInfo>,
     outbound: mpsc::Receiver<Event<T, U>>,
 }
 
-fn require_argument(arg: &str) -> Error {
-    Error::new(format!("missing required argument: \"{}\"", arg))
-}
-
-fn push_as_message(info: &PushInfo) -> Option<(&str, &[u8])> {
-    if let PushKind::Message = &info.kind
-        && let [Value::BulkString(topic), Value::BulkString(payload)] = &*info.data
-        && let Ok(topic) = str::from_utf8(topic)
-    {
-        Some((topic, payload.as_ref()))
-    } else {
-        None
-    }
-}
-
 async fn connect(url: &str) -> RedisResult<(ConnectionManager, mpsc::Receiver<PushInfo>)> {
     // The channel used internally by the redis client.
+    //
+    // A send error means that the recveiver was dropped or the subscriber
+    // cannot preserve stream continuity.
     let (tx, pushes) = mpsc::channel(1);
-    let config = ConnectionManagerConfig::new()
-        .set_push_sender(move |info| tx.try_send(info).or(Err(SendError)))
-        .set_automatic_resubscription()
-        .set_connection_timeout(Some(Duration::from_secs(5)))
-        .set_response_timeout(Some(Duration::from_secs(5)));
 
+    let config = ConnectionManagerConfig::new()
+        .set_pipeline_buffer_size(1)
+        .set_concurrency_limit(1)
+        .set_push_sender(move |info| tx.try_send(info).or(Err(SendError)))
+        //                                                ^^^^^^^^^^^^^^
+        // Invalidate the connection; Automatic reconnection and resubscription
+        // establish a new stream.
+        .set_automatic_resubscription();
+
+    // Create a new redis client and establish a connection with `config`.
     let client = Client::open(url)?
         .get_connection_manager_with_config(config)
         .await?;
@@ -62,49 +54,54 @@ async fn connect(url: &str) -> RedisResult<(ConnectionManager, mpsc::Receiver<Pu
     Ok((client, pushes))
 }
 
-async fn recv<T, U>(
-    mut dispatcher: Dispatcher<T, U>,
-    mut client: ConnectionManager,
-    signer: Signer,
-    topic: String,
-) where
+async fn dispatch<T, U>(mut redis: ConnectionManager, mut trx: Dispatcher<T, U>, signer: Signer)
+where
     T: DeserializeOwned + Serialize,
     U: DeserializeOwned + Serialize,
 {
     loop {
         tokio::select! {
-            incoming = dispatcher.outbound.recv() => {
-                let Some(event) = incoming else {
-                    break;
-                };
-
-                let topic = topic.as_bytes();
-
-                match signer.serialize(topic, &event) {
-                    Ok(json) => {
-                        if let Err(error) = client.publish(topic, json).await {
-                            log!(error, "{}", error);
+            // subscriber <- dispatch <- redis
+            inbound = trx.inbound.recv() => {
+                match inbound
+                    .as_ref()
+                    .and_then(|push| push_as_message(signer.scope(), push))
+                    .map(|payload| signer.deserialize::<_, U>(payload))
+                {
+                    // Event deserialized successfully.
+                    Some(Ok(raw_peer_event)) => {
+                        if trx.fanout.send(raw_peer_event).is_err() {
+                            break; // Receivers dropped. Don't become a zombie.
                         }
                     }
-                    Err(error) => {
-                        log!(error, "{}", &error);
+                    // Deserialization failed.
+                    Some(Err(ref error)) => {
+                        log!(error, "{}", error);
+                    }
+                    // Event filtered by scope and type.
+                    None => {
+                        log!(warn, "event filtered by scope and type.");
                     }
                 }
-
             }
-            outgoing = dispatcher.inbound.recv() => {
-                let Some(push) = outgoing else {
-                    break;
-                };
-
-                if let Some((t, payload)) = push_as_message(&push) && t == &*topic {
-                    match signer.deserialize::<T, U>(topic.as_bytes(), payload) {
-                        Ok(event) => {
-                            let _ = dispatcher.cast.send(event);
-                        }
-                        Err(error) => {
+            // subscriber -> dispatch -> redis
+            outbound = trx.outbound.recv() => {
+                match outbound.as_ref().map(|event| signer.serialize(event)) {
+                    // Event serialized successfully.
+                    Some(Ok((scope, payload))) => {
+                        // Publish to peers. If an error occurs, log it.
+                        if let Err(ref error) = redis.publish(scope, payload).await {
                             log!(error, "{}", error);
                         }
+                    }
+                    // Serialization failed.
+                    Some(Err(ref error)) => {
+                        log!(error, "{}", error);
+                    }
+                    // Senders dropped. Don't become a zombie.
+                    None => {
+                        log!(warn, "senders dropped. stopping redis task.");
+                        break;
                     }
                 }
             }
@@ -112,13 +109,28 @@ async fn recv<T, U>(
     }
 }
 
+#[inline]
+fn push_as_message<'a>(scope: &str, info: &'a PushInfo) -> Option<&'a [u8]> {
+    if let PushKind::Message = &info.kind
+        && let [Value::BulkString(topic), Value::BulkString(payload)] = info.data.as_slice()
+        && str::from_utf8(topic).is_ok_and(|topic| topic == scope)
+    {
+        Some(payload.as_ref())
+    } else {
+        None
+    }
+}
+
+fn require_argument(arg: &str) -> Error {
+    Error::new(format!("missing required argument: \"{}\"", arg))
+}
+
 impl<T, U> Redis<T, U> {
     pub fn builder(capacity: usize) -> Builder<T, U> {
         Builder {
             capacity,
             version: None,
-            signer: Ok(None),
-            topic: None,
+            signing_key: Ok(None),
             _ty: PhantomData,
         }
     }
@@ -171,69 +183,78 @@ where
     T: Copy + Eq + Hash + DeserializeOwned + Serialize + Send + Sync + 'static,
     U: DeserializeOwned + Serialize + Send + Sync + 'static,
 {
-    pub async fn connect(self, url: String) -> via::Result<Pubsub<Redis<T, U>>> {
-        // Confirm that the a valid signer was provided.
-        let signer = self.signer?.ok_or_else(|| require_argument("signer"))?;
-
-        // Build namespaced topic name with the topic and version args.
-        let topic = format!(
-            "via-pub-sub:{}:{}",
-            self.topic.ok_or_else(|| require_argument("topic"))?,
-            self.version.ok_or_else(|| require_argument("version"))?,
-        );
-
-        // Used by subscribers to receive updates from the redis task.
-        let (cast, receiver) = broadcast::channel(1);
-
+    pub async fn connect(self, url: &str, scope: &str) -> via::Result<Pubsub<Redis<T, U>>> {
         // Used by subscribers to send updates to the redis task.
         let (sender, outbound) = mpsc::channel(self.capacity);
 
+        // Used by subscribers to receive updates from the redis task.
+        let (fanout, receiver) = broadcast::channel(1);
+
+        // Create a pubsub backend powered by redis.
+        //
+        // We do this eagerly so the channels used as part of our public API
+        // do not get confused with those used in the redis client task.
+        let backend = Redis { sender, receiver };
+
+        // Construct a signer key to sign messages.
+        //
+        // Signed message are stored as plaintext. However, they cannot be
+        // forged or modified by a malicious subscriber.
+        //
+        // Encyrption of data-in-transit and data-at-rest is a concern of
+        // the redis deployment.
+        //
+        // We do our best to be responsible about plaintext residency while
+        // remaining compliant with the privacy laws in the United States.
+        //
+        // If you are looking to secure your redis pubsub backend, the most
+        // you can do without risking an audit is connecting to redis over
+        // TLS.
+        let signer = {
+            // Confirm that a schema version was provided.
+            let version = self.version.ok_or_else(|| require_argument("version"))?;
+
+            // Confirm that the a valid signing key was provided.
+            let signing_key = self
+                .signing_key?
+                .ok_or_else(|| require_argument("signing_key"))?;
+
+            // Create a signer with the singing key and namespaced scope.
+            Signer::new(signing_key, format!("via-pubsub:{}:v{}", scope, version))
+        };
+
+        // Spawn a detached task to process dispatch messages.
         tokio::spawn({
             // Create the redis client and establish a connection.
-            let (mut client, inbound) = connect(&url).await?;
-
-            // Create a dispatcher with the channel deps of the redis task.
-            let dispatcher = Dispatcher::new(cast, inbound, outbound);
+            let (mut redis, inbound) = connect(url).await?;
 
             // Subscribe to the update topic.
-            client.subscribe(&topic).await?;
+            redis.subscribe(signer.scope()).await?;
+
+            // Create a dispatcher with the channel deps of the redis task.
+            let trx = Dispatcher {
+                fanout,
+                inbound,
+                outbound,
+            };
 
             // Pin the task on the heap. It should live as long as the process.
             Box::pin(async {
                 // Start receiving updates from peers.
-                recv(dispatcher, client, signer, topic).await;
+                dispatch(redis, trx, signer).await;
             })
         });
 
-        Ok(Pubsub::new(Redis { sender, receiver }))
+        Ok(Pubsub::new(backend))
+    }
+
+    pub fn signing_key(mut self, bytes: &[u8]) -> Self {
+        self.signing_key = Key::new(bytes).map(Some);
+        self
     }
 
     pub fn version(mut self, version: u32) -> Self {
         self.version = Some(version);
         self
-    }
-
-    pub fn signer(mut self, bytes: &[u8]) -> Self {
-        self.signer = Signer::new(bytes).map(Some);
-        self
-    }
-
-    pub fn topic(mut self, topic: &str) -> Self {
-        self.topic = Some(topic.to_owned());
-        self
-    }
-}
-
-impl<T, U> Dispatcher<T, U> {
-    fn new(
-        cast: broadcast::Sender<RawPeerEvent<T>>,
-        inbound: mpsc::Receiver<PushInfo>,
-        outbound: mpsc::Receiver<Event<T, U>>,
-    ) -> Self {
-        Self {
-            cast,
-            inbound,
-            outbound,
-        }
     }
 }

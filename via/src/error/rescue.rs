@@ -241,13 +241,22 @@ where
             future.await.or_else(|error| {
                 let flags = policy.apply(&error, PolicyFlags::new());
 
-                Render::new(&flags.mask, &error)
-                    .finalize(Response::build())
-                    .or_else(|residual| {
+                match Render::new(&flags.mask, &error).finalize(Response::build()) {
+                    Ok(response) => Ok(response),
+
+                    // In release builds, residual errors are not logged.
+                    // Therefore, we branch at build-time on the match arm.
+                    //
+                    #[cfg(not(debug_assertions))]
+                    Err(_) => Ok(error.into()),
+
+                    #[cfg(debug_assertions)]
+                    Err(residual) => {
                         log!(warn(rescue = 0), "a residual error occurred in rescue");
                         log!(warn(rescue = 1), "{}", &residual);
                         Ok(error.into())
-                    })
+                    }
+                }
             })
         })
     }

@@ -195,7 +195,7 @@ impl Unicorn {
             Redis::builder(num_workers)
                 .signing_key(signing_key.as_bytes())
                 .version(1)
-                .connect(&*redis_url, "unicorn")
+                .connect(&redis_url, "unicorn")
                 .await?
         };
 

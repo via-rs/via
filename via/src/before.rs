@@ -211,6 +211,14 @@ where
         match (self.decorator)(&mut request) {
             Ok(_) => self.middleware.call(request, next),
             Err(ControlFlow::Break(error)) => Box::pin(async { Err(error) }),
+
+            // In release builds, the error is not logged.
+            // Therefore, we branch at build-time on the match arm.
+            //
+            #[cfg(not(debug_assertions))]
+            Err(ControlFlow::Continue(_)) => next.call(request),
+
+            #[cfg(debug_assertions)]
             Err(ControlFlow::Continue(error)) => {
                 log!(warn(before = 0), "{}", &error);
                 next.call(request)

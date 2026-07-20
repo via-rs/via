@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+native-tls = ["redis/tls-native-tls"]
+rustls = ["redis/tls-rustls"]
+
 tokio-tungstenite = ["via/tokio-tungstenite"]
 tokio-websockets = ["via/tokio-websockets"]
 

@@ -111,12 +111,13 @@ where
 }
 
 #[inline]
-fn push_as_message<'a>(scope: &str, info: &'a PushInfo) -> Option<&'a [u8]> {
-    if let PushKind::Message = &info.kind
-        && let [Value::BulkString(topic), Value::BulkString(payload)] = info.data.as_slice()
-        && str::from_utf8(topic).is_ok_and(|topic| topic == scope)
+fn push_as_message<'a>(scope: &str, push: &'a PushInfo) -> Option<&'a [u8]> {
+    if let PushKind::Message = &push.kind
+        && let Some([Value::BulkString(name), Value::BulkString(vec)]) =
+            push.data.split_first_chunk().map(|(head, _)| head)
+        && str::from_utf8(name).is_ok_and(|utf8| scope == utf8)
     {
-        Some(payload.as_ref())
+        Some(vec.as_ref())
     } else {
         None
     }

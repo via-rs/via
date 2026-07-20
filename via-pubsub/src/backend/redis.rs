@@ -30,7 +30,10 @@ struct Dispatcher<T, U> {
     outbound: mpsc::Receiver<Event<T, U>>,
 }
 
-async fn connect(url: &str) -> RedisResult<(ConnectionManager, mpsc::Receiver<PushInfo>)> {
+async fn connect(
+    capacity: usize,
+    url: &str,
+) -> RedisResult<(ConnectionManager, mpsc::Receiver<PushInfo>)> {
     // The channel used internally by the redis client.
     //
     // A send error means that the recveiver was dropped or the subscriber
@@ -39,7 +42,7 @@ async fn connect(url: &str) -> RedisResult<(ConnectionManager, mpsc::Receiver<Pu
 
     let config = ConnectionManagerConfig::new()
         .set_pipeline_buffer_size(1)
-        .set_concurrency_limit(1)
+        .set_concurrency_limit(capacity)
         .set_push_sender(move |info| tx.try_send(info).or(Err(SendError)))
         //                                                ^^^^^^^^^^^^^^
         // Invalidate the connection; Automatic reconnection and resubscription
@@ -84,6 +87,7 @@ where
                     }
                 }
             }
+
             // subscriber -> dispatch -> redis
             outbound = trx.outbound.recv() => {
                 match outbound.as_ref().map(|event| signer.serialize(event)) {
@@ -152,20 +156,15 @@ where
     }
 
     fn dispatch(&self, event: Event<Self::Interest, Self::Payload>) {
-        let tx = self.sender.clone();
-
-        tokio::spawn(async move {
-            if tx.send(event).await.is_err() {
-                log!(warn, "unable to send from detached task. sender dropped.");
-            }
-        });
+        if self.sender.try_send(event).is_err() {
+            log!(warn, "failed to synchronously send event.");
+        }
     }
 
     async fn send(&self, event: Event<T, U>) -> Result<(), Catch> {
         self.sender.send(event).await.map_err(error::sender_dropped)
     }
 
-    #[inline]
     async fn recv(&mut self) -> Result<RawPeerEvent<T>, Catch> {
         self.receiver.recv().await.map_err(|error| {
             if let broadcast::error::RecvError::Lagged(n) = error {
@@ -175,6 +174,19 @@ where
                 error::sender_dropped(0)
             }
         })
+    }
+
+    #[inline]
+    fn try_recv(&mut self) -> Result<Option<RawPeerEvent<T>>, Catch> {
+        match self.receiver.try_recv() {
+            Ok(event) => Ok(Some(event)),
+            Err(broadcast::error::TryRecvError::Empty) => Ok(None),
+            Err(broadcast::error::TryRecvError::Closed) => Err(error::sender_dropped(0)),
+            Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                let message = format!("capacity too small. skipped {} messages.", n);
+                Err(ControlFlow::Continue(Error::new(message)))
+            }
+        }
     }
 }
 
@@ -226,7 +238,7 @@ where
         // Spawn a detached task to process dispatch messages.
         tokio::spawn({
             // Create the redis client and establish a connection.
-            let (mut redis, inbound) = connect(url).await?;
+            let (mut redis, inbound) = connect(self.capacity, url).await?;
 
             // Subscribe to the update topic.
             redis.subscribe(signer.scope()).await?;

@@ -30,6 +30,8 @@ pub trait Backend {
 
     #[allow(async_fn_in_trait)]
     async fn recv(&mut self) -> Result<RawPeerEvent<Self::Interest>, Catch>;
+
+    fn try_recv(&mut self) -> Result<Option<RawPeerEvent<Self::Interest>>, Catch>;
 }
 
 #[derive(Clone, Debug)]

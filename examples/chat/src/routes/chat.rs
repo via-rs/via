@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use via::deny;
-use via::error::Propagate;
+use via::error::{Catch, Propagate};
 use via::ws::{self, Channel, Message};
 use via_pubsub::{Event, PeerEvent};
 
@@ -16,8 +16,8 @@ type Request = via::ws::Request<Unicorn>;
 #[derive(Deserialize)]
 #[serde(content = "data", rename_all = "lowercase", tag = "type")]
 enum ClientEvent {
-    Reaction(NewReactionInChannel),
     Reply(NewThread),
+    Reaction(NewReactionInChannel),
 }
 
 pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
@@ -47,99 +47,150 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
 
     // Start receiving messages from the client and peers.
     loop {
-        tokio::select! {
-            // client <- self <- peers
-            result = subscription.recv() => {
-                let Some(event) = result? else {
-                    continue; // Event filtered by subscription.
-                };
-
-                match event {
-                    // The user logged out.
-                    PeerEvent::Logout => {
-                        log!(info(chat = 1), "ws session ended");
-                        return Ok(()); // End the session.
-                    }
-                    // Notification received from a peer.
-                    PeerEvent::Relay(notification) => {
-                        log!(info(chat = 1), "relay notification");
-                        channel.send(notification).await?
-                    }
-                    // The user was invited to a channel.
-                    PeerEvent::Register(interest) => {
-                        log!(info(chat = 1), "joining channel {}", interest);
-                        subscription.register(interest);
-                    }
-                    // The user was removed from a channel.
-                    PeerEvent::Deregister(ref interest) => {
-                        log!(info(chat = 1), "leaving channel {}", interest);
-                        subscription.deregister(interest);
-                    }
-                }
-            }
-
+        let peer_event = tokio::select! {
             // client -> self -> peers
-            next = channel.recv() => {
-                // Attempt to extract ClientEvent from the next message.
-                let event = {
-                    // Borrow the original message from `next`.
-                    let option = next.as_ref();
+            outbound = channel.recv() => {
+                // Attempt to extract an event from the next message.
+                let client_event = match outbound {
+                    // Ignore binary messages.
+                    Some(message) if message.is_binary() => {
+                        // Placeholder for tracing...
+                        handle_binary_message(&message);
+                        continue;
+                    }
 
-                    // Attempt to extract ClientEvent from the next message.
-                    if let Some(message) = option && message.is_text() {
-                        // Deserialize a client event from `message`.
-                        // If an error occurs, restart the listener.
-                        let event = extract_client_event(message).or_continue()?;
+                    // Deserialize a client event from `message`.
+                    Some(message) if message.is_text() => {
+                        log!(info(chat = 1), "event received from client");
+                        deserialize_client_event(&message).or_continue()?
+                        //                                 ^^^^^^^^^^^
+                        //          Restart `chat` if an error occurs.
+                    }
 
-                        // Drop the option containing the original message.
-                        drop(next);
-
-                        event
-                    } else if let Some(message) = option && !message.is_close() {
-                        log!(info(chat = 1), "unknown opcode received from client");
-                        log!(info(chat = 2), "{:#?}", message);
-                        continue; // Ignore unknown opcodes.
-                    } else {
-                        log!(info(chat = 1), "ws session ended");
-                        return Ok(()); // End the session.
+                    // All other messages are control codes.
+                    // End the session if Message::is_close. Otherwise, continue.
+                    other => {
+                        if other.as_ref().is_none_or(Message::is_close) {
+                            log!(info(chat = 1), "ws session ended");
+                            return Ok(()); // End the session.
+                        } else {
+                            continue;
+                        }
                     }
                 };
-
-                log!(info(chat = 1), "event received from client");
 
                 // Persist the client event and prepare to notify peers.
                 let notification = {
                     // Acquire a database connection.
                     let mut connection = request.app().database().await.or_break()?;
-                    let future = persist_client_event(&mut connection, user.to_preview(), event);
+                    //                                                  ^^^^^^^^
+                    // If we are unable to connect to the database, end the
+                    // session.
+                    //
+                    // This allows us to implement reconnect logic on the
+                    // client to find a healthy node.
+
+                    // Get a user preview from the authenticated user.
+                    //
+                    // This allows us to include the users name and avatar in
+                    // the update notification.
+                    let actor = user.to_preview();
 
                     // Perform the insert.
-                    future.await.or_continue()? // <- If an occurs, restart `chat`.
+                    //
+                    // This is likely the first await point in the outbound
+                    // flow where we'll have to yield to runtime.
+                    persist_client_event(&mut connection, actor, client_event).await.or_continue()?
                 };
 
+                // Log the result of the database operation.
+                //
+                // This let's developers who are reading debug logs know that
+                // we woke for the result of the `persist_client_event` future.
                 log!(info(chat = 1), "event saved to database");
 
                 // Publish the notification to subscribers.
                 subscription.send(notification).await?;
 
+                // Notify the successful publish in debug builds.
+                //
+                // This is particularly helpful when you want to know whether
+                // or not the reactor woke because a busy subscription caused
+                // the publish future to yield before send.
                 log!(info(chat = 2), "event published");
+
+                // If an inbound event was received while we were busy,
+                // proceed with the inbound event flow.
+                subscription.try_recv()?
+            }
+
+            // client <- self <- peers
+            inbound = subscription.recv() => {
+                inbound?
+            }
+        };
+
+        match peer_event {
+            // Event filtered by subscription.
+            None => {}
+
+            // The user logged out.
+            Some(PeerEvent::Logout) => {
+                log!(info(chat = 1), "ws session ended");
+                return Ok(()); // End the session.
+            }
+
+            // Notification received from a peer.
+            Some(PeerEvent::Relay(notification)) => {
+                log!(info(chat = 1), "relay notification");
+                channel.send(notification).await?
+            }
+
+            // The user was invited to a channel.
+            Some(PeerEvent::Register(interest)) => {
+                log!(info(chat = 1), "joining channel {}", interest);
+                subscription.register(interest);
+            }
+
+            // The user was removed from a channel.
+            Some(PeerEvent::Deregister(ref interest)) => {
+                log!(info(chat = 1), "leaving channel {}", interest);
+                subscription.deregister(interest);
             }
         }
     }
 }
 
 #[cfg(feature = "tokio-tungstenite")]
-fn extract_client_event(message: &Message) -> via::Result<ClientEvent> {
+fn deserialize_client_event(message: &Message) -> via::Result<ClientEvent> {
     let text = message.to_text()?;
     Ok(serde_json::from_str(text)?)
 }
 
 #[cfg(feature = "tokio-websockets")]
-fn extract_client_event(message: &Message) -> via::Result<ClientEvent> {
+fn deserialize_client_event(message: &Message) -> via::Result<ClientEvent> {
     let payload = message.as_payload();
     let text = str::from_utf8(payload)?;
 
     Ok(serde_json::from_str(text)?)
+}
+
+#[cfg(feature = "tokio-tungstenite")]
+fn handle_binary_message(message: &Message) {
+    log!(
+        info(chat = 1),
+        "ignoring binary message (len: {})",
+        message.len()
+    );
+}
+
+#[cfg(feature = "tokio-websockets")]
+fn handle_binary_message(message: &Message) {
+    log!(
+        info(chat = 1),
+        "ignoring binary message (len: {})",
+        message.as_payload().len()
+    );
 }
 
 async fn persist_client_event(

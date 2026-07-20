@@ -213,10 +213,18 @@ impl Unicorn {
     }
 
     pub async fn database(&self) -> via::Result<Connection<'_>> {
-        self.database.get().await.map_err(|error| {
-            log!(error(database), "{}", &error);
-            via::err!(500, "internal server error")
-        })
+        match self.database.get().await {
+            Ok(connection) => Ok(connection),
+
+            #[cfg(not(debug_assertions))]
+            Err(_) => Err(via::err!(500, "internal server error")),
+
+            #[cfg(debug_assertions)]
+            Err(error) => {
+                log!(error(database), "{}", &error);
+                Err(via::err!(500, "internal server error"))
+            }
+        }
     }
 
     pub fn pubsub(&self) -> &Pubsub<Redis<Id, Notification>> {

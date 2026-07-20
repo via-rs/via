@@ -74,10 +74,14 @@ where
                             break; // Receivers dropped. Don't become a zombie.
                         }
                     }
+
                     // Deserialization failed.
                     Some(Err(ref error)) => {
+                        #[cfg(not(debug_assertions))]
+                        let _ = error;
                         log!(error, "{}", error);
                     }
+
                     // Event filtered by scope and type.
                     None => {
                         log!(warn, "event filtered by scope and type.");
@@ -92,11 +96,15 @@ where
                     Some(Ok((scope, payload))) => {
                         // Publish to peers. If an error occurs, log it.
                         if let Err(ref error) = redis.publish(scope, payload).await {
+                            #[cfg(not(debug_assertions))]
+                            let _ = error;
                             log!(error, "{}", error);
                         }
                     }
                     // Serialization failed.
                     Some(Err(ref error)) => {
+                        #[cfg(not(debug_assertions))]
+                        let _ = error;
                         log!(error, "{}", error);
                     }
                     // Senders dropped. Don't become a zombie.

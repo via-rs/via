@@ -53,6 +53,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                 // Attempt to extract an event from the next message.
                 let client_event = match outbound {
                     // Ignore binary messages.
+                    #[cfg(debug_assertions)]
                     Some(message) if message.is_binary() => {
                         // Placeholder for tracing...
                         handle_binary_message(&message);
@@ -175,7 +176,7 @@ fn deserialize_client_event(message: &Message) -> via::Result<ClientEvent> {
     Ok(serde_json::from_str(text)?)
 }
 
-#[cfg(feature = "tokio-tungstenite")]
+#[cfg(all(debug_assertions, feature = "tokio-tungstenite"))]
 fn handle_binary_message(message: &Message) {
     log!(
         info(chat = 1),
@@ -184,7 +185,7 @@ fn handle_binary_message(message: &Message) {
     );
 }
 
-#[cfg(feature = "tokio-websockets")]
+#[cfg(all(debug_assertions, feature = "tokio-websockets"))]
 fn handle_binary_message(message: &Message) {
     log!(
         info(chat = 1),

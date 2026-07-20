@@ -64,9 +64,7 @@ impl Signer {
         T: Serialize,
         U: Serialize,
     {
-        let mut payload = Vec::new();
-
-        payload.resize(LEN, 0);
+        let mut payload = vec![0; LEN];
 
         serde_json::to_writer(&mut payload, event).map_err(Error::from_json)?;
 

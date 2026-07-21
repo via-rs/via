@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use tokio::task::coop;
 use via::deny;
 use via::error::{Catch, Propagate};
 use via::ws::{self, Channel, Message};
@@ -47,7 +48,13 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
 
     // Start receiving messages from the client and peers.
     loop {
-        let peer_event = tokio::select! {
+        let inbound = tokio::select! {
+            // Assume that we just published an event.
+            biased;
+
+            // client <- self <- peers
+            result = subscription.recv() => result?,
+
             // client -> self -> peers
             outbound = channel.recv() => {
                 // Attempt to extract an event from the next message.
@@ -120,43 +127,41 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                 // the publish future to yield before send.
                 log!(info(chat = 2), "event published");
 
-                // If an inbound event was received while we were busy,
-                // proceed with the inbound event flow.
-                subscription.try_recv()?
-            }
-
-            // client <- self <- peers
-            inbound = subscription.recv() => {
-                inbound?
+                // If an inbound event was received during the insert and we
+                // have budget remaining, proceed with the inbound event flow.
+                if coop::has_budget_remaining() {
+                    subscription.try_recv()?
+                } else {
+                    continue;
+                }
             }
         };
 
-        match peer_event {
-            // Event filtered by subscription.
-            None => {}
+        if let Some(event) = inbound {
+            match event {
+                // The user logged out.
+                PeerEvent::Logout => {
+                    log!(info(chat = 1), "ws session ended");
+                    return Ok(()); // End the session.
+                }
 
-            // The user logged out.
-            Some(PeerEvent::Logout) => {
-                log!(info(chat = 1), "ws session ended");
-                return Ok(()); // End the session.
-            }
+                // Notification received from a peer.
+                PeerEvent::Relay(notification) => {
+                    log!(info(chat = 1), "relay notification");
+                    channel.send(notification).await?
+                }
 
-            // Notification received from a peer.
-            Some(PeerEvent::Relay(notification)) => {
-                log!(info(chat = 1), "relay notification");
-                channel.send(notification).await?
-            }
+                // The user was invited to a channel.
+                PeerEvent::Register(interest) => {
+                    log!(info(chat = 1), "joining channel {}", interest);
+                    subscription.register(interest);
+                }
 
-            // The user was invited to a channel.
-            Some(PeerEvent::Register(interest)) => {
-                log!(info(chat = 1), "joining channel {}", interest);
-                subscription.register(interest);
-            }
-
-            // The user was removed from a channel.
-            Some(PeerEvent::Deregister(ref interest)) => {
-                log!(info(chat = 1), "leaving channel {}", interest);
-                subscription.deregister(interest);
+                // The user was removed from a channel.
+                PeerEvent::Deregister(ref interest) => {
+                    log!(info(chat = 1), "leaving channel {}", interest);
+                    subscription.deregister(interest);
+                }
             }
         }
     }

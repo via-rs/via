@@ -1,5 +1,5 @@
 use redis::aio::{ConnectionManager, ConnectionManagerConfig, SendError};
-use redis::{AsyncTypedCommands, Client, PushInfo, PushKind, RedisResult, Value};
+use redis::{Client, PushInfo, PushKind, RedisResult, Value};
 use serde::{Serialize, de::DeserializeOwned};
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -13,7 +13,7 @@ use crate::pubsub::Pubsub;
 use crate::util::error;
 
 pub struct Builder<'a, T, U> {
-    send_concurrency: Option<usize>,
+    concurrency: Option<usize>,
     signing_key: Result<Option<Key>, Error>,
     sub_scope: &'a str,
     version: Option<u32>,
@@ -29,18 +29,22 @@ struct Dispatcher<T, U> {
     fanout: broadcast::Sender<RawPeerEvent<T>>,
     inbound: mpsc::Receiver<PushInfo>,
     outbound: mpsc::Receiver<Event<T, U>>,
+    concurrency: usize,
 }
 
-async fn connect(url: &str) -> RedisResult<(ConnectionManager, mpsc::Receiver<PushInfo>)> {
+async fn connect(
+    concurrency: usize,
+    url: &str,
+) -> RedisResult<(ConnectionManager, mpsc::Receiver<PushInfo>)> {
     // The channel used internally by the redis client.
     //
     // A send error means that the recveiver was dropped or the subscriber
     // cannot preserve stream continuity.
-    let (tx, pushes) = mpsc::channel(1);
+    let (tx, pushes) = mpsc::channel(concurrency);
 
     let config = ConnectionManagerConfig::new()
         .set_pipeline_buffer_size(1)
-        .set_concurrency_limit(1)
+        .set_concurrency_limit(1) // Implemented w/ pipelining.
         .set_push_sender(move |info| tx.try_send(info).or(Err(SendError)))
         //                                                ^^^^^^^^^^^^^^
         // Invalidate the connection; Automatic reconnection and resubscription
@@ -60,67 +64,90 @@ where
     T: DeserializeOwned + Serialize,
     U: DeserializeOwned + Serialize,
 {
+    let mut send_buf = Vec::with_capacity(trx.concurrency);
+    let mut recv_buf = Vec::with_capacity(trx.concurrency);
+
     loop {
+        let send_offset = send_buf.len();
+        let recv_offset = recv_buf.len();
+
         tokio::select! {
             // subscriber <- dispatch <- redis
-            inbound = trx.inbound.recv() => {
-                match inbound
-                    .as_ref()
-                    .and_then(|push| push_as_message(signer.scope(), push))
-                    .map(|payload| signer.deserialize::<_, U>(payload))
-                {
-                    // Event deserialized successfully.
-                    Some(Ok(raw_peer_event)) => {
-                        if trx.fanout.send(raw_peer_event).is_err() {
-                            break; // Receivers dropped. Don't become a zombie.
+            len @ 1.. = trx.inbound.recv_many(&mut recv_buf, trx.concurrency) => {
+                let Some(buf) = recv_buf.get(recv_offset..recv_offset + len) else {
+                    recv_buf = Vec::with_capacity(trx.concurrency);
+                    continue;
+                };
+
+                log!(info, "batch size = {}", len);
+
+                for payload in buf.iter().filter_map(|push| {
+                    let scope = signer.scope();
+                    extract_payload(push, scope)
+                }) {
+                    match signer.deserialize::<_, U>(payload) {
+                        // Event deserialized successfully.
+                        Ok(raw_peer_event) => {
+                            if trx.fanout.send(raw_peer_event).is_err() {
+                                return; // Receivers dropped. Don't become a zombie.
+                            }
                         }
-                    }
 
-                    // Deserialization failed.
-                    Some(Err(ref error)) => {
-                        #[cfg(not(debug_assertions))]
-                        let _ = error;
-                        log!(error, "{}", error);
-                    }
-
-                    // Event filtered by scope and type.
-                    None => {
-                        log!(warn, "event filtered by scope and type.");
-                    }
-                }
-            }
-
-            // subscriber -> dispatch -> redis
-            outbound = trx.outbound.recv() => {
-                match outbound.as_ref().map(|event| signer.serialize(event)) {
-                    // Event serialized successfully.
-                    Some(Ok((scope, payload))) => {
-                        // Publish to peers. If an error occurs, log it.
-                        if let Err(ref error) = redis.publish(scope, payload).await {
+                        // Deserialization failed.
+                        Err(ref error) => {
                             #[cfg(not(debug_assertions))]
-                            let _ = error;
+                            let _ = error; // Placeholder for tracing...
                             log!(error, "{}", error);
                         }
                     }
-                    // Serialization failed.
-                    Some(Err(ref error)) => {
-                        #[cfg(not(debug_assertions))]
-                        let _ = error;
-                        log!(error, "{}", error);
-                    }
-                    // Senders dropped. Don't become a zombie.
-                    None => {
-                        log!(warn, "senders dropped. stopping redis task.");
-                        break;
-                    }
                 }
+
+                recv_buf.clear();
+            }
+
+            // subscriber -> dispatch -> redis
+            len @ 1.. = trx.outbound.recv_many(&mut send_buf, trx.concurrency) => {
+                let mut pipeline = redis::pipe();
+                let Some(buf) = send_buf.get(send_offset..send_offset + len) else {
+                    // Placeholder for tracing...
+                    send_buf = Vec::with_capacity(trx.concurrency);
+                    continue;
+                };
+
+                log!(info, "pipeline size = {}", len);
+
+                // Pack the batch of messages into the pipeline.
+                buf.iter().fold(&mut pipeline, |pipe, event| {
+                    match signer.serialize(&event) {
+                        Ok((channel, payload)) => pipe
+                            .cmd("PUBLISH")
+                            .arg(channel)
+                            .arg(payload),
+
+                        Err(error) => {
+                            #[cfg(not(debug_assertions))]
+                            let _ = error; // Placeholder for tracing...
+                            log!(error, "{}", &error);
+                            pipe
+                        }
+                    }
+                });
+
+                // Publish to peers. If an error occurs, log it in debug builds.
+                if let Err(error) = pipeline.exec_async(&mut redis).await {
+                    #[cfg(not(debug_assertions))]
+                    let _ = error; // Placeholder for tracing...
+                    log!(error, "{}", &error);
+                }
+
+                send_buf.clear();
             }
         }
     }
 }
 
 #[inline]
-fn push_as_message<'a>(scope: &str, push: &'a PushInfo) -> Option<&'a [u8]> {
+fn extract_payload<'a>(push: &'a PushInfo, scope: &str) -> Option<&'a [u8]> {
     if let PushKind::Message = &push.kind
         && let Some([Value::BulkString(name), Value::BulkString(vec)]) =
             push.data.split_first_chunk().map(|(head, _)| head)
@@ -139,7 +166,7 @@ fn require_argument(arg: &str) -> Error {
 impl<T, U> Redis<T, U> {
     pub fn builder(scope: &str) -> Builder<'_, T, U> {
         Builder {
-            send_concurrency: None,
+            concurrency: None,
             signing_key: Ok(None),
             sub_scope: scope,
             version: None,
@@ -204,18 +231,16 @@ where
     U: DeserializeOwned + Serialize + Send + Sync + 'static,
 {
     pub async fn connect(self, url: &str) -> via::Result<Pubsub<Redis<T, U>>> {
-        // Used by subscribers to send updates to the redis task.
-        let (sender, outbound) = {
-            // Confirm that `send_concurrency` was provided.
-            let capacity = self
-                .send_concurrency
-                .ok_or_else(|| require_argument("send_concurrency"))?;
+        // Confirm that `concurrency` was provided.
+        let concurrency = self
+            .concurrency
+            .ok_or_else(|| require_argument("concurrency"))?;
 
-            mpsc::channel(capacity)
-        };
+        // Used by subscribers to send updates to the redis task.
+        let (sender, outbound) = mpsc::channel(concurrency);
 
         // Used by subscribers to receive updates from the redis task.
-        let (fanout, receiver) = broadcast::channel(1);
+        let (fanout, receiver) = broadcast::channel(concurrency);
 
         // Create a pubsub backend powered by redis.
         //
@@ -256,7 +281,7 @@ where
         // Spawn a detached task to process dispatch messages.
         tokio::spawn({
             // Create the redis client and establish a connection.
-            let (mut redis, inbound) = connect(url).await?;
+            let (mut redis, inbound) = connect(concurrency, url).await?;
 
             // Subscribe to the update topic.
             redis.subscribe(signer.scope()).await?;
@@ -266,10 +291,11 @@ where
                 fanout,
                 inbound,
                 outbound,
+                concurrency,
             };
 
             // Pin the task on the heap. It should live as long as the process.
-            Box::pin(async {
+            Box::pin(async move {
                 // Start receiving updates from peers.
                 dispatch(redis, trx, signer).await;
             })
@@ -280,11 +306,31 @@ where
 
     /// The number of events that can be published simultaneously.
     ///
-    /// Consider this the upper bound of a publish burst. This should be equal
-    /// to the number of worker threads used by the runtime. No one should have
-    /// to yield on send.
-    pub fn send_concurrency(mut self, concurrency: usize) -> Self {
-        self.send_concurrency = Some(concurrency);
+    /// We suggest setting this value to the runtime worker count in order to
+    /// uphold the following invariants:
+    ///
+    /// - No one should ever have to yield to publish
+    /// - Subscription lag is indicative of app code that performs too much
+    ///   work asynchronously without receiving a peer event
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::{env, thread};
+    /// use via_pubsub::backend::Redis;
+    /// # async fn build() -> via::Result<via_pubsub::Pubsub<Redis<(), ()>>> {
+    /// Redis::builder("unicorn")
+    ///     .concurrency(thread::available_parallelism()?.get())
+    ///     //           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ///     // The number of async tasks that can wake at once.
+    ///     .signing_key(env::var("PUBSUB_SECRET")?.as_bytes())
+    ///     .version(1)
+    ///     .connect("redis://localhost:6379/?protocol=resp3")
+    ///     .await
+    /// # }
+    /// ```
+    pub fn concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = Some(concurrency);
         self
     }
 

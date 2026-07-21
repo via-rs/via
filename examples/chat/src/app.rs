@@ -208,7 +208,7 @@ impl Unicorn {
             let url = require_env(REDIS_URL)?;
 
             Redis::builder(PUBSUB_SCOPE)
-                .send_concurrency(num_workers)
+                .concurrency(num_workers)
                 .signing_key(require_secret(PUBSUB_SIGNER)?.as_bytes())
                 //           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
                 //     Signing key is dropped and zeroed before await.

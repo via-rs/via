@@ -187,28 +187,38 @@ impl Unicorn {
         // before connections start to queue in the kernel backlog on Linux.
         let num_workers = available_parallelism()?.get();
 
+        // Establish a database connection and construct a connection pool.
         let database = {
-            let connection_string = require_secret(DATABASE_URL)?;
-            let manager = Postgres::new(&*connection_string);
-
-            Pool::builder()
+            let connection_url = require_env(DATABASE_URL)?;
+            let manager = Postgres::new(connection_url);
+            let pool = Pool::builder()
                 .max_size(num_workers as u32)
+                //                    ^^^^^^
+                // Cast is safe. 4294967295 processors would be nice though.
                 .build(manager)
-                .await?
+                .await?;
+
+            // Checkout a connection to confirm we have a healthy connection.
+            pool.get().await?;
+            pool
         };
 
+        // Establish a connection to redis a construct a pubsub client.
         let pubsub = {
-            let signer = require_secret(PUBSUB_SIGNER)?;
             let url = require_env(REDIS_URL)?;
 
             Redis::builder(PUBSUB_SCOPE)
                 .send_concurrency(num_workers)
-                .signing_key(signer.as_bytes())
+                .signing_key(require_secret(PUBSUB_SIGNER)?.as_bytes())
+                //           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                //     Signing key is dropped and zeroed before await.
                 .version(PUBSUB_VERSION)
                 .connect(&url)
                 .await?
         };
 
+        // Construct app with the handles to the aforementioned external
+        // resources and a session signing key.
         let app = Self {
             database,
             pubsub,

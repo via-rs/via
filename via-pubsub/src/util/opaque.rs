@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::Serialize;
 use std::fmt::{self, Debug, Formatter};
 use via::Error;
 
@@ -17,28 +17,6 @@ pub(crate) fn serialize(value: &impl Serialize) -> via::Result<Opaque> {
 impl Debug for Opaque {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.write_str("Opaque")
-    }
-}
-
-impl<'de> Deserialize<'de> for Opaque {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        String::deserialize(deserializer).map(|utf8| Self(utf8.into()))
-    }
-}
-
-impl Serialize for Opaque {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Safety: Opaque can only be constructed from valid UTF-8.
-        let utf8 = unsafe { str::from_utf8_unchecked(&self.0) };
-
-        // Serialize self as a str.
-        serializer.serialize_str(utf8)
     }
 }
 

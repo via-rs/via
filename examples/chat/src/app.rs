@@ -22,8 +22,17 @@ use crate::{Next, Request};
 const DATABASE_URL: &str = "DATABASE_URL";
 const REDIS_URL: &str = "REDIS_URL";
 
-const SESSION_SIGNER: &str = "SESSION_SIGNER";
+/// The redis channel namespace to which peer events are published.
+const PUBSUB_SCOPE: &str = "unicorn";
+
+// The signing key used to sign and verify peer events.
 const PUBSUB_SIGNER: &str = "PUBSUB_SIGNER";
+
+/// The schema version used to deserialize peer events.
+const PUBSUB_VERSION: u32 = 1;
+
+/// The signing key used to sign and verify session cookies.
+const SESSION_SIGNER: &str = "SESSION_SIGNER";
 
 /// The cookie name used to store an encoded identity token.
 pub const SESSION: &str = "via-chat-session";
@@ -189,13 +198,14 @@ impl Unicorn {
         };
 
         let pubsub = {
-            let redis_url = require_env(REDIS_URL)?;
-            let signing_key = require_secret(PUBSUB_SIGNER)?;
+            let signer = require_secret(PUBSUB_SIGNER)?;
+            let url = require_env(REDIS_URL)?;
 
-            Redis::builder(num_workers)
-                .signing_key(signing_key.as_bytes())
-                .version(1)
-                .connect(&redis_url, "unicorn")
+            Redis::builder(PUBSUB_SCOPE)
+                .send_concurrency(num_workers)
+                .signing_key(signer.as_bytes())
+                .version(PUBSUB_VERSION)
+                .connect(&url)
                 .await?
         };
 

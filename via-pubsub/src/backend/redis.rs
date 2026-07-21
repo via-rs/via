@@ -12,9 +12,10 @@ use super::{Backend, Event, RawPeerEvent};
 use crate::pubsub::Pubsub;
 use crate::util::error;
 
-pub struct Builder<T, U> {
-    capacity: usize,
+pub struct Builder<'a, T, U> {
+    send_concurrency: Option<usize>,
     signing_key: Result<Option<Key>, Error>,
+    sub_scope: &'a str,
     version: Option<u32>,
     _ty: PhantomData<(T, U)>,
 }
@@ -136,11 +137,12 @@ fn require_argument(arg: &str) -> Error {
 }
 
 impl<T, U> Redis<T, U> {
-    pub fn builder(capacity: usize) -> Builder<T, U> {
+    pub fn builder(scope: &str) -> Builder<'_, T, U> {
         Builder {
-            capacity,
-            version: None,
+            send_concurrency: None,
             signing_key: Ok(None),
+            sub_scope: scope,
+            version: None,
             _ty: PhantomData,
         }
     }
@@ -196,14 +198,21 @@ where
     }
 }
 
-impl<T, U> Builder<T, U>
+impl<'a, T, U> Builder<'a, T, U>
 where
     T: Copy + Eq + Hash + DeserializeOwned + Serialize + Send + Sync + 'static,
     U: DeserializeOwned + Serialize + Send + Sync + 'static,
 {
-    pub async fn connect(self, url: &str, scope: &str) -> via::Result<Pubsub<Redis<T, U>>> {
+    pub async fn connect(self, url: &str) -> via::Result<Pubsub<Redis<T, U>>> {
         // Used by subscribers to send updates to the redis task.
-        let (sender, outbound) = mpsc::channel(self.capacity);
+        let (sender, outbound) = {
+            // Confirm that `send_concurrency` was provided.
+            let capacity = self
+                .send_concurrency
+                .ok_or_else(|| require_argument("send_concurrency"))?;
+
+            mpsc::channel(capacity)
+        };
 
         // Used by subscribers to receive updates from the redis task.
         let (fanout, receiver) = broadcast::channel(1);
@@ -238,7 +247,10 @@ where
                 .ok_or_else(|| require_argument("signing_key"))?;
 
             // Create a signer with the singing key and namespaced scope.
-            Signer::new(signing_key, format!("via-pubsub:{}:v{}", scope, version))
+            Signer::new(
+                signing_key,
+                format!("via-pubsub:{}:v{}", self.sub_scope, version),
+            )
         };
 
         // Spawn a detached task to process dispatch messages.
@@ -264,6 +276,16 @@ where
         });
 
         Ok(Pubsub::new(backend))
+    }
+
+    /// The number of events that can be published simultaneously.
+    ///
+    /// Consider this the upper bound of a publish burst. This should be equal
+    /// to the number of worker threads used by the runtime. No one should have
+    /// to yield on send.
+    pub fn send_concurrency(mut self, concurrency: usize) -> Self {
+        self.send_concurrency = Some(concurrency);
+        self
     }
 
     pub fn signing_key(mut self, bytes: &[u8]) -> Self {

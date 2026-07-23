@@ -1,0 +1,27 @@
+[package]
+name = "via-pubsub"
+version = "0.1.0-beta.0"
+edition = "2024"
+
+[features]
+native-tls = ["redis/tls-native-tls"]
+rustls = ["redis/tls-rustls"]
+
+tokio-tungstenite = ["via/tokio-tungstenite"]
+tokio-websockets = ["via/tokio-websockets"]
+
+[dependencies]
+base64 = "0.22"
+bytes = "1"
+hmac = "0.13"
+serde = { version = "1" }
+serde_json = "1"
+sha2 = "0.11"
+tokio = "1"
+via = { version = "=2.0.0-gm.59", path = "../via" }
+zeroize = "1"
+
+[dependencies.redis]
+version = "1"
+features = ["aio", "connection-manager", "tokio-comp"]
+optional = true

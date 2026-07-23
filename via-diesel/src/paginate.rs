@@ -6,6 +6,9 @@ use via::{Error, ResultExt};
 const MIN_PER_PAGE: i64 = 5;
 const MAX_PER_PAGE: i64 = 100;
 
+/// The default number of rows returned by a paginated query.
+pub const PER_PAGE: i64 = 25;
+
 pub trait Paginate<T> {
     type Output;
     fn page(self, cursor: T) -> Self::Output;
@@ -61,12 +64,18 @@ impl TryFrom<QueryParams<'_>> for LimitAndOffset {
     type Error = via::Error;
 
     fn try_from(query: QueryParams<'_>) -> via::Result<Self> {
-        let limit = map_or(query.first("limit"), MIN_PER_PAGE, str::parse)?;
-        let offset = map_or(query.first("offset"), 0, str::parse)?;
-
         Ok(Self {
-            limit: limit.clamp(MIN_PER_PAGE, MAX_PER_PAGE),
-            offset: offset.max(0),
+            limit: query
+                .first("limit")
+                .ok_and_then(str::parse)?
+                .unwrap_or(PER_PAGE)
+                .clamp(MIN_PER_PAGE, MAX_PER_PAGE),
+
+            offset: query
+                .first("offset")
+                .ok_and_then::<_, i64, _>(str::parse)?
+                .unwrap_or_default()
+                .max(0),
         })
     }
 }
@@ -75,17 +84,21 @@ impl TryFrom<QueryParams<'_>> for LimitAndPage {
     type Error = via::Error;
 
     fn try_from(query: QueryParams<'_>) -> via::Result<Self> {
-        let page = map_or(query.first("page"), 1i64, str::parse)?;
+        let page = query.first("page").ok_and_then(str::parse)?.unwrap_or(1i64);
+        let limit = query
+            .first("limit")
+            .ok_and_then(str::parse)?
+            .unwrap_or(MIN_PER_PAGE);
 
         if page < 1 {
             via::deny!(400, "page must be a positive integer");
         }
 
-        let limit = map_or(query.first("limit"), MIN_PER_PAGE, str::parse)?;
-        let offset = (page - 1).saturating_mul(limit);
-
         Ok(Self {
-            limit_and_offset: LimitAndOffset { limit, offset },
+            limit_and_offset: LimitAndOffset {
+                offset: (page - 1).saturating_mul(limit),
+                limit,
+            },
         })
     }
 }

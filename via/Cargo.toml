@@ -112,5 +112,8 @@ optional = true
 features = ["io"]
 default-features = false
 
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
+
 [package.metadata.docs.rs]
 features = ["fs", "ring", "tokio-tungstenite"]

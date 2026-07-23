@@ -1,5 +1,5 @@
 use bytes::{Buf, Bytes};
-use http::HeaderMap;
+use http::{HeaderMap, StatusCode};
 use http_body::{Body, Frame, SizeHint};
 use hyper::body::Incoming;
 use serde::Deserialize;
@@ -259,7 +259,8 @@ fn deserialize_json<T>(buf: &[u8]) -> Result<T, Error>
 where
     T: DeserializeOwned,
 {
-    serde_json::from_slice(buf).map_err(Error::de_json)
+    serde_json::from_slice(buf)
+        .map_err(|error| Error::from_serde_json(StatusCode::BAD_REQUEST, error))
 }
 
 #[inline]

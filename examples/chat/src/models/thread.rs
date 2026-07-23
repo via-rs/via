@@ -79,9 +79,9 @@ pub struct ThreadDetails {
 
 via_diesel::filters! {
     pub fn by_id(id == Id) on threads;
-    pub fn by_user(user_id == &Id) on threads;
-    pub fn by_thread(thread_id == &Id) on threads;
-    pub fn by_channel(channel_id == &Id) on threads;
+    pub fn by_user(user_id == Id) on threads;
+    pub fn by_thread(thread_id == Id) on threads;
+    pub fn by_channel(channel_id == Id) on threads;
 
     pub fn is_thread(thread_id is_null) on threads;
 }

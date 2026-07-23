@@ -99,7 +99,7 @@ pub async fn me(request: Request, _: Next) -> via::Result {
 
         // Execute the query.
         User::query()
-            .filter(by_id(&id))
+            .filter(by_id(id))
             .first_async(&mut connection)
             .await?
     };

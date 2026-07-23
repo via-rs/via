@@ -2,7 +2,7 @@
 
 diesel::table! {
     channels (id) {
-        id -> Int8,
+        id -> Uuid,
         name -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
@@ -11,11 +11,11 @@ diesel::table! {
 
 diesel::table! {
     reactions (id) {
-        id -> Int8,
+        id -> Uuid,
         #[max_length = 16]
         emoji -> Varchar,
-        thread_id -> Int8,
-        user_id -> Int8,
+        thread_id -> Uuid,
+        user_id -> Uuid,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }
@@ -23,9 +23,9 @@ diesel::table! {
 
 diesel::table! {
     subscriptions (id) {
-        id -> Int8,
-        channel_id -> Int8,
-        user_id -> Int8,
+        id -> Uuid,
+        channel_id -> Uuid,
+        user_id -> Uuid,
         claims -> Int4,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
@@ -34,10 +34,10 @@ diesel::table! {
 
 diesel::table! {
     threads (id) {
-        id -> Int8,
-        channel_id -> Int8,
-        thread_id -> Nullable<Int8>,
-        user_id -> Int8,
+        id -> Uuid,
+        channel_id -> Uuid,
+        thread_id -> Nullable<Uuid>,
+        user_id -> Uuid,
         body -> Text,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
@@ -48,7 +48,7 @@ diesel::table! {
 
 diesel::table! {
     users (id) {
-        id -> Int8,
+        id -> Uuid,
         email -> Text,
         username -> Text,
         password_hash -> Text,

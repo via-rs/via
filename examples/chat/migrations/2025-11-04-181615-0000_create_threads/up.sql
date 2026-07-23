@@ -1,9 +1,9 @@
 CREATE TABLE threads (
-  id BIGSERIAL PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  channel_id BIGINT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-  thread_id BIGINT REFERENCES threads(id) ON DELETE CASCADE,
-  user_id BIGINT NOT NULL REFERENCES users(id),
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  thread_id UUID REFERENCES threads(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id),
 
   body TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,

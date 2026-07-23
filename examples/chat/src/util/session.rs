@@ -1,6 +1,7 @@
 use base64::engine::{Engine, GeneralPurpose};
 use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
+use uuid::Uuid;
 use via::guard::bytes::case_sensitive;
 use via::guard::{self, Predicate, method, on};
 use via::{Middleware, Response, err};
@@ -10,14 +11,14 @@ use crate::Request;
 use crate::app::{IdentityExtension, Unicorn};
 use crate::models::User;
 
-const EXPIRES_AT: usize = 8;
-const TOKEN_LEN: usize = 16;
+const EXPIRES_AT: usize = 16;
+const TOKEN_LEN: usize = 24;
 
 /// The codec used to decode or encode an identity token.
 pub const CODEC: GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 #[derive(Clone, PartialEq)]
-pub struct Identity([u8; 16]);
+pub struct Identity([u8; TOKEN_LEN]);
 
 pub struct Unauthorized;
 
@@ -61,10 +62,10 @@ fn in_an_hour() -> i64 {
 }
 
 impl Identity {
-    pub fn new(id: &Id) -> Self {
+    pub fn new(id: Id) -> Self {
         let mut buf = [0; TOKEN_LEN];
 
-        buf[..EXPIRES_AT].copy_from_slice(id.value().to_be_bytes().as_slice());
+        buf[..EXPIRES_AT].copy_from_slice(id.value().as_ref());
         buf[EXPIRES_AT..].copy_from_slice(in_an_hour().to_be_bytes().as_slice());
 
         Self(buf)
@@ -72,7 +73,7 @@ impl Identity {
 
     pub fn id(&self) -> Result<Id, Unauthorized> {
         if let Ok(bytes) = self.0[..EXPIRES_AT].try_into() {
-            Ok(Id::new(i64::from_be_bytes(bytes)))
+            Ok(Id::new(Uuid::from_bytes(bytes)))
         } else {
             Err(Unauthorized)
         }

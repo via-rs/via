@@ -1,10 +1,10 @@
 CREATE TABLE reactions (
-  id BIGSERIAL PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   emoji VARCHAR(16) NOT NULL,
 
-  thread_id BIGINT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  user_id BIGINT NOT NULL REFERENCES users(id),
+  thread_id UUID NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id),
 
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -46,11 +46,11 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE FUNCTION top_reactions_for(
-  thread_ids BIGINT[],
+  thread_ids UUID[],
   distinct_emoji_count int,
   max_usernames_per_emoji int
 ) RETURNS TABLE (
-    thread_id BIGINT,
+    thread_id UUID,
     emoji text,
     usernames text[],
     total_count bigint

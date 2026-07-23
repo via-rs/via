@@ -105,8 +105,8 @@ pub struct ReactionWithUser {
 }
 
 via_diesel::filters! {
-    pub fn by_id(id == &Id) on reactions;
-    pub fn by_user(user_id == &Id) on reactions;
+    pub fn by_id(id == Id) on reactions;
+    pub fn by_user(user_id == Id) on reactions;
 }
 
 via_diesel::sorts! {
@@ -145,7 +145,7 @@ impl Reaction {
         const USERNAMES_PER_REACTION: i32 = 6;
 
         diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
-            .bind::<sql_types::Array<sql_types::BigInt>, Vec<_>>(ids)
+            .bind::<sql_types::Array<sql_types::Uuid>, Vec<_>>(ids)
             .bind::<sql_types::Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
             .bind::<sql_types::Integer, _>(USERNAMES_PER_REACTION)
             .load_async(connection)

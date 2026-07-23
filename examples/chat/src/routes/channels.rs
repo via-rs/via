@@ -118,7 +118,7 @@ async fn show(request: Request, _: Next) -> via::Result {
         let mut connection = request.app().database().await?;
 
         // Get a reference to the channel id from the subscription.
-        let channel_id = subscription.channel().id();
+        let channel_id = *subscription.channel().id();
 
         // Load the first page of recent messages in the channel.
         let mut threads = ThreadWithUser::query()

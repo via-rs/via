@@ -113,7 +113,7 @@ pub async fn verify_session(mut request: Request, next: Next) -> via::Result {
     // Verify the active user's account and create a fresh identity token.
     let identity = match result {
         // The account is valid, create a fresh identity token.
-        Ok(_) => Identity::new(&me),
+        Ok(_) => Identity::new(me),
 
         // The user does not exist, destroy the session.
         Err(error) if error.status() == StatusCode::UNAUTHORIZED => {
@@ -255,7 +255,7 @@ impl Unicorn {
 impl Authenticator for Unicorn {
     fn login(&self, user: User) -> via::Result {
         // Create a new identity token for `user`.
-        let identity = Identity::new(diesel::Identifiable::id(&user));
+        let identity = Identity::new(*diesel::Identifiable::id(&user));
 
         // Build a response containing `user` as json.
         let mut response = Response::build().status(StatusCode::CREATED).data(user)?;

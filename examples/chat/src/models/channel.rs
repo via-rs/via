@@ -50,7 +50,7 @@ pub struct ChannelWithThreads {
 }
 
 via_diesel::filters! {
-    pub fn by_id(id == &Id) on channels;
+    pub fn by_id(id == Id) on channels;
 }
 
 impl Channel {
@@ -81,7 +81,7 @@ impl Channel {
 
     pub async fn destroy(connection: &mut Connection<'_>, id: Id) -> via::Result<usize> {
         diesel::delete(channels::table)
-            .filter(by_id(&id))
+            .filter(by_id(id))
             .execute_async(connection)
             .await
     }
@@ -92,7 +92,7 @@ impl Channel {
         changes: ChangeSet,
     ) -> via::Result<Self> {
         diesel::update(channels::table)
-            .filter(by_id(&id))
+            .filter(by_id(id))
             .set(changes)
             .returning(Self::as_returning())
             .get_result_async(connection)

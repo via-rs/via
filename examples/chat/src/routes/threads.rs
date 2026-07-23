@@ -39,9 +39,9 @@ async fn index(request: Request, _: Next) -> via::Result {
         let mut connection = request.app().database().await?;
 
         // Borrow the channel id from `subscription`.
-        let channel_id = subscription.channel().id();
+        let channel_id = *subscription.channel().id();
 
-        if let Some(parent_id) = thread_id.as_ref() {
+        if let Some(parent_id) = thread_id {
             ThreadWithUser::query()
                 .filter(by_channel(channel_id).and(by_thread(parent_id)))
                 .page(keyset)

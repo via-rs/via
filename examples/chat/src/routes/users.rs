@@ -45,10 +45,14 @@ async fn index(request: Request, _: Next) -> via::Result {
 ///
 /// On success, the session cookie is updated to authenticate the new account.
 async fn create(request: Request, _: Next) -> via::Result {
+    log!(info(users), "create started");
+
     // Deny the request if it comes from an authenticated user.
     if request.me().is_ok() {
         deny!(403, "logout before creating a new account");
     }
+
+    log!(info(users = 1), "read body");
 
     // Deserialize a NewUser from the request body.
     let (body, app) = request.into_future();
@@ -83,7 +87,7 @@ async fn show(request: Request, _: Next) -> via::Result {
 
         // Execute the query.
         User::query()
-            .filter(by_id(&id))
+            .filter(by_id(id))
             .first_async(&mut connection)
             .await?
     };

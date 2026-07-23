@@ -88,7 +88,7 @@ struct Password {
 }
 
 via_diesel::filters! {
-    pub fn by_id(id == &Id) on users;
+    pub fn by_id(id == Id) on users;
     pub fn by_email(email == &str) on users;
 }
 
@@ -162,7 +162,7 @@ impl User {
 
     pub async fn destroy(connection: &mut Connection<'_>, id: Id) -> via::Result<usize> {
         diesel::delete(users::table)
-            .filter(by_id(&id))
+            .filter(by_id(id))
             .execute_async(connection)
             .await
     }
@@ -173,7 +173,7 @@ impl User {
         changes: ChangeSet,
     ) -> via::Result<Self> {
         diesel::update(users::table)
-            .filter(by_id(&id))
+            .filter(by_id(id))
             .set(changes)
             .returning(Self::as_returning())
             .get_result_async(connection)
@@ -187,7 +187,7 @@ impl User {
     pub async fn exists(connection: &mut Connection<'_>, id: Id) -> via::Result<()> {
         let total = users::table
             .select(count(users::id))
-            .filter(by_id(&id))
+            .filter(by_id(id))
             .get_result_async::<i64>(connection)
             .await?;
 
@@ -203,7 +203,7 @@ impl User {
         id: Id,
     ) -> via::Result<UserWithSubscriptions> {
         let user = UserPreview::query()
-            .filter(by_id(&id))
+            .filter(by_id(id))
             .first_async(connection)
             .await?;
 

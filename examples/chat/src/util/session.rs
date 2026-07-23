@@ -1,5 +1,4 @@
 use base64::engine::{Engine, GeneralPurpose};
-use std::str::FromStr;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 use via::guard::bytes::case_sensitive;
@@ -11,8 +10,10 @@ use crate::Request;
 use crate::app::{IdentityExtension, Unicorn};
 use crate::models::User;
 
-const EXPIRES_AT: usize = 16;
-const TOKEN_LEN: usize = 24;
+const TOKEN_LEN: usize = 25;
+const ENCODED_LEN: usize = 34;
+const TOKEN_VERSION: u8 = 1;
+const EXPIRES_AT_OFFSET: usize = 17;
 
 /// The codec used to decode or encode an identity token.
 pub const CODEC: GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -62,17 +63,34 @@ fn in_an_hour() -> i64 {
 }
 
 impl Identity {
+    #[inline(always)]
     pub fn new(id: Id) -> Self {
         let mut buf = [0; TOKEN_LEN];
 
-        buf[..EXPIRES_AT].copy_from_slice(id.value().as_ref());
-        buf[EXPIRES_AT..].copy_from_slice(in_an_hour().to_be_bytes().as_slice());
+        buf[0] = TOKEN_VERSION;
+        buf[1..EXPIRES_AT_OFFSET].copy_from_slice(id.value().as_ref());
+        buf[EXPIRES_AT_OFFSET..].copy_from_slice(in_an_hour().to_be_bytes().as_ref());
 
         Self(buf)
     }
 
+    #[inline(always)]
+    pub fn decode(input: &str) -> Result<Identity, Unauthorized> {
+        if input.len() != ENCODED_LEN {
+            return Err(Unauthorized);
+        }
+
+        let mut buf = [0u8; TOKEN_LEN];
+
+        if CODEC.decode_slice(input, &mut buf).is_ok() && buf[0] == TOKEN_VERSION {
+            Ok(Identity(buf))
+        } else {
+            Err(Unauthorized)
+        }
+    }
+
     pub fn id(&self) -> Result<Id, Unauthorized> {
-        if let Ok(bytes) = self.0[..EXPIRES_AT].try_into() {
+        if let Ok(bytes) = self.0[1..EXPIRES_AT_OFFSET].try_into() {
             Ok(Id::new(Uuid::from_bytes(bytes)))
         } else {
             Err(Unauthorized)
@@ -85,7 +103,7 @@ impl Identity {
     }
 
     fn expires_at(&self) -> Result<i64, Unauthorized> {
-        if let Ok(bytes) = self.0[EXPIRES_AT..].try_into() {
+        if let Ok(bytes) = self.0[EXPIRES_AT_OFFSET..].try_into() {
             Ok(i64::from_be_bytes(bytes))
         } else {
             Err(Unauthorized)
@@ -97,20 +115,6 @@ impl AsRef<[u8]> for Identity {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         &self.0
-    }
-}
-
-impl FromStr for Identity {
-    type Err = Unauthorized;
-
-    fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let mut buf = [0u8; TOKEN_LEN];
-
-        if CODEC.decode_slice(input, &mut buf).is_ok() {
-            Ok(Self(buf))
-        } else {
-            Err(Unauthorized)
-        }
     }
 }
 

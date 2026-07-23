@@ -82,7 +82,7 @@ pub fn restore_session(request: &mut Request) -> Result<(), Catch> {
         .signed(&request.app().signer)
         .get(SESSION)
         .ok_or(Unauthorized)
-        .and_then(|cookie| cookie.value().parse())
+        .and_then(|cookie| Identity::decode(cookie.value()))
         .or_continue()?;
     //   ^^^^^^^^^^^
     // If extraction fails, fall through to the next middleware.

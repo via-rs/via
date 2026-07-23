@@ -120,6 +120,13 @@ impl Error {
         Self::from_source_with_status(status, Box::new(error))
     }
 
+    pub fn from_serde_json(status: StatusCode, error: serde_json::Error) -> Self {
+        Self {
+            status,
+            source: ErrorSource::Json(error),
+        }
+    }
+
     /// Returns an `Error` from a boxed [`Error` trait](std::error::Error)
     /// object.
     pub fn from_source(source: BoxError) -> Self {
@@ -184,20 +191,6 @@ impl Error {
         let mut error = Self::new(format!("missing required query parameter: \"{}\".", name));
         error.status = StatusCode::BAD_REQUEST;
         error
-    }
-
-    pub(crate) fn ser_json(source: serde_json::Error) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            source: ErrorSource::Json(source),
-        }
-    }
-
-    pub(crate) fn de_json(source: serde_json::Error) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            source: ErrorSource::Json(source),
-        }
     }
 
     #[inline]

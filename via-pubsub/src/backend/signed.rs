@@ -1,5 +1,6 @@
 use base64::engine::{Engine, general_purpose::STANDARD as base64};
 use hmac::{Hmac, KeyInit, Mac};
+use http::StatusCode;
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 use via::Error;
@@ -55,8 +56,13 @@ impl Signer {
         U: DeserializeOwned + Serialize,
     {
         self.authenticate(payload)
-            .and_then(|slice| serde_json::from_slice(slice).map_err(Error::from_json))
-            .and_then(Event::<T, U>::into_raw)
+            .and_then(|slice| match serde_json::from_slice(slice) {
+                Ok(event) => Event::<T, U>::into_raw(event),
+                Err(error) => Err(Error::from_serde_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    error,
+                )),
+            })
     }
 
     pub fn serialize<T, U>(&self, event: &Event<T, U>) -> Result<(&str, Vec<u8>), Error>
@@ -66,12 +72,17 @@ impl Signer {
     {
         let mut payload = vec![0; LEN];
 
-        serde_json::to_writer(&mut payload, event).map_err(Error::from_json)?;
-
-        let tag = self.mac(&payload[LEN..])?.finalize();
-        payload[..LEN].copy_from_slice(tag.as_bytes());
-
-        Ok((self.scope(), payload))
+        match serde_json::to_writer(&mut payload, event) {
+            Ok(_) => {
+                let tag = self.mac(&payload[LEN..])?.finalize();
+                payload[..LEN].copy_from_slice(tag.as_bytes());
+                Ok((self.scope(), payload))
+            }
+            Err(error) => Err(Error::from_serde_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error,
+            )),
+        }
     }
 }
 

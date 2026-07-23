@@ -133,7 +133,7 @@ where
             Poll::Ready(Ok(data)) => Poll::Ready(Ok(data)),
             Poll::Ready(Err(error)) => {
                 #[cfg(debug_assertions)]
-                eprintln!("error(database): {}", &error);
+                eprintln!("error(database): {}", error);
 
                 // Placeholder for tracing...
 

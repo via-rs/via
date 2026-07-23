@@ -131,13 +131,13 @@ where
         match Pin::new(&mut self.future).poll(context) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(data)) => Poll::Ready(Ok(data)),
-            Poll::Ready(Err(error)) => {
+            Poll::Ready(Err(ref error)) => {
                 #[cfg(debug_assertions)]
-                eprintln!("error(database): {}", &error);
+                eprintln!("error(database): {}", error);
 
                 // Placeholder for tracing...
 
-                match &error {
+                match error {
                     // No rows were returned by a query expected to return at least one row.
                     DieselError::NotFound => Poll::Ready(Err(err!(404, "not found"))),
 

@@ -150,6 +150,45 @@ impl<'a, 'b> PathParam<'a, 'b> {
             .map(|value| self.encoding.decode_as(self.name, value))
             .transpose()
     }
+
+    /// Converts `self` into `Result<Option<T>, Error>` by calling the provided
+    /// closure.
+    ///
+    /// This provides a way to apply a fallible operation to the optional value
+    /// contained in `self` without bailing out of lazy evaluation.
+    ///
+    /// If an error occurs during the conversion, a 400 Bad Request response is
+    /// returned.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use uuid::Uuid;
+    /// use via::{Next, Request, Response};
+    ///
+    /// async fn hello(request: Request, _: Next) -> via::Result {
+    ///     // Parse errors occur when the conversion is performed.
+    ///     let id_opt: Option<Uuid> = request.param("id").ok_and_then(str::parse)?;
+    ///
+    ///     if let Some(id) = id_opt {
+    ///         Response::build().text(format!("Hello, {}!", id))
+    ///     } else {
+    ///         Response::build().status(404).text("not found.")
+    ///     }
+    /// }
+    /// ```
+    pub fn ok_and_then<F, T, E>(self, op: F) -> Result<Option<T>, Error>
+    where
+        F: FnOnce(&str) -> Result<T, E>,
+        Error: From<E>,
+    {
+        self.ok().and_then(|optional| {
+            optional
+                .as_deref()
+                .map(|value| op(value).or_bad_request())
+                .transpose()
+        })
+    }
 }
 
 impl<'a, 'b> ResultExt for PathParam<'a, 'b> {
@@ -207,6 +246,45 @@ impl<'a, 'b> QueryParam<'a, 'b> {
         self.slice()
             .map(|value| self.encoding.decode_as(self.name, value))
             .transpose()
+    }
+
+    /// Converts `self` into `Result<Option<T>, Error>` by calling the provided
+    /// closure.
+    ///
+    /// This provides a way to apply a fallible operation to the optional value
+    /// contained in `self` without bailing out of lazy evaluation.
+    ///
+    /// If an error occurs during the conversion, a 400 Bad Request response is
+    /// returned.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use uuid::Uuid;
+    /// use via::{Next, Request, Response};
+    ///
+    /// async fn hello(request: Request, _: Next) -> via::Result {
+    ///     // Parse errors occur when the conversion is performed.
+    ///     let id_opt: Option<Uuid> = request.param("id").ok_and_then(str::parse)?;
+    ///
+    ///     if let Some(id) = id_opt {
+    ///         Response::build().text(format!("Hello, {}!", id))
+    ///     } else {
+    ///         Response::build().status(404).text("not found.")
+    ///     }
+    /// }
+    /// ```
+    pub fn ok_and_then<F, T, E>(self, op: F) -> Result<Option<T>, Error>
+    where
+        F: FnOnce(&str) -> Result<T, E>,
+        Error: From<E>,
+    {
+        self.ok().and_then(|option| {
+            option
+                .as_deref()
+                .map(|value| op(value).or_bad_request())
+                .transpose()
+        })
     }
 }
 

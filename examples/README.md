@@ -19,14 +19,16 @@ curl http://localhost:8080/hello/Via
 
 ## chat
 
-An in-memory ephemeral chat example with a REST API.
+A realtime chat example backed by postgres and redis.
 
 ### Running the Example
 
 ```sh
+cd ./chat
+docker-compose up -d
+cp example.env .env
 cargo run --example chat --features="<aws-lc-rs|ring> <tokio-tungstenite|tokio-websockets>"
 ```
-
 
 ## echo
 

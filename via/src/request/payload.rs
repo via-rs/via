@@ -486,7 +486,7 @@ macro_rules! impl_timeout_after {
             pub fn timeout_after_secs(
                 self,
                 seconds: u64,
-            ) -> impl Future<Output = Result<Aggregate, Error>> {
+            ) -> impl Future<Output = Result<Aggregate, Error>> + Send {
                 self.timeout_after(Duration::from_secs(seconds))
             }
         }

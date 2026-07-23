@@ -88,7 +88,8 @@ impl TryFrom<QueryParams<'_>> for LimitAndPage {
         let limit = query
             .first("limit")
             .ok_and_then(str::parse)?
-            .unwrap_or(MIN_PER_PAGE);
+            .unwrap_or(PER_PAGE)
+            .clamp(MIN_PER_PAGE, MAX_PER_PAGE);
 
         if page < 1 {
             via::deny!(400, "page must be a positive integer");

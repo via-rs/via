@@ -1,5 +1,6 @@
+pub mod paginate;
+
 mod macros;
-mod paginate;
 mod query_dsl;
 
 pub use paginate::{LimitAndOffset, LimitAndPage, Paginate};

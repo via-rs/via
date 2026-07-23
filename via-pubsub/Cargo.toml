@@ -10,6 +10,8 @@ rustls = ["redis/tls-rustls"]
 tokio-tungstenite = ["via/tokio-tungstenite"]
 tokio-websockets = ["via/tokio-websockets"]
 
+__test = ["redis", "tokio-tungstenite"]
+
 [dependencies]
 base64 = "0.22"
 bytes = "1"

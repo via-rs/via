@@ -1,3 +1,4 @@
+use argon2::PasswordHash;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::helper_types::{AsSelect, InnerJoin, InnerJoinOn, Select};
 use diesel::pg::{Pg, PgValue};
@@ -133,16 +134,15 @@ impl User {
     ) -> via::Result<Self> {
         use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
-        let AuthParams { email, password } = params;
-        let (user, hash) = users::table
+        let (user, password) = users::table
             .select((Self::as_select(), users::password_hash))
-            .filter(by_email(&email))
+            .filter(by_email(&params.email))
             .first_async::<(User, Password)>(connection)
             .await
             .or(Err(Unauthorized))?;
 
-        PasswordHash::new(hash.value())
-            .and_then(|hash| Argon2::default().verify_password(password.as_bytes(), &hash))
+        Argon2::default()
+            .verify_password(params.password.as_bytes(), &password.hash()?)
             .map_or_else(|_| Err(Unauthorized.into()), |_| Ok(user))
     }
 
@@ -251,8 +251,17 @@ impl UserWithSubscriptions {
 }
 
 impl Password {
-    fn value(&self) -> &str {
-        &self.hash
+    #[inline]
+    fn as_bytes(&self) -> &[u8] {
+        self.hash.as_bytes()
+    }
+
+    #[inline]
+    fn hash(&self) -> via::Result<PasswordHash<'_>> {
+        match PasswordHash::new(self.hash.as_str()) {
+            Ok(hash) => Ok(hash),
+            Err(_) => Err(via::err!(500, "internal server error")),
+        }
     }
 }
 
@@ -265,7 +274,7 @@ impl Debug for Password {
 impl FromSql<sql_types::Text, Pg> for Password {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         let value = str::from_utf8(value.as_bytes())?;
-        let Ok(hash) = argon2::PasswordHash::new(value) else {
+        let Ok(hash) = PasswordHash::new(value) else {
             return Err("internal server error".into());
         };
 
@@ -277,6 +286,6 @@ impl FromSql<sql_types::Text, Pg> for Password {
 
 impl ToSql<sql_types::Text, Pg> for Password {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
-        <str as ToSql<sql_types::Text, Pg>>::to_sql(self.value(), out)
+        <str as ToSql<sql_types::Text, Pg>>::to_sql(&self.hash, out)
     }
 }

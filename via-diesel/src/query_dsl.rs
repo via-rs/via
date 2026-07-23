@@ -11,7 +11,7 @@ use std::task::{Context, Poll};
 use via::err;
 
 pub trait AsyncQueryDsl<T>: Sized {
-    fn execute<'a, 'b>(self, connection: &'a mut T) -> MapErr<T::ExecuteFuture<'a, 'b>>
+    fn execute_async<'a, 'b>(self, connection: &'a mut T) -> MapErr<T::ExecuteFuture<'a, 'b>>
     where
         T: AsyncConnectionCore + Send,
         T::Backend: Default,
@@ -26,7 +26,10 @@ pub trait AsyncQueryDsl<T>: Sized {
         }
     }
 
-    fn first<'a, 'b, U>(self, connection: &'a mut T) -> MapErr<GetResult<'a, 'b, Limit<Self>, T, U>>
+    fn first_async<'a, 'b, U>(
+        self,
+        connection: &'a mut T,
+    ) -> MapErr<GetResult<'a, 'b, Limit<Self>, T, U>>
     where
         T: AsyncConnectionCore + Send,
         T::Backend: Default,
@@ -35,10 +38,10 @@ pub trait AsyncQueryDsl<T>: Sized {
         Self: diesel::query_dsl::methods::LimitDsl,
         Limit<Self>: LoadQuery<'b, T, U> + QueryFragment<T::Backend> + Send + 'b,
     {
-        AsyncQueryDsl::get_result(self.limit(1), connection)
+        AsyncQueryDsl::get_result_async(self.limit(1), connection)
     }
 
-    fn load<'a, 'b, U>(self, connection: &'a mut T) -> MapErr<LoadFuture<'a, 'b, Self, T, U>>
+    fn load_async<'a, 'b, U>(self, connection: &'a mut T) -> MapErr<LoadFuture<'a, 'b, Self, T, U>>
     where
         T: AsyncConnectionCore + Send,
         T::Backend: Default,
@@ -54,7 +57,10 @@ pub trait AsyncQueryDsl<T>: Sized {
         }
     }
 
-    fn get_result<'a, 'b, U>(self, connection: &'a mut T) -> MapErr<GetResult<'a, 'b, Self, T, U>>
+    fn get_result_async<'a, 'b, U>(
+        self,
+        connection: &'a mut T,
+    ) -> MapErr<GetResult<'a, 'b, Self, T, U>>
     where
         T: AsyncConnectionCore + Send,
         T::Backend: Default,

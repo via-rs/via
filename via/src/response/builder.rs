@@ -98,11 +98,17 @@ impl ResponseBuilder {
 
     #[inline]
     pub fn json(self, body: &impl Serialize) -> Result<Response, Error> {
-        let body = serde_json::to_vec(body).map_err(Error::ser_json)?;
+        match serde_json::to_vec(body) {
+            Ok(body) => self
+                .header(CONTENT_LENGTH, body.len())
+                .header(CONTENT_TYPE, "application/json; charset=utf-8")
+                .body(ResponseBody::from(body)),
 
-        self.header(CONTENT_LENGTH, body.len())
-            .header(CONTENT_TYPE, "application/json; charset=utf-8")
-            .body(ResponseBody::from(body))
+            Err(error) => Err(Error::from_serde_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error,
+            )),
+        }
     }
 
     #[inline]

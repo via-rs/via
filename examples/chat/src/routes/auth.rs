@@ -4,7 +4,6 @@ use http::StatusCode;
 use std::ops::ControlFlow;
 use via::request::Payloadz;
 use via::{Error, Response, deny, err};
-use via_diesel::prelude::*;
 use via_pubsub::Event;
 
 use crate::models::user::{User, by_id};

@@ -1,10 +1,10 @@
 use diesel::associations::HasTable;
-use diesel::dsl::{AsSelect, Select};
-use diesel::helper_types::InnerJoin;
+use diesel::helper_types::{AsSelect, InnerJoin, Select};
 use diesel::pg::Pg;
+use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use via_diesel::prelude::*;
+use via_diesel::AsyncQueryDsl;
 
 use super::{Channel, ReactionPreview, User, UserPreview};
 use crate::app::Connection;
@@ -138,7 +138,7 @@ impl Thread {
         diesel::insert_into(threads::table)
             .values(init)
             .returning(Self::as_returning())
-            .get_result(connection)
+            .get_result_async(connection)
             .await
     }
 

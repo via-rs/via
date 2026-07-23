@@ -1,13 +1,13 @@
 use diesel::deserialize::{self, FromSql, FromSqlRow};
-use diesel::dsl::{AsSelect, InnerJoin, InnerJoinOn, Select, count};
-use diesel::expression::AsExpression;
+use diesel::helper_types::{AsSelect, InnerJoin, InnerJoinOn, Select};
 use diesel::pg::{Pg, PgValue};
+use diesel::prelude::*;
 use diesel::serialize::{self, Output, ToSql};
-use diesel::sql_types;
+use diesel::{AsExpression, dsl::count, sql_types};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::{self, Debug, Formatter};
 use time::OffsetDateTime;
-use via_diesel::prelude::*;
+use via_diesel::AsyncQueryDsl;
 use zeroize::Zeroizing;
 
 use crate::app::Connection;
@@ -127,14 +127,17 @@ where
 }
 
 impl User {
-    pub async fn authenticate(conn: &mut Connection<'_>, params: AuthParams) -> via::Result<Self> {
+    pub async fn authenticate(
+        connection: &mut Connection<'_>,
+        params: AuthParams,
+    ) -> via::Result<Self> {
         use argon2::{Argon2, PasswordHash, PasswordVerifier};
 
         let AuthParams { email, password } = params;
         let (user, hash) = users::table
             .select((Self::as_select(), users::password_hash))
             .filter(by_email(&email))
-            .first::<(User, Password)>(conn)
+            .first_async::<(User, Password)>(connection)
             .await
             .or(Err(Unauthorized))?;
 
@@ -153,14 +156,14 @@ impl User {
         diesel::insert_into(users::table)
             .values(values)
             .returning(Self::as_returning())
-            .get_result(connection)
+            .get_result_async(connection)
             .await
     }
 
     pub async fn destroy(connection: &mut Connection<'_>, id: Id) -> via::Result<usize> {
         diesel::delete(users::table)
             .filter(by_id(&id))
-            .execute(connection)
+            .execute_async(connection)
             .await
     }
 
@@ -173,7 +176,7 @@ impl User {
             .filter(by_id(&id))
             .set(changes)
             .returning(Self::as_returning())
-            .get_result(connection)
+            .get_result_async(connection)
             .await
     }
 
@@ -185,7 +188,7 @@ impl User {
         let total = users::table
             .select(count(users::id))
             .filter(by_id(&id))
-            .get_result::<i64>(connection)
+            .get_result_async::<i64>(connection)
             .await?;
 
         if total == 1 {
@@ -201,13 +204,13 @@ impl User {
     ) -> via::Result<UserWithSubscriptions> {
         let user = UserPreview::query()
             .filter(by_id(&id))
-            .first(connection)
+            .first_async(connection)
             .await?;
 
         let subscriptions = ChannelSubscription::query()
             .filter(subscription::by_user(id).and(subscription::can_participate()))
             .limit(100)
-            .load(connection)
+            .load_async(connection)
             .await?;
 
         Ok(UserWithSubscriptions {

@@ -1,9 +1,9 @@
 use diesel::deserialize::{self, FromSql, FromSqlRow};
-use diesel::expression::AsExpression;
 use diesel::helper_types::InnerJoin;
 use diesel::pg::{Pg, PgValue};
+use diesel::prelude::*;
 use diesel::serialize::{self, Output, ToSql};
-use diesel::sql_types::{Array, BigInt, Integer, Text, VarChar};
+use diesel::{AsExpression, sql_types};
 use serde::de::{Deserializer, Error as DeError};
 use serde::{Deserialize, Serialize, Serializer};
 use std::error::Error;
@@ -11,8 +11,7 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
 use std::str::FromStr;
 use time::OffsetDateTime;
-use via_diesel::prelude::*;
-use via_diesel::{filters, sorts};
+use via_diesel::AsyncQueryDsl;
 
 use super::{ThreadWithUser, User, UserPreview};
 use crate::app::Connection;
@@ -23,7 +22,7 @@ use crate::util::Id;
 pub struct InvalidEmojiError;
 
 #[derive(AsExpression, Clone, Debug, FromSqlRow)]
-#[diesel(sql_type = VarChar)]
+#[diesel(sql_type = sql_types::VarChar)]
 pub struct Emoji {
     buf: [u8; 16],
     len: usize,
@@ -85,10 +84,10 @@ pub struct NewReactionInChannel {
 pub struct ReactionPreview {
     emoji: Emoji,
 
-    #[diesel(sql_type = Array<Text>)]
+    #[diesel(sql_type = sql_types::Array<sql_types::Text>)]
     usernames: Vec<String>,
 
-    #[diesel(sql_type = BigInt)]
+    #[diesel(sql_type = sql_types::BigInt)]
     total_count: i64,
 
     thread_id: Id,
@@ -105,12 +104,12 @@ pub struct ReactionWithUser {
     user: UserPreview,
 }
 
-filters! {
+via_diesel::filters! {
     pub fn by_id(id == &Id) on reactions;
     pub fn by_user(user_id == &Id) on reactions;
 }
 
-sorts! {
+via_diesel::sorts! {
     pub fn recent(#[desc] created_at, id) on reactions;
 }
 
@@ -119,7 +118,7 @@ impl Reaction {
         diesel::insert_into(reactions::table)
             .values(init)
             .returning(Self::as_returning())
-            .get_result(connection)
+            .get_result_async(connection)
             .await
     }
 
@@ -130,7 +129,7 @@ impl Reaction {
         diesel::insert_into(reactions::table)
             .values(init)
             .returning(Self::as_returning())
-            .get_result(connection)
+            .get_result_async(connection)
             .await
     }
 
@@ -145,12 +144,12 @@ impl Reaction {
         const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
         const USERNAMES_PER_REACTION: i32 = 6;
 
-        let query = diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
-            .bind::<Array<BigInt>, Vec<_>>(ids)
-            .bind::<Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
-            .bind::<Integer, _>(USERNAMES_PER_REACTION);
-
-        AsyncQueryDsl::load(query, connection).await
+        diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
+            .bind::<sql_types::Array<sql_types::BigInt>, Vec<_>>(ids)
+            .bind::<sql_types::Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
+            .bind::<sql_types::Integer, _>(USERNAMES_PER_REACTION)
+            .load_async(connection)
+            .await
     }
 
     pub fn with_user(self, user: UserPreview) -> ReactionWithUser {
@@ -220,7 +219,7 @@ impl<'de> Deserialize<'de> for Emoji {
     }
 }
 
-impl FromSql<VarChar, Pg> for Emoji {
+impl FromSql<sql_types::VarChar, Pg> for Emoji {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         Ok(str::from_utf8(value.as_bytes())?.parse()?)
     }
@@ -232,8 +231,8 @@ impl Serialize for Emoji {
     }
 }
 
-impl ToSql<VarChar, Pg> for Emoji {
+impl ToSql<sql_types::VarChar, Pg> for Emoji {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
-        <str as ToSql<VarChar, Pg>>::to_sql(self, out)
+        <str as ToSql<sql_types::VarChar, Pg>>::to_sql(self, out)
     }
 }

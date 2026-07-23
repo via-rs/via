@@ -1,11 +1,9 @@
 via::resource!(app = Unicorn, guard = collection);
 
+use diesel::prelude::*;
 use std::ops::ControlFlow;
-
-use via::{Payload, Response};
-use via::{ResultExt, deny};
-use via_diesel::LimitAndOffset;
-use via_diesel::prelude::*;
+use via::{Payload, Response, ResultExt, deny};
+use via_diesel::{AsyncQueryDsl, LimitAndOffset, Paginate};
 use via_pubsub::Event;
 
 use crate::models::subscription::{self, AuthClaims, ChannelSubscription};
@@ -38,7 +36,7 @@ pub async fn authorization(mut request: Request, next: Next) -> via::Result {
         ChannelSubscription::query()
             .filter(subscription::by_channel(id).and(subscription::by_user(me)))
             .filter(subscription::can_participate())
-            .first(&mut connection)
+            .first_async(&mut connection)
             .await?
     };
 
@@ -70,7 +68,7 @@ async fn index(request: Request, _: Next) -> via::Result {
             .select(Channel::as_select())
             .filter(subscription::by_user(me))
             .page(limit_and_offset)
-            .load(&mut connection)
+            .load_async(&mut connection)
             .await?
     };
 
@@ -127,7 +125,7 @@ async fn show(request: Request, _: Next) -> via::Result {
             .filter(thread::by_channel(channel_id).and(thread::is_thread()))
             .order(thread::recent())
             .limit(25)
-            .load(&mut connection)
+            .load_async(&mut connection)
             .await?;
 
         // Load the reactions for the threads in threads.

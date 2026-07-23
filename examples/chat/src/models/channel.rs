@@ -1,11 +1,11 @@
-use diesel::deserialize::FromSql;
-use diesel::expression::{Selectable, SelectableHelper};
+use diesel::deserialize::{FromSql, FromSqlRow};
 use diesel::pg::{Pg, PgValue};
-use diesel::{AsExpression, FromSqlRow, deserialize, sql_types};
+use diesel::prelude::*;
+use diesel::{AsExpression, deserialize, sql_types};
 use serde::{Deserialize, Serialize, Serializer};
 use std::sync::Arc;
 use time::OffsetDateTime;
-use via_diesel::prelude::*;
+use via_diesel::AsyncQueryDsl;
 
 use super::subscription::NewSubscription;
 use super::{ChannelSubscription, ThreadDetails};
@@ -66,13 +66,13 @@ impl Channel {
             let channel = diesel::insert_into(channels::table)
                 .values(init)
                 .returning(Channel::as_returning())
-                .get_result(trx)
+                .get_result_async(trx)
                 .await?;
 
             // Associate the active user to the channel as an admin.
             diesel::insert_into(subscriptions::table)
                 .values(NewSubscription::admin(owner_id, *channel.id()))
-                .execute(trx)
+                .execute_async(trx)
                 .await?;
 
             Ok(channel)
@@ -82,7 +82,7 @@ impl Channel {
     pub async fn destroy(connection: &mut Connection<'_>, id: Id) -> via::Result<usize> {
         diesel::delete(channels::table)
             .filter(by_id(&id))
-            .execute(connection)
+            .execute_async(connection)
             .await
     }
 
@@ -95,7 +95,7 @@ impl Channel {
             .filter(by_id(&id))
             .set(changes)
             .returning(Self::as_returning())
-            .get_result(connection)
+            .get_result_async(connection)
             .await
     }
 }

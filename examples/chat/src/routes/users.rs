@@ -8,9 +8,10 @@
 
 via::resource!(app = Unicorn, guard = [index, member]);
 
+use diesel::prelude::*;
 use via::request::Payloadz;
 use via::{Payload, Response, deny};
-use via_diesel::{LimitAndOffset, prelude::*};
+use via_diesel::{AsyncQueryDsl, LimitAndOffset, Paginate};
 
 use crate::models::user::{User, by_id, recent};
 use crate::util::{Authenticator, Id, Session};
@@ -31,7 +32,7 @@ async fn index(request: Request, _: Next) -> via::Result {
         User::query()
             .order(recent())
             .page(limit_and_offset)
-            .load(&mut connection)
+            .load_async(&mut connection)
             .await?
     };
 
@@ -83,7 +84,7 @@ async fn show(request: Request, _: Next) -> via::Result {
         // Execute the query.
         User::query()
             .filter(by_id(&id))
-            .first(&mut connection)
+            .first_async(&mut connection)
             .await?
     };
 

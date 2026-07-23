@@ -1,10 +1,10 @@
 via::resource!(app = Unicorn);
 
+use diesel::prelude::*;
 use serde::Serialize;
 use via::request::PathParams;
 use via::{Error, Response, ResultExt};
-use via_diesel::LimitAndOffset;
-use via_diesel::prelude::*;
+use via_diesel::{AsyncQueryDsl, LimitAndOffset, Paginate};
 
 use crate::models::ThreadWithUser;
 use crate::models::thread::{by_channel, by_thread, is_thread};
@@ -45,13 +45,13 @@ async fn index(request: Request, _: Next) -> via::Result {
             ThreadWithUser::query()
                 .filter(by_channel(channel_id).and(by_thread(parent_id)))
                 .page(keyset)
-                .load(&mut connection)
+                .load_async(&mut connection)
                 .await?
         } else {
             ThreadWithUser::query()
                 .filter(by_channel(channel_id).and(is_thread()))
                 .page(keyset)
-                .load(&mut connection)
+                .load_async(&mut connection)
                 .await?
         }
     };

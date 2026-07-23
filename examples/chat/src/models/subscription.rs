@@ -1,12 +1,12 @@
 use bitflags::bitflags;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
-use diesel::dsl::{AsSelect, InnerJoin, Select};
+use diesel::helper_types::{AsSelect, InnerJoin, Select};
 use diesel::pg::{Pg, PgValue};
+use diesel::prelude::*;
 use diesel::serialize::{self, Output, ToSql};
 use diesel::{AsExpression, sql_types};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use via_diesel::prelude::*;
 
 use super::{Channel, ChannelWithThreads, ThreadDetails, UserPreview};
 use crate::schema::{channels, subscriptions, users};

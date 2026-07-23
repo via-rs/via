@@ -1,9 +1,11 @@
 //! The /api/auth namespace.
 
+use diesel::QueryDsl;
 use http::StatusCode;
 use std::ops::ControlFlow;
 use via::request::Payloadz;
 use via::{Error, Response, deny, err};
+use via_diesel::AsyncQueryDsl;
 use via_pubsub::Event;
 
 use crate::models::user::{User, by_id};
@@ -98,7 +100,7 @@ pub async fn me(request: Request, _: Next) -> via::Result {
         // Execute the query.
         User::query()
             .filter(by_id(&id))
-            .first(&mut connection)
+            .first_async(&mut connection)
             .await?
     };
 

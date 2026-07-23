@@ -118,7 +118,7 @@ where
 
                 // Pack the batch of messages into the pipeline.
                 buf.iter().fold(&mut pipeline, |pipe, event| {
-                    match signer.serialize(&event) {
+                    match signer.serialize(event) {
                         Ok((channel, payload)) => pipe
                             .cmd("PUBLISH")
                             .arg(channel)

@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use http::StatusCode;
 use serde::Serialize;
 use std::fmt::{self, Debug, Formatter};
 use via::Error;
@@ -10,7 +11,10 @@ pub struct Opaque(Bytes);
 pub(crate) fn serialize(value: &impl Serialize) -> via::Result<Opaque> {
     match serde_json::to_string(value) {
         Ok(string) => Ok(Opaque(string.into())),
-        Err(error) => Err(Error::from_json(error)),
+        Err(error) => Err(Error::from_serde_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error,
+        )),
     }
 }
 

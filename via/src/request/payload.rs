@@ -326,6 +326,13 @@ macro_rules! impl_payload_for_bytes_like {
                 Payload::coalesce(Bytes::from($from(self)))
             }
 
+            fn data<T>(self) -> Result<T, Error>
+            where
+                T: DeserializeOwned,
+            {
+                self.json().map(|json: JsonData<T>| json.data)
+            }
+
             fn json<T>(self) -> Result<T, Error>
             where
                 T: DeserializeOwned,

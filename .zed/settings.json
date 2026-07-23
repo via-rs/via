@@ -1,0 +1,11 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "cargo": {
+          "features": ["aws-lc-rs", "fs", "rustls-23", "tokio-tungstenite"]
+        }
+      }
+    }
+  }
+}

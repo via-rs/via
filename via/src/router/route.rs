@@ -91,8 +91,11 @@ impl<'a, App> Prefix<'a, App> {
         }
     }
 
-    /// A convenience method that appends `path` to self and assigns it to
-    /// `middleware`.
+    /// Takes ownership of self and then calls `op` with a mutable ref to self.
+    ///
+    /// Maping a route is particularly useful when you want to define routes in
+    /// a new scope. It is less busy than assigning the path to a variable in a
+    /// block.
     ///
     /// # Example
     ///

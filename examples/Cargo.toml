@@ -6,6 +6,8 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [features]
+default = []
+
 fs = ["via/fs"]
 
 aws-lc-rs = ["via/aws-lc-rs"]
@@ -14,12 +16,16 @@ ring = ["via/ring"]
 native-tls = ["via/native-tls"]
 rustls-23 = ["via/rustls-23"]
 
-tokio-tungstenite = ["via/tokio-tungstenite"]
-tokio-websockets = ["via/tokio-websockets"]
+tokio-tungstenite = ["via/tokio-tungstenite", "via-pubsub/tokio-tungstenite"]
+tokio-websockets = ["via/tokio-websockets", "via-pubsub/tokio-websockets"]
 
 # Internal
 
 __test = ["fs", "ring", "tokio-tungstenite"]
+
+[[example]]
+name = "chat"
+path = "./chat/src/main.rs"
 
 [[example]]
 name = "cookies"
@@ -52,12 +58,27 @@ path = "./rustls/main.rs"
 required-features = ["rustls-23"]
 
 [dev-dependencies]
+argon2 = "0.5"
+base64 = "0.22"
+bb8 = "0.9"
+bytes = "1"
+bitflags = { version = "2", features = ["serde"] }
+bytestring = { version = "1", features = ["serde"] }
 cookie = { version = "0.18", features = ["percent-encode", "signed"] }
+diesel = { features = ["time", "uuid"], version = "2" }
+diesel-async = { version = "0.9", features = ["bb8", "postgres"] }
 dotenvy = "0.15"
 http = "1"
 mime_guess = "2"
 native-tls = { version = "0.2", features = ["alpn"] }
 tokio-rustls = { version = "0.26", default-features = false }
+redis = { version = "1", features = ["tokio-comp"] }
 serde = "1"
+serde_json = "1"
+time = { version = "0.3", features = ["serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-via = { path = "../via" }
+uuid = { version = "1", features = ["v4", "serde"] }
+via = { path = "../via", version = "=2.0.0-gm.59" }
+via-diesel = { path = "../via-diesel", version = "=0.1.0-beta.2" }
+via-pubsub = { path = "../via-pubsub", version = "0.1.0-beta.0", features = ["redis"] }
+zeroize = { version = "1", features = ["serde"] }

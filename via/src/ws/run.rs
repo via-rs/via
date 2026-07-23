@@ -79,6 +79,36 @@ where
     }
 }
 
+// Safety:
+//
+// In order for `Run` to act as a supervisor of `Facade`, `Run` must construct
+// `Facade` with a mutable reference to it's `stream` field. This makes the
+// `facade` field of `Run` self-referential.
+//
+// To properly facilitate this behavior, `Run` constructs the `facade` field
+// with a `*mut WebSocketStream`.
+//
+// We know that this borrow is always valid because `Facade` only ever exists
+// as a field of `Run` and `Run` never mutates the `stream` field. Therefore,
+// the `*mut WebSocketStream` always points to a valid `WebSocketStream`.
+//
+// There is no reason to provide `Facade` with a phantom lifetime to represent
+// the validity of the `stream` in this context becuase it's lifetime is that of
+// self and the lifetime of self is the lifetime `Run`.
+//
+// `Run` is only ever constructed as a field of `RunTask` a context in which it
+// is `Pin<Box<Run>>`. Since `facade` is a field of `Run` and `Run` is guaranteed
+// a stable memory address because it can only exist as `Pin<Box<Run>>`, we can
+// be sure that no aliasing rules are being broken.
+//
+// Now that we can be sure that the `*mut WebSocketStream` in `facade` is both
+// justified and well-behaved, the only other qualifier required to safely
+// implement `Send` is `WebSocketStream` being `Send` along with the other
+// fields of `facade`.
+//
+// This impl `Send` remains safe so long as `Run` only exists as `Pin<Box<Run>>`
+// and uncommenting the `impl Send` only mentions the `stream` field in the
+// diagnostic message.
 unsafe impl Send for Facade {}
 
 impl Drop for Facade {

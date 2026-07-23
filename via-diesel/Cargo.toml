@@ -12,4 +12,4 @@ repository = "https://github.com/via-rs/via"
 diesel-async = "0.9"
 diesel = "2"
 http = "1"
-via = { path = "../via", version = "=2.0.0-gm.59" }
+via = { path = "../via", version = "=2.0.0-gm.60" }

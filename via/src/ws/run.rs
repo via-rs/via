@@ -90,7 +90,10 @@ where
 //
 // We know that this borrow is always valid because `Facade` only ever exists
 // as a field of `Run` and `Run` never mutates the `stream` field. Therefore,
-// the `*mut WebSocketStream` always points to a valid `WebSocketStream`.
+// the `*mut WebSocketStream` always points to a valid `WebSocketStream`. Both
+// `Facade` and `Run` have manual drop impls to provide a deterministic drop
+// order where the raw pointer contained in `Facade` is nulled before the rest
+// of the fields of `Run` are dropped.
 //
 // There is no reason to provide `Facade` with a phantom lifetime to represent
 // the validity of the `stream` in this context becuase it's lifetime is that of

@@ -1,0 +1,15 @@
+[package]
+name = "via-diesel"
+version = "0.1.0-beta.1"
+authors = ["Zakari Papa <pino@hey.com>"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "An async diesel integration for Via built on top of diesel-async."
+homepage = "https://github.com/via-rs/via-diesel"
+repository = "https://github.com/via-rs/via-diesel"
+
+[dependencies]
+diesel-async = "0.9"
+diesel = "2"
+http = "1"
+via = { path = "../via", version = "=2.0.0-gm.59" }

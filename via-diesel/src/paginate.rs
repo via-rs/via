@@ -1,7 +1,6 @@
-use diesel::dsl::Offset;
+use diesel::helper_types::Offset;
 use diesel::query_dsl::methods::{LimitDsl, OffsetDsl};
-use via::request::params::{QueryParam, QueryParams};
-use via::{Error, ResultExt};
+use via::request::params::QueryParams;
 
 const MIN_PER_PAGE: i64 = 5;
 const MAX_PER_PAGE: i64 = 100;
@@ -23,17 +22,6 @@ pub struct LimitAndOffset {
 #[derive(Debug)]
 pub struct LimitAndPage {
     limit_and_offset: LimitAndOffset,
-}
-
-fn map_or<F, T, E>(param: QueryParam, default: T, op: F) -> Result<T, Error>
-where
-    F: FnOnce(&str) -> Result<T, E>,
-    Error: From<E>,
-{
-    param.ok().and_then(|option| match option.as_deref() {
-        Some(value) => op(value).or_bad_request(),
-        None => Ok(default),
-    })
 }
 
 impl<T> Paginate<LimitAndOffset> for T

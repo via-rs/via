@@ -34,6 +34,9 @@ const PUBSUB_VERSION: u32 = 1;
 /// The signing key used to sign and verify session cookies.
 const SESSION_SIGNER: &str = "SESSION_SIGNER";
 
+/// The maximum size in bytes of chat message or reaction.
+pub const MAX_EVENT_SIZE: usize = 8192;
+
 /// The cookie name used to store an encoded identity token.
 pub const SESSION: &str = "via-chat-session";
 
@@ -209,6 +212,7 @@ impl Unicorn {
 
             Redis::builder(PUBSUB_SCOPE)
                 .concurrency(num_workers)
+                .max_event_size(MAX_EVENT_SIZE)
                 .signing_key(require_secret(PUBSUB_SIGNER)?.as_bytes())
                 //           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
                 //     Signing key is dropped and zeroed before await.

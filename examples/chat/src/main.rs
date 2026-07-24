@@ -30,6 +30,9 @@ use routes::auth::{login, logout, me};
 use routes::{channels, reactions, threads, users};
 use util::session::{self, auth_required, authenticate};
 
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+use crate::app::MAX_EVENT_SIZE;
+
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
 
@@ -89,7 +92,12 @@ fn routes(home: via::Route<Unicorn>) {
 
     // The /api/chat route.
     #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    path.route("/chat", via::get(authenticate(via::ws(routes::chat))));
+    path.route(
+        "/chat",
+        via::get(authenticate(
+            via::ws(routes::chat).max_message_size(Some(MAX_EVENT_SIZE)),
+        )),
+    );
 
     // The /api/channels resource.
     path.route("/channels", channels::collection(auth_required))

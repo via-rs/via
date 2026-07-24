@@ -12,8 +12,12 @@ use super::{Backend, Event, RawPeerEvent};
 use crate::pubsub::Pubsub;
 use crate::util::error;
 
+/// The maximum size in bytes of a pipeline command.
+const MAX_PIPELINE_SIZE: usize = 65536;
+
 pub struct Builder<'a, T, U> {
     concurrency: Option<usize>,
+    max_event_size: Option<usize>,
     signing_key: Result<Option<Key>, Error>,
     sub_scope: &'a str,
     version: Option<u32>,
@@ -167,6 +171,7 @@ impl<T, U> Redis<T, U> {
     pub fn builder(scope: &str) -> Builder<'_, T, U> {
         Builder {
             concurrency: None,
+            max_event_size: None,
             signing_key: Ok(None),
             sub_scope: scope,
             version: None,
@@ -236,6 +241,14 @@ where
             .concurrency
             .ok_or_else(|| require_argument("concurrency"))?;
 
+        // Confirm that `max_event_size` was provided.
+        //
+        // We use this to determine the maximum number of events that can be
+        // safely included in a pipeline command to redis.
+        let max_event_size = self
+            .max_event_size
+            .ok_or_else(|| require_argument("max_event_size"))?;
+
         // Used by subscribers to send updates to the redis task.
         let (sender, outbound) = mpsc::channel(concurrency);
 
@@ -291,7 +304,7 @@ where
                 fanout,
                 inbound,
                 outbound,
-                concurrency,
+                concurrency: MAX_PIPELINE_SIZE.div_euclid(max_event_size),
             };
 
             // Pin the task on the heap. It should live as long as the process.
@@ -331,6 +344,19 @@ where
     /// ```
     pub fn concurrency(mut self, concurrency: usize) -> Self {
         self.concurrency = Some(concurrency);
+        self
+    }
+
+    /// The maximum size event size in bytes of a serialized event.
+    ///
+    /// The provided value is treated as an upper bound to determine a
+    /// pathological publish burst.
+    ///
+    /// This allows us to calculate the number of events that can be safely
+    /// included in a pipeline request to redis without keeping a running total
+    /// of the size in bytes of the command.
+    pub fn max_event_size(mut self, max: usize) -> Self {
+        self.max_event_size = Some(max);
         self
     }
 

@@ -118,10 +118,11 @@ impl WebSocketStreamMut {
     fn as_pin_mut(&mut self) -> Pin<&mut WebSocketStream<IoStream>> {
         // Safety:
         //
-        // The raw pointer at `self.io` is always valid because `Run` never moves
-        // or reassigns the value stored in the `stream` field and `Facade` and
-        // `Run` implement drop to explicitly null the `*mut WebSocketStream`
-        // prior to dropping the value that it points to.
+        // The raw pointer at `self.io` is always valid because:
+        //
+        // - `Run` never moves or reassigns the value stored at `stream`
+        // - `Self` only occurs as a field of `Facade`, `Facade` can only occur
+        //   as a field of `Run` and `Run` can only occur as `Pin<Box<Run>>`
         Pin::new(unsafe { &mut *self.io })
     }
 }

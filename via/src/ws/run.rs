@@ -229,8 +229,8 @@ impl Future for Facade {
                     log!(info(ws = i), "state = send");
                     indent!(i);
 
-                    match self.stream.as_pin_mut().poll_ready(cx).map_err(rescue)? {
-                        Poll::Ready(_) => {
+                    match self.stream.as_pin_mut().poll_ready(cx) {
+                        Poll::Ready(Ok(_)) => {
                             self.stream.as_pin_mut().start_send(item).map_err(rescue)?;
                             log!(info(ws = i), "outbound message accepted by i/o.");
                             indent!(i);
@@ -239,6 +239,9 @@ impl Future for Facade {
                             log!(info(ws = i), "waiting for i/o to become available.");
                             self.state = IoState::Send(item);
                             return Poll::Pending;
+                        }
+                        Poll::Ready(Err(error)) => {
+                            return Poll::Ready(Err(rescue(error)));
                         }
                     }
                 }

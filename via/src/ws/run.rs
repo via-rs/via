@@ -33,7 +33,7 @@ enum IoState {
 struct Facade {
     listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
     state: IoState,
-    stream: *mut WebSocketStream<IoStream>,
+    stream: WebSocketStreamMut,
     rendezvous: Channel,
 }
 
@@ -43,6 +43,10 @@ struct Run<T, App> {
     stream: WebSocketStream<IoStream>,
     facade: Option<Facade>,
     _pin: PhantomPinned,
+}
+
+struct WebSocketStreamMut {
+    io: *mut WebSocketStream<IoStream>,
 }
 
 impl<T, App, Await> RunTask<T, App>
@@ -79,15 +83,78 @@ where
     }
 }
 
-unsafe impl Send for Facade {}
+impl<T, App> Drop for Run<T, App> {
+    fn drop(&mut self) {
+        if let Some(facade) = self.facade.take() {
+            // Safety: Explicitly dropping facade, invalidates the raw pointer.
+            drop(facade);
+        }
+    }
+}
 
 impl Drop for Facade {
     fn drop(&mut self) {
-        // Null out the raw pointer to prevent accidental use.
-        // The rest of the fields in self are dropped automatically.
-        self.stream = std::ptr::null_mut();
+        // Defensive poisoning. Dereferencing a null ptr and a dangling reference
+        // to an I/O stream are both undefined behavior. However, dereferencing a
+        // null ptr is inherently less risky on modern operating systems.
+        //
+        // Accessing a value after it has been dropped is impossible to do in
+        // Safe Rust and none of the unsafe blocks found in this module allow
+        // it to happen.
+        //
+        // Soundness relies on `Facade` being dropped before the `Run::stream`
+        // field is dropped in `impl Drop for Run`.
+        self.stream.io = std::ptr::null_mut();
     }
 }
+
+impl WebSocketStreamMut {
+    #[inline]
+    fn new(io: &mut WebSocketStream<IoStream>) -> Self {
+        Self { io }
+    }
+
+    #[inline(always)]
+    fn as_pin_mut(&mut self) -> Pin<&mut WebSocketStream<IoStream>> {
+        // Safety:
+        //
+        // The raw pointer at `self.io` is always valid because:
+        //
+        // - `Run` never moves or reassigns the value stored at `stream`
+        // - `Self` only occurs as a field of `Facade`, `Facade` can only occur
+        //   as a field of `Run` and `Run` can only occur as `Pin<Box<Run>>`
+        Pin::new(unsafe { &mut *self.io })
+    }
+}
+
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<WebSocketStream<IoStream>>();
+};
+
+// Safety:
+//
+// In order for `Run` to act as a supervisor of `Facade`, `Run` must construct
+// `Facade` with a mutable reference to it's `stream` field. This makes the
+// `facade` field of `Run` self-referential.
+//
+// To properly facilitate this behavior, `Run` constructs the `facade` field
+// with a `*mut WebSocketStream` in `WebSocketStreamMut`. We know that this
+// borrow is always valid because:
+//
+// - `Facade` can only exist as a field of `Run`
+//
+// - `Run` can only be constructed with a stable heap address as `Pin<Box<Run>>`
+//
+// - `Run` never moves or reassigns the value stored in the `stream` field
+//
+// - `Facade` explicitly nulls the `stream` field in it's drop impl and `Run`
+//   explicitly drops `facade` before `stream`
+//
+// There is no reason to provide `WebSocketStreamMut` with a phantom lifetime to
+// represent the validity of the `io` becuase it's lifetime is that of self and
+// the lifetime of self is the lifetime `Run`.
+unsafe impl Send for WebSocketStreamMut {}
 
 macro_rules! indent {
     ($i:ident = $value:expr) => {
@@ -109,14 +176,6 @@ impl Future for Facade {
         let mut i = 0;
 
         loop {
-            // Safety:
-            //
-            // stream is a mutable pointer to the stream field of the `Run<_, _>`
-            // struct. Run is structurally pinned in a `Pin<Box<_>>` as a field
-            // of `RunTask`. The only way to construct `Run<_, _>` is with the
-            // `RunTask::new` fn.
-            let stream = unsafe { &mut *self.stream };
-
             match &mut self.state {
                 IoState::Receive => {
                     log!(info(ws = i), "state = receive");
@@ -125,15 +184,21 @@ impl Future for Facade {
                     // Confirm that the listener can receive the next message.
                     if self.rendezvous.has_capacity()? {
                         // Attempt to pull the next message out of the stream.
-                        if let Poll::Ready(next) = Pin::new(stream).poll_next(cx).map_err(rescue)? {
-                            let Some(received) = next else {
-                                // The stream has ended. The web socket is closed.
+                        match self.stream.as_pin_mut().poll_next(cx) {
+                            Poll::Ready(Some(Ok(next))) => {
+                                // If send fails, the channel is disconnected.
+                                self.rendezvous.try_send(next)?;
+                                log!(info(ws = i), "inbound message forwarded to listener.");
+                            }
+                            Poll::Ready(Some(Err(error))) => {
+                                return Poll::Ready(Err(rescue(error)));
+                            }
+                            // The stream has ended. The web socket is closed.
+                            Poll::Ready(None) => {
                                 return Poll::Ready(Ok(()));
-                            };
-
-                            // If send fails, the channel is disconnected.
-                            self.rendezvous.try_send(received)?;
-                            log!(info(ws = i), "inbound message forwarded to listener.");
+                            }
+                            // The stream is empty. Poll the listener.
+                            Poll::Pending => {}
                         }
                     } else {
                         log!(info(ws = i), "listener is busy.");
@@ -146,10 +211,9 @@ impl Future for Facade {
                     }
 
                     if let Some(sent) = self.rendezvous.try_recv()? {
+                        self.state = IoState::Send(sent);
                         log!(info(ws = i), "outbound message received from listener.");
                         indent!(i);
-
-                        self.state = IoState::Send(sent);
                     } else {
                         log!(info(ws = i), "waiting for something interesting to happen.");
                         return Poll::Pending;
@@ -157,25 +221,28 @@ impl Future for Facade {
                 }
 
                 state @ IoState::Send(_) => {
+                    let IoState::Send(item) = mem::replace(state, IoState::Flush) else {
+                        // We are in an invalid state. End the session.
+                        return Poll::Ready(Ok(()));
+                    };
+
                     log!(info(ws = i), "state = send");
                     indent!(i);
 
-                    let mut sink = Pin::new(stream);
-
-                    if sink.as_mut().poll_ready(cx).map_err(rescue)?.is_pending() {
-                        log!(info(ws = i), "waiting for i/o to become available.");
-                        return Poll::Pending;
-                    }
-
-                    if let IoState::Send(message) = mem::replace(state, IoState::Flush) {
-                        sink.as_mut().start_send(message).map_err(rescue)?;
-                        log!(info(ws = i), "outbound message accepted by i/o.");
-                        indent!(i);
-                    } else {
-                        // We are in an invalid state. This can be interpreted
-                        // as a signal that the risk of re-entrance is elevated
-                        // and we should close the socket.
-                        return Poll::Ready(Ok(()));
+                    match self.stream.as_pin_mut().poll_ready(cx) {
+                        Poll::Ready(Ok(_)) => {
+                            self.stream.as_pin_mut().start_send(item).map_err(rescue)?;
+                            log!(info(ws = i), "outbound message accepted by i/o.");
+                            indent!(i);
+                        }
+                        Poll::Pending => {
+                            log!(info(ws = i), "waiting for i/o to become available.");
+                            self.state = IoState::Send(item);
+                            return Poll::Pending;
+                        }
+                        Poll::Ready(Err(error)) => {
+                            return Poll::Ready(Err(rescue(error)));
+                        }
                     }
                 }
 
@@ -183,12 +250,18 @@ impl Future for Facade {
                     log!(info(ws = i), "state = flush");
                     indent!(i);
 
-                    if Pin::new(stream).poll_flush(cx).map_err(rescue)?.is_ready() {
-                        log!(info(ws = i), "outbound message sent successfully.");
-                        self.state = IoState::Receive;
-                        cx.waker().wake_by_ref();
-                    } else {
-                        log!(info(ws = i), "waiting for flush to complete.");
+                    match self.stream.as_pin_mut().poll_flush(cx) {
+                        Poll::Pending => {
+                            log!(info(ws = i), "waiting for flush to complete.");
+                        }
+                        Poll::Ready(Ok(_)) => {
+                            log!(info(ws = i), "outbound message sent successfully.");
+                            self.state = IoState::Receive;
+                            cx.waker().wake_by_ref();
+                        }
+                        Poll::Ready(Err(error)) => {
+                            return Poll::Ready(Err(rescue(error)));
+                        }
                     }
 
                     return Poll::Pending;
@@ -210,7 +283,7 @@ where
         let facade = Facade {
             listener: Box::pin((self.listener.handle)(theirs, request)),
             state: IoState::Receive,
-            stream: &mut self.stream as *mut _,
+            stream: WebSocketStreamMut::new(&mut self.stream),
             rendezvous: ours,
         };
 
@@ -223,15 +296,6 @@ where
         // Implementing this any other way introduces an unlikely yet
         // recognizable re-entrancy pattern.
         unsafe { self.facade.as_mut().unwrap_unchecked() }
-    }
-}
-
-impl<T, App> Drop for Run<T, App> {
-    fn drop(&mut self) {
-        if let Some(facade) = self.facade.take() {
-            // Safety: Explicitly dropping facade, invalidates the raw pointer.
-            drop(facade);
-        }
     }
 }
 

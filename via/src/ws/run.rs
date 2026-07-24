@@ -94,8 +94,16 @@ impl<T, App> Drop for Run<T, App> {
 
 impl Drop for Facade {
     fn drop(&mut self) {
-        // Null out the raw pointer to prevent accidental use.
-        // The rest of the fields in self are dropped automatically.
+        // Defensive poisoning. Dereferencing a null ptr and a dangling reference
+        // to an I/O stream are both undefined behavior. However, dereferencing a
+        // null ptr is inherently less risky on modern operating systems.
+        //
+        // Accessing a value after it has been dropped is impossible to do in
+        // Safe Rust and none of the unsafe blocks found in this module allow
+        // it to happen.
+        //
+        // Soundness relies on `Facade` being dropped before the `Run::stream`
+        // field is dropped in `impl Drop for Run`.
         self.stream.io = std::ptr::null_mut();
     }
 }
@@ -117,6 +125,11 @@ impl WebSocketStreamMut {
         Pin::new(unsafe { &mut *self.io })
     }
 }
+
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<WebSocketStream<IoStream>>();
+};
 
 // Safety:
 //

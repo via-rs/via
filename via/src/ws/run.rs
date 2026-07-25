@@ -20,6 +20,7 @@ use crate::Error;
 use crate::server::IoStream;
 use crate::ws::upgrade::Listener;
 
+/// Future that drives a WebSocket connection and listener facade.
 pub struct RunTask<T, App> {
     run: Pin<Box<Run<T, App>>>,
 }

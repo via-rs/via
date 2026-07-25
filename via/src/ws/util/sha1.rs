@@ -10,8 +10,10 @@ use crate::ws::error::UpgradeError;
 
 const WS_ACCEPT_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+/// Base64-encoded SHA-1 digest used for `Sec-WebSocket-Accept`.
 pub struct Base64EncodedDigest([u8; 28]);
 
+/// Compute the WebSocket accept digest for a client key.
 pub fn sha1(input: &[u8]) -> Result<Base64EncodedDigest, UpgradeError> {
     let mut hasher = Context::new(&SHA1_FOR_LEGACY_USE_ONLY);
     let mut buf = [0; 28];
@@ -28,6 +30,7 @@ pub fn sha1(input: &[u8]) -> Result<Base64EncodedDigest, UpgradeError> {
 }
 
 impl Base64EncodedDigest {
+    /// Return the digest as a UTF-8 string.
     #[inline]
     pub fn as_str(&self) -> Result<&str, UpgradeError> {
         str::from_utf8(&self.0).or(Err(UpgradeError::Other))

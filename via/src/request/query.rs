@@ -1,8 +1,10 @@
 use percent_encoding::percent_decode_str;
 use std::borrow::Cow;
 
+/// Byte range of a query parameter value in the original query string.
 pub type QueryParamRange = [Option<usize>; 2];
 
+/// Iterator over decoded query parameter names and raw value ranges.
 pub struct QueryParser<'a> {
     input: &'a str,
     from: usize,
@@ -53,6 +55,7 @@ fn take_while(input: &str, from: usize, f: impl Fn(u8) -> bool) -> Option<usize>
 }
 
 impl<'a> QueryParser<'a> {
+    /// Create a parser for `input`.
     pub fn new(input: &'a str) -> Self {
         Self { input, from: 0 }
     }

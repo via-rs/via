@@ -2,7 +2,9 @@ via::resource!(app = Unicorn, guard = collection);
 
 use diesel::prelude::*;
 use std::ops::ControlFlow;
+use tokio::task::coop;
 use via::{Payload, Response, ResultExt, deny};
+use via_diesel::paginate::PER_PAGE;
 use via_diesel::{AsyncQueryDsl, LimitAndOffset, Paginate};
 use via_pubsub::Event;
 
@@ -55,7 +57,7 @@ async fn index(request: Request, _: Next) -> via::Result {
     let me = request.me()?;
 
     // Get pagination params from the URI query.
-    let limit_and_offset = request.query::<LimitAndOffset>()?;
+    let page = request.query::<LimitAndOffset>()?;
 
     // Load the active user's subscriptions.
     let channels = {
@@ -63,11 +65,9 @@ async fn index(request: Request, _: Next) -> via::Result {
         let mut connection = request.app().database().await?;
 
         // Execute the query.
-        subscriptions::table
-            .inner_join(channels::table)
-            .select(Channel::as_select())
+        ChannelSubscription::query()
             .filter(subscription::by_user(me))
-            .page(limit_and_offset)
+            .page(page)
             .load_async(&mut connection)
             .await?
     };
@@ -113,41 +113,31 @@ async fn show(request: Request, _: Next) -> via::Result {
     // Clone the channel subscription we loaded during authorization.
     let subscription = request.channel().cloned().or_not_found()?;
 
-    let channel = {
+    // Load the associations for the channel in `subscription`.
+    let threads = {
         // Acquire a database connection.
         let mut connection = request.app().database().await?;
 
-        // Get a reference to the channel id from the subscription.
-        let channel_id = *subscription.channel().id();
+        // Get the id of the channel from `subscription`.
+        let channel_id = subscription.channel_id();
 
-        // Load the first page of recent messages in the channel.
-        let mut threads = ThreadWithUser::query()
+        // Load the first page of the most recent threads in the channel.
+        let mut recent = ThreadWithUser::query()
             .filter(thread::by_channel(channel_id).and(thread::is_thread()))
             .order(thread::recent())
-            .limit(25)
+            .limit(PER_PAGE)
             .load_async(&mut connection)
             .await?;
 
-        // Load the reactions for the threads in threads.
-        let threads = {
-            //
-            let ids = threads.iter().map(Identifiable::id).copied().collect();
+        // Reverse the first page of threads to match their render sequence.
+        recent.reverse();
 
-            // Load the reactions for each message in the first page.
-            let reactions = Reaction::to_threads(&mut connection, ids).await?;
-
-            // Reverse the order of the 25 most recent messages.
-            threads.reverse();
-
-            // Group reactions by their threads.
-            ThreadDetails::grouped_by(threads, reactions)
-        };
-
-        // Render threads within the channel.
-        subscription.with_threads(threads)
+        // Side load the top reactions to the threads in `threads`.
+        Reaction::to_threads(&mut connection, recent).await?
     };
 
-    Response::build().data(channel)
+    // Render `threads` within the channel subscription.
+    Response::build().data(subscription.with_threads(threads))
 }
 
 /// Update an existing channel.

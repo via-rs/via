@@ -1,5 +1,4 @@
-pub mod id;
 pub mod session;
 
-pub use id::Id;
 pub use session::{Authenticator, Session};
+pub use via_diesel::Id;

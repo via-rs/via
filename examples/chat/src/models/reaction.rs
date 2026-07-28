@@ -15,6 +15,7 @@ use via_diesel::AsyncQueryDsl;
 
 use super::{ThreadWithUser, User, UserPreview};
 use crate::app::Connection;
+use crate::models::ThreadDetails;
 use crate::schema::reactions;
 use crate::util::Id;
 
@@ -139,17 +140,20 @@ impl Reaction {
 
     pub async fn to_threads(
         connection: &mut Connection<'_>,
-        ids: Vec<Id>,
-    ) -> via::Result<Vec<ReactionPreview>> {
+        threads: Vec<ThreadWithUser>,
+    ) -> via::Result<Vec<ThreadDetails>> {
         const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
         const USERNAMES_PER_REACTION: i32 = 6;
 
-        diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
-            .bind::<sql_types::Array<sql_types::Uuid>, Vec<_>>(ids)
+        let thread_ids = threads.iter().map(|thread| thread.id()).copied().collect();
+        let reactions = diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
+            .bind::<sql_types::Array<sql_types::Uuid>, Vec<_>>(thread_ids)
             .bind::<sql_types::Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
             .bind::<sql_types::Integer, _>(USERNAMES_PER_REACTION)
             .load_async(connection)
-            .await
+            .await?;
+
+        Ok(ThreadDetails::grouped_by(threads, reactions))
     }
 
     pub fn with_user(self, user: UserPreview) -> ReactionWithUser {

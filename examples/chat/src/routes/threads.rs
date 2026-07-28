@@ -4,12 +4,13 @@ use diesel::prelude::*;
 use serde::Serialize;
 use via::request::PathParams;
 use via::{Error, Response, ResultExt};
-use via_diesel::{AsyncQueryDsl, LimitAndOffset, Paginate};
+use via_diesel::paginate::{Keyset, LimitAndOffset, Paginate};
+use via_diesel::{AsyncQueryDsl, Id};
 
-use crate::models::ThreadWithUser;
-use crate::models::thread::{by_channel, by_thread, is_thread};
+use crate::models::thread::{by_channel, by_id, by_thread, is_thread};
+use crate::models::{Thread, ThreadWithUser};
 use crate::routes::channels::Subscriber;
-use crate::util::Id;
+use crate::schema::threads;
 use crate::{Next, Request, Unicorn};
 
 #[derive(Clone, Debug, Serialize)]
@@ -28,32 +29,27 @@ async fn index(request: Request, _: Next) -> via::Result {
     let subscription = request.channel().cloned().or_not_found()?;
 
     // Parse an Option<Id> from the :thread-id path parameter.
-    let thread_id = request.param("thread-id").ok_and_then(str::parse)?;
+    let parent_id = request.param("thread-id").ok_and_then(str::parse)?;
 
     // Get pagination params from the URI query.
-    let keyset = request.query::<LimitAndOffset>()?;
+    let keyset = request.query::<Keyset>()?;
 
     // Load a page of threads.
     let threads = {
         // Acquire a database connection.
         let mut connection = request.app().database().await?;
+        let mut query = ThreadWithUser::query().page({
+            //
+            keyset.of(threads::created_at, threads::id)
+        });
 
-        // Borrow the channel id from `subscription`.
-        let channel_id = *subscription.channel().id();
-
-        if let Some(parent_id) = thread_id {
-            ThreadWithUser::query()
-                .filter(by_channel(channel_id).and(by_thread(parent_id)))
-                .page(keyset)
-                .load_async(&mut connection)
-                .await?
+        if let Some(thread_id) = parent_id {
+            query = query.filter(by_thread(thread_id));
         } else {
-            ThreadWithUser::query()
-                .filter(by_channel(channel_id).and(is_thread()))
-                .page(keyset)
-                .load_async(&mut connection)
-                .await?
+            query = query.filter(by_channel(subscription.channel_id()).and(is_thread()));
         }
+
+        query.load_async(&mut connection).await?
     };
 
     Response::build().data(threads)
@@ -68,13 +64,28 @@ async fn create(_: Request, _: Next) -> via::Result {
     todo!()
 }
 
-/// Retrieve a user by id.
+/// Retrieve a thread or reply by id.
 ///
-/// Responds to `GET /users/:user-id`.
+/// Responds to:
+/// - `GET /api/channels/:channel-id/threads/:thread-id`
+/// - `GET /api/channels/:channel-id/threads/:thread-id/replies/:reply-id`
 async fn show(request: Request, _: Next) -> via::Result {
-    let _params = request.params::<ThreadParams>()?;
+    // Parse an Option<Id> from the :thread-id path parameter.
+    let params = request.params::<ThreadParams>()?;
 
-    todo!()
+    // Get pagination params from the URI query.
+    let _keyset = request.query::<LimitAndOffset>()?;
+
+    let thread = {
+        // Acquire a database connection.
+        let mut connection = request.app().database().await?;
+
+        let id = params.reply_id.unwrap_or(params.thread_id);
+
+        Thread::find(&mut connection, id).await?
+    };
+
+    Response::build().data(thread)
 }
 
 /// Update an existing user.

@@ -5,13 +5,14 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use via::ResultExt;
-use via_diesel::paginate::PER_PAGE;
-use via_diesel::{AsyncQueryDsl, Id};
+use via_diesel::paginate::{Keyset, KeysetOf, PER_PAGE};
+use via_diesel::{AsyncQueryDsl, Paginate};
 
 use super::{Channel, ReactionPreview, User, UserPreview};
 use crate::app::Connection;
 use crate::models::Reaction;
 use crate::schema::{threads, users};
+use crate::util::Id;
 
 pub type JoinUsers = InnerJoin<threads::table, users::table>;
 pub type SelectThreadWithUser = Select<JoinUsers, AsSelect<ThreadWithUser, Pg>>;
@@ -96,19 +97,6 @@ via_diesel::sorts! {
     pub fn recent(#[desc] created_at, id) on threads;
 }
 
-// fn split_own_reactions(reactions: &mut Vec<ReactionPreview>, id: &Id) -> Vec<ReactionPreview> {
-//     // Sort the reactions vec so that our own reactions are last.
-//     reactions.sort_by_key(|reaction| *id == reaction.to_id());
-
-//     // Find the first index of a reaction that belongs to the id predicate.
-//     let pivot = reactions
-//         .iter()
-//         .position(|reaction| *id == reaction.to_id())
-//         .unwrap_or(reactions.len());
-
-//     reactions.split_off(pivot)
-// }
-
 impl Thread {
     pub async fn find(connection: &mut Connection<'_>, id: Id) -> via::Result<ThreadDetails> {
         let target = diesel::alias!(threads as target);
@@ -169,6 +157,26 @@ impl Thread {
 
     pub fn query() -> threads::table {
         threads::table
+    }
+
+    pub async fn replies(
+        connection: &mut Connection<'_>,
+        thread_id: Id,
+        keyset: Keyset<Id>,
+    ) -> via::Result<Vec<ThreadDetails>> {
+        let replies = ThreadWithUser::query()
+            .filter(by_thread(thread_id))
+            .order(recent())
+            .page(keyset.of(threads::created_at, threads::id))
+            .load_async(connection)
+            .await?;
+
+        // Side load the reactions to the threads in `threads`.
+        let mut replies = Reaction::to_threads(connection, replies).await?;
+
+        replies.reverse();
+
+        Ok(replies)
     }
 
     pub fn with_user(self, user: UserPreview) -> ThreadWithUser {

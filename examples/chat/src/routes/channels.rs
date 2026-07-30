@@ -20,6 +20,9 @@ struct Protected(ChannelSubscription);
 
 pub trait Subscriber {
     fn channel(&self) -> Option<&ChannelSubscription>;
+    fn channel_id(&self) -> Option<Id> {
+        self.channel().map(ChannelSubscription::channel_id)
+    }
 }
 
 pub async fn authorization(mut request: Request, next: Next) -> via::Result {
@@ -56,21 +59,12 @@ async fn index(request: Request, _: Next) -> via::Result {
     // Get the id of the active user from the session.
     let me = request.me()?;
 
-    // Get pagination params from the URI query.
-    let page = request.query::<LimitAndOffset>()?;
-
     // Load the active user's subscriptions.
-    let channels = {
-        // Acquire a database connection.
-        let mut connection = request.app().database().await?;
-
-        // Execute the query.
-        ChannelSubscription::query()
-            .filter(subscription::by_user(me))
-            .page(page)
-            .load_async(&mut connection)
-            .await?
-    };
+    let channels = ChannelSubscription::query()
+        .filter(subscription::by_user(me))
+        .page(request.query::<LimitAndOffset>()?)
+        .load_async(&mut request.app().database().await?)
+        .await?;
 
     Response::build().data(channels)
 }

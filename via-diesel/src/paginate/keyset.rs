@@ -10,31 +10,35 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use via::request::QueryParams;
 
 use super::{Limit, Paginate};
-use crate::id::{self, Id};
+
+#[cfg(feature = "uuid")]
+type PkSqlType = sql_types::Uuid;
+
+#[cfg(not(feature = "uuid"))]
+type PkSqlType = sql_types::BigInt;
 
 type DtzValueExpr = <OffsetDateTime as AsExpression<sql_types::Timestamptz>>::Expression;
-type PkValueExpr = <Id as AsExpression<id::SqlType>>::Expression;
+type PkValueExpr<T> = <T as AsExpression<PkSqlType>>::Expression;
 
-type AfterKeysetExpr<Dtz, Pk> = sql::Or<
+type AfterKeysetExpr<T, Dtz, Pk> = sql::Or<
     sql::Gt<Dtz, DtzValueExpr>,
-    sql::And<sql::Eq<Dtz, DtzValueExpr>, sql::Gt<Pk, PkValueExpr>>,
+    sql::And<sql::Eq<Dtz, DtzValueExpr>, sql::Gt<Pk, PkValueExpr<T>>>,
 >;
 
-type BeforeKeysetExpr<Dtz, Pk> = sql::Or<
+type BeforeKeysetExpr<T, Dtz, Pk> = sql::Or<
     sql::Lt<Dtz, DtzValueExpr>,
-    sql::And<sql::Eq<Dtz, DtzValueExpr>, sql::Lt<Pk, PkValueExpr>>,
+    sql::And<sql::Eq<Dtz, DtzValueExpr>, sql::Lt<Pk, PkValueExpr<T>>>,
 >;
 
 #[derive(Debug)]
-pub struct Keyset {
-    after: bool,
+pub struct Keyset<T> {
     limit: Limit,
-    value: Option<KeysetArgs>,
+    value: Option<KeysetArgs<T>>,
 }
 
-pub struct KeysetOf<Dtz, Pk> {
-    source: KeysetSource<Dtz, Pk>,
-    keyset: Keyset,
+pub struct KeysetOf<T, Dtz, Pk> {
+    of: KeysetSource<Dtz, Pk>,
+    keyset: Keyset<T>,
 }
 
 #[derive(Debug)]
@@ -45,9 +49,10 @@ enum InvalidKeyset {
 }
 
 #[derive(Debug)]
-struct KeysetArgs {
+struct KeysetArgs<T> {
+    after: bool,
     dtz: OffsetDateTime,
-    pk: Id,
+    pk: T,
 }
 
 struct KeysetSource<Dtz, Pk> {
@@ -55,13 +60,14 @@ struct KeysetSource<Dtz, Pk> {
     pk: Pk,
 }
 
-fn after_keyset<Dtz, Pk>(
+fn after_keyset<T, Dtz, Pk>(
     source: &KeysetSource<Dtz, Pk>,
-    binds: &KeysetArgs,
-) -> AfterKeysetExpr<Dtz, Pk>
+    binds: &KeysetArgs<T>,
+) -> AfterKeysetExpr<T, Dtz, Pk>
 where
     Dtz: Expression<SqlType = sql_types::Timestamptz> + Copy + Send,
-    Pk: Expression<SqlType = id::SqlType> + Copy + Send,
+    Pk: Expression<SqlType = PkSqlType> + Copy + Send,
+    T: AsExpression<PkSqlType> + Copy + Send,
 {
     source
         .dtz
@@ -69,13 +75,14 @@ where
         .or(source.dtz.eq(binds.dtz).and(source.pk.gt(binds.pk)))
 }
 
-fn before_keyset<Dtz, Pk>(
+fn before_keyset<T, Dtz, Pk>(
     source: &KeysetSource<Dtz, Pk>,
-    binds: &KeysetArgs,
-) -> BeforeKeysetExpr<Dtz, Pk>
+    binds: &KeysetArgs<T>,
+) -> BeforeKeysetExpr<T, Dtz, Pk>
 where
     Dtz: Expression<SqlType = sql_types::Timestamptz> + Copy + Send,
-    Pk: Expression<SqlType = id::SqlType> + Copy + Send,
+    Pk: Expression<SqlType = PkSqlType> + Copy + Send,
+    T: AsExpression<PkSqlType> + Copy + Send,
 {
     source
         .dtz
@@ -83,32 +90,31 @@ where
         .or(source.dtz.eq(binds.dtz).and(source.pk.lt(binds.pk)))
 }
 
-impl Keyset {
-    pub fn of<Dtz, Pk>(self, dtz: Dtz, pk: Pk) -> KeysetOf<Dtz, Pk> {
+impl<T> Keyset<T> {
+    pub fn of<Dtz, Pk>(self, dtz: Dtz, pk: Pk) -> KeysetOf<T, Dtz, Pk> {
         KeysetOf {
-            source: KeysetSource { dtz, pk },
+            of: KeysetSource { dtz, pk },
             keyset: self,
         }
     }
 }
 
-impl TryFrom<QueryParams<'_>> for Keyset {
+impl<T: FromStr> TryFrom<QueryParams<'_>> for Keyset<T> {
     type Error = via::Error;
 
     fn try_from(query: QueryParams<'_>) -> Result<Self, Self::Error> {
-        if let Some(after) = query
+        if let Some(mut binds) = query
             .first("after")
             .percent_decode()
-            .ok_and_then(str::parse)?
+            .ok_and_then::<_, KeysetArgs<T>, _>(str::parse)?
         {
+            binds.after = true;
             Ok(Self {
-                after: true,
                 limit: query.first("limit").try_into()?,
-                value: Some(after),
+                value: Some(binds),
             })
         } else {
             Ok(Self {
-                after: false,
                 limit: query.first("limit").try_into()?,
                 value: query
                     .first("before")
@@ -119,43 +125,54 @@ impl TryFrom<QueryParams<'_>> for Keyset {
     }
 }
 
-impl<T, Dtz, Pk> Paginate<KeysetOf<Dtz, Pk>> for T
+impl<T, Dtz, Pk> KeysetOf<T, Dtz, Pk> {
+    fn binds(&self) -> Option<&KeysetArgs<T>> {
+        self.keyset().value.as_ref()
+    }
+
+    fn limit(&self) -> i64 {
+        self.keyset().limit.value()
+    }
+
+    fn keyset(&self) -> &Keyset<T> {
+        &self.keyset
+    }
+}
+
+impl<Src, T, Dtz, Pk> Paginate<KeysetOf<T, Dtz, Pk>> for Src
 where
-    //
-    // Convert the original query into a PostgreSQL-specific boxed
-    // query. A boxed query retains the same type when filters and
-    // limits are conditionally applied.
-    //
-    T: QueryDsl + BoxedDsl<'static, Pg>,
+    Src: QueryDsl + BoxedDsl<'static, Pg>,
     //
     //
     //
-    IntoBoxed<'static, T, Pg>: FilterDsl<AfterKeysetExpr<Dtz, Pk>, Output = IntoBoxed<'static, T, Pg>>
-        + FilterDsl<BeforeKeysetExpr<Dtz, Pk>, Output = IntoBoxed<'static, T, Pg>>
-        + LimitDsl<Output = IntoBoxed<'static, T, Pg>>,
+    IntoBoxed<'static, Src, Pg>: FilterDsl<AfterKeysetExpr<T, Dtz, Pk>, Output = IntoBoxed<'static, Src, Pg>>
+        + FilterDsl<BeforeKeysetExpr<T, Dtz, Pk>, Output = IntoBoxed<'static, Src, Pg>>
+        + LimitDsl<Output = IntoBoxed<'static, Src, Pg>>,
     //
-    // A timestamp column and primary key used as a stable
-    // tiebreaker.
+    // A timestampz column and primary key column are required.
     //
     Dtz: Expression<SqlType = sql_types::Timestamptz> + Copy + Send,
-    Pk: Expression<SqlType = id::SqlType> + Copy + Send,
+    Pk: Expression<SqlType = PkSqlType> + Copy + Send,
+    T: AsExpression<PkSqlType> + Copy + Send,
 {
-    type Output = IntoBoxed<'static, T, Pg>;
+    type Output = IntoBoxed<'static, Src, Pg>;
 
-    fn page(self, page: KeysetOf<Dtz, Pk>) -> Self::Output {
+    fn page(self, keyset: KeysetOf<T, Dtz, Pk>) -> Self::Output {
         let query = self.into_boxed::<Pg>();
-        let keyset = &page.keyset;
 
-        if let Some(binds) = keyset.value.as_ref() {
-            if keyset.after {
-                let predicate = after_keyset(&page.source, binds);
-                query.limit(keyset.limit.value()).filter(predicate)
-            } else {
-                let predicate = before_keyset(&page.source, binds);
-                query.limit(keyset.limit.value()).filter(predicate)
-            }
-        } else {
-            query.limit(keyset.limit.value())
+        match keyset.binds() {
+            // After keyset
+            Some(binds) if binds.after => query
+                .limit(keyset.limit())
+                .filter(after_keyset(&keyset.of, binds)),
+
+            // Before keyset
+            Some(binds) => query
+                .limit(keyset.limit())
+                .filter(before_keyset(&keyset.of, binds)),
+
+            // Empty keyset
+            None => query.limit(keyset.limit()),
         }
     }
 }
@@ -172,13 +189,14 @@ impl Display for InvalidKeyset {
     }
 }
 
-impl FromStr for KeysetArgs {
+impl<T: FromStr> FromStr for KeysetArgs<T> {
     type Err = InvalidKeyset;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let (dtz, pk) = input.split_once(',').ok_or(InvalidKeyset::Format)?;
 
         Ok(Self {
+            after: false,
             dtz: OffsetDateTime::parse(dtz, &Rfc3339).or(Err(InvalidKeyset::DateTime))?,
             pk: pk.parse().or(Err(InvalidKeyset::Id))?,
         })

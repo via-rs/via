@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::str::FromStr;
 use via::request::PathParams;
 use via::{Error, Response, ResultExt};
-use via_diesel::paginate::{Keyset, LimitAndOffset};
+use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
 use crate::models::thread::{by_channel, by_id, is_thread, recent};
@@ -25,7 +25,8 @@ async fn index(request: Request, _: Next) -> via::Result {
     let channel_id = request.channel_id().or_not_found()?;
 
     // Source keyset arguments from the URI query.
-    let by_keyset = request.query::<Keyset<Iso8601, Id>>()?;
+    // If the limit query param is > the default per page, 400 Bad Request.
+    let by_keyset = request.query::<Keyset<Iso8601, Id, PER_PAGE>>()?;
 
     // Load a page of threads.
     let mut feed = {

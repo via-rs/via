@@ -8,7 +8,8 @@ use std::fmt::Display;
 use std::str::FromStr;
 use via::request::QueryParams;
 
-use super::{Limit, Paginate};
+use super::Paginate;
+use super::limit::{DEFAULT_MAX_LIMIT, Limit};
 
 type PivotValueExpr<Pc, Pv> = <Pv as AsExpression<sql::SqlTypeOf<Pc>>>::Expression;
 type TiebreakerValueExpr<Tc, Tv> = <Tv as AsExpression<sql::SqlTypeOf<Tc>>>::Expression;
@@ -24,14 +25,14 @@ type BeforeKeyset<Pc, Tc, Pv, Tv> = sql::Or<
 >;
 
 #[derive(Debug)]
-pub struct Keyset<Pivot, Tiebreaker> {
-    limit: Limit,
+pub struct Keyset<Pivot, Tiebreaker, const MAX: i64 = DEFAULT_MAX_LIMIT> {
+    limit: Limit<MAX>,
     value: Option<KeysetArgs<Pivot, Tiebreaker>>,
 }
 
-pub struct KeysetExpr<Pc, Tc, Pv, Tv> {
+pub struct KeysetExpr<Pc, Tc, Pv, Tv, const MAX: i64> {
     lhs: (Pc, Tc),
-    rhs: Keyset<Pv, Tv>,
+    rhs: Keyset<Pv, Tv, MAX>,
 }
 
 #[derive(Debug)]
@@ -74,8 +75,8 @@ where
     lhs.0.lt(rhs.0).or(lhs.0.eq(rhs.0).and(lhs.1.lt(rhs.1)))
 }
 
-impl<Pv, Tv> Keyset<Pv, Tv> {
-    pub fn of<Pc, Tc>(self, pivot: Pc, tiebreaker: Tc) -> KeysetExpr<Pc, Tc, Pv, Tv> {
+impl<Pv, Tv, const MAX: i64> Keyset<Pv, Tv, MAX> {
+    pub fn of<Pc, Tc>(self, pivot: Pc, tiebreaker: Tc) -> KeysetExpr<Pc, Tc, Pv, Tv, MAX> {
         KeysetExpr {
             lhs: (pivot, tiebreaker),
             rhs: self,
@@ -133,7 +134,7 @@ where
     }
 }
 
-impl<Pv, Tv> TryFrom<QueryParams<'_>> for Keyset<Pv, Tv>
+impl<Pv, Tv, const MAX: i64> TryFrom<QueryParams<'_>> for Keyset<Pv, Tv, MAX>
 where
     Pv: FromStr,
     Tv: FromStr,
@@ -160,7 +161,7 @@ where
     }
 }
 
-impl<Pc, Tc, Pv, Tv> KeysetExpr<Pc, Tc, Pv, Tv> {
+impl<Pc, Tc, Pv, Tv, const MAX: i64> KeysetExpr<Pc, Tc, Pv, Tv, MAX> {
     fn limit(&self) -> i64 {
         self.rhs.limit.value()
     }
@@ -170,7 +171,7 @@ impl<Pc, Tc, Pv, Tv> KeysetExpr<Pc, Tc, Pv, Tv> {
     }
 }
 
-impl<Src, Pc, Tc, Pv, Tv> Paginate<KeysetExpr<Pc, Tc, Pv, Tv>> for Src
+impl<Src, Pc, Tc, Pv, Tv, const MAX: i64> Paginate<KeysetExpr<Pc, Tc, Pv, Tv, MAX>> for Src
 where
     Src: QueryDsl + BoxedDsl<'static, Pg>,
     //
@@ -197,7 +198,7 @@ where
 {
     type Output = IntoBoxed<'static, Src, Pg>;
 
-    fn page(self, keyset: KeysetExpr<Pc, Tc, Pv, Tv>) -> Self::Output {
+    fn page(self, keyset: KeysetExpr<Pc, Tc, Pv, Tv, MAX>) -> Self::Output {
         let query = self.into_boxed::<Pg>();
 
         match keyset.rhs() {

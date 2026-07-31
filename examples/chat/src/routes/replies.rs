@@ -4,7 +4,7 @@ use diesel::prelude::*;
 use serde::Serialize;
 use via::request::PathParams;
 use via::{Error, Response, ResultExt, deny};
-use via_diesel::paginate::{Keyset, LimitAndOffset};
+use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
 use crate::models::thread::{by_channel, by_thread, recent};
@@ -33,7 +33,8 @@ async fn index(request: Request, _: Next) -> via::Result {
     let thread_id = request.param("thread-id").parse()?;
 
     // Source keyset arguments from the URI query.
-    let by_keyset = request.query::<Keyset<Iso8601, Id>>()?;
+    // If the limit query param is > the default per page, 400 Bad Request.
+    let by_keyset = request.query::<Keyset<Iso8601, Id, PER_PAGE>>()?;
 
     // Load the replies to the thread with `thread_id`.
     let mut feed = {

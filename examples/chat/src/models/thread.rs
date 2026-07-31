@@ -94,7 +94,7 @@ via_diesel::filters! {
 }
 
 via_diesel::sorts! {
-    pub fn recent(#[desc] created_at, id) on threads;
+    pub fn recent(#[desc] created_at, #[desc] id) on threads;
 }
 
 impl Thread {

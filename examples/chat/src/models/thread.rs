@@ -5,7 +5,7 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use via::ResultExt;
-use via_diesel::paginate::{Keyset, KeysetOf, PER_PAGE};
+use via_diesel::paginate::{Keyset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
 use super::{Channel, ReactionPreview, User, UserPreview};
@@ -157,26 +157,6 @@ impl Thread {
 
     pub fn query() -> threads::table {
         threads::table
-    }
-
-    pub async fn replies(
-        connection: &mut Connection<'_>,
-        thread_id: Id,
-        keyset: Keyset<Id>,
-    ) -> via::Result<Vec<ThreadDetails>> {
-        let replies = ThreadWithUser::query()
-            .filter(by_thread(thread_id))
-            .order(recent())
-            .page(keyset.of(threads::created_at, threads::id))
-            .load_async(connection)
-            .await?;
-
-        // Side load the reactions to the threads in `threads`.
-        let mut replies = Reaction::to_threads(connection, replies).await?;
-
-        replies.reverse();
-
-        Ok(replies)
     }
 
     pub fn with_user(self, user: UserPreview) -> ThreadWithUser {

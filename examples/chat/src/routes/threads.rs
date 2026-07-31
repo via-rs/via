@@ -2,6 +2,7 @@ via::resource!(app = Unicorn);
 
 use diesel::prelude::*;
 use serde::Serialize;
+use std::str::FromStr;
 use via::request::PathParams;
 use via::{Error, Response, ResultExt};
 use via_diesel::paginate::{Keyset, LimitAndOffset};
@@ -11,7 +12,7 @@ use crate::models::thread::{by_channel, by_id, is_thread, recent};
 use crate::models::{Reaction, Thread, ThreadWithUser};
 use crate::routes::channels::Subscriber;
 use crate::schema::threads;
-use crate::util::Id;
+use crate::util::{Id, Iso8601};
 use crate::{Next, Request, Unicorn};
 
 /// List threads.
@@ -24,7 +25,7 @@ async fn index(request: Request, _: Next) -> via::Result {
     let channel_id = request.channel_id().or_not_found()?;
 
     // Source keyset arguments from the URI query.
-    let by_keyset = request.query::<Keyset<Id>>()?;
+    let by_keyset = request.query::<Keyset<Iso8601, Id>>()?;
 
     // Load a page of threads.
     let mut feed = {

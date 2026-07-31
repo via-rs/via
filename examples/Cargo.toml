@@ -84,7 +84,7 @@ zeroize = { version = "1", features = ["serde"] }
 [dependencies.via-diesel]
 path = "../via-diesel"
 version = "=0.1.0-beta.3"
-features = ["postgres", "time", "uuid"]
+features = ["postgres"]
 
 [dependencies.via-pubsub]
 path = "../via-pubsub"

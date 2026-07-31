@@ -1,7 +1,5 @@
-#[cfg(all(feature = "postgres", feature = "time"))]
 mod keyset;
 
-#[cfg(all(feature = "postgres", feature = "time"))]
 pub use keyset::*;
 
 use diesel::expression::AsExpression;

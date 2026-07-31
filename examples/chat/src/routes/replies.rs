@@ -11,7 +11,7 @@ use crate::models::thread::{by_channel, by_thread, recent};
 use crate::models::{Reaction, Thread, ThreadWithUser};
 use crate::routes::channels::Subscriber;
 use crate::schema::threads;
-use crate::util::Id;
+use crate::util::{Id, Iso8601};
 use crate::{Next, Request, Unicorn};
 
 #[derive(Clone, Debug, Serialize)]
@@ -33,7 +33,7 @@ async fn index(request: Request, _: Next) -> via::Result {
     let thread_id = request.param("thread-id").parse()?;
 
     // Source keyset arguments from the URI query.
-    let by_keyset = request.query::<Keyset<Id>>()?;
+    let by_keyset = request.query::<Keyset<Iso8601, Id>>()?;
 
     // Load the replies to the thread with `thread_id`.
     let mut feed = {

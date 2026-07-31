@@ -4,6 +4,7 @@ use diesel::expression_methods::{BoolExpressionMethods, ExpressionMethods};
 use diesel::pg::Pg;
 use diesel::query_dsl::methods::{BoxedDsl, FilterDsl, LimitDsl};
 use diesel::{Expression, QueryDsl, sql_types};
+use std::fmt::Display;
 use std::str::FromStr;
 use via::request::QueryParams;
 
@@ -86,7 +87,8 @@ impl<Pv, Tv> KeysetArgs<Pv, Tv>
 where
     Pv: FromStr,
     Tv: FromStr,
-    via::Error: From<Pv::Err> + From<Tv::Err>,
+    Pv::Err: Display,
+    Tv::Err: Display,
 {
     fn after(input: &str) -> via::Result<Self> {
         let mut args = input.parse::<Self>()?;
@@ -103,18 +105,30 @@ impl<Pv, Tv> FromStr for KeysetArgs<Pv, Tv>
 where
     Pv: FromStr,
     Tv: FromStr,
-    via::Error: From<Pv::Err> + From<Tv::Err>,
+    Pv::Err: Display,
+    Tv::Err: Display,
 {
     type Err = via::Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let Some((pivot, tiebreaker)) = input.split_once(',') else {
-            via::deny!(400, "invalid keyset format");
+            via::deny!(
+                400,
+                "invalid keyset (format): expected a comma separated pair"
+            );
         };
+
+        let pivot = pivot
+            .parse()
+            .map_err(|e| via::err!(400, "invalid keyset (pivot): {}", e))?;
+
+        let tiebreaker = tiebreaker
+            .parse()
+            .map_err(|e| via::err!(400, "invalid keyset (tiebreaker): {}", e))?;
 
         Ok(Self {
             after: false,
-            value: (pivot.parse()?, tiebreaker.parse()?),
+            value: (pivot, tiebreaker),
         })
     }
 }
@@ -123,7 +137,8 @@ impl<Pv, Tv> TryFrom<QueryParams<'_>> for Keyset<Pv, Tv>
 where
     Pv: FromStr,
     Tv: FromStr,
-    via::Error: From<Pv::Err> + From<Tv::Err>,
+    Pv::Err: Display,
+    Tv::Err: Display,
 {
     type Error = via::Error;
 

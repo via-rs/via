@@ -1,8 +1,7 @@
 via::resource!(app = Unicorn);
 
-use diesel::prelude::*;
+use diesel::{BoolExpressionMethods, QueryDsl};
 use serde::Serialize;
-use std::str::FromStr;
 use via::request::PathParams;
 use via::{Error, Response, ResultExt};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};

@@ -19,7 +19,8 @@ pub trait Paginate<T> {
 
 #[derive(Debug)]
 pub struct LimitAndPage<const MAX: i64 = DEFAULT_MAX_LIMIT> {
-    limit_and_offset: LimitAndOffset<MAX>,
+    limit: Limit<MAX>,
+    page: i64,
 }
 
 #[derive(Debug)]
@@ -48,7 +49,10 @@ where
     type Output = Offset<<T as LimitDsl>::Output>;
 
     fn page(self, cursor: LimitAndPage<MAX>) -> Self::Output {
-        self.page(cursor.limit_and_offset)
+        let limit = cursor.limit.value();
+        let offset = limit.saturating_mul(cursor.page.max(1) - 1);
+
+        self.limit(limit).offset(offset)
     }
 }
 
@@ -71,18 +75,13 @@ impl<const MAX: i64> TryFrom<QueryParams<'_>> for LimitAndPage<MAX> {
     type Error = via::Error;
 
     fn try_from(query: QueryParams<'_>) -> via::Result<Self> {
-        let page = query.first("page").ok_and_then(str::parse)?.unwrap_or(1i64);
         let limit = Limit::try_from(query.first("limit"))?;
+        let page = query.first("page").ok_and_then(str::parse)?.unwrap_or(1i64);
 
         if page < 1 {
             deny!(400, "page must be a positive integer");
         }
 
-        Ok(Self {
-            limit_and_offset: LimitAndOffset {
-                offset: (page - 1).saturating_mul(limit.value()),
-                limit,
-            },
-        })
+        Ok(Self { limit, page })
     }
 }

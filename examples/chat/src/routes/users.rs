@@ -8,12 +8,13 @@
 
 via::resource!(app = Unicorn, guard = [index, member]);
 
-use diesel::prelude::*;
+use diesel::{Identifiable, QueryDsl};
 use via::request::Payloadz;
 use via::{Payload, Response, deny};
-use via_diesel::{AsyncQueryDsl, LimitAndOffset, Paginate};
+use via_diesel::paginate::{LimitAndOffset, LimitAndPage};
+use via_diesel::{AsyncQueryDsl, Paginate};
 
-use crate::models::user::{User, by_id, recent};
+use crate::models::user::{User, by_id, by_username_asc};
 use crate::util::{Authenticator, Id, Session};
 use crate::{Next, Request, Unicorn};
 
@@ -21,17 +22,18 @@ use crate::{Next, Request, Unicorn};
 ///
 /// Responds to `GET /users`.
 async fn index(request: Request, _: Next) -> via::Result {
-    // Get pagination params from the URI query.
-    let limit_and_offset = request.query::<LimitAndOffset>()?;
+    // Source pagination arguments from the URI query.
+    let by_page_number = request.query::<LimitAndPage>()?;
 
-    // Load a page of users.
+    // Load a page of users, sorted alphabetically by their username.
     let users = {
-        // Acquire a database connection.
+        // Checkout a database connection.
         let mut connection = request.app().database().await?;
 
+        // Execute the query.
         User::query()
-            .order(recent())
-            .page(limit_and_offset)
+            .order(by_username_asc())
+            .page(by_page_number)
             .load_async(&mut connection)
             .await?
     };

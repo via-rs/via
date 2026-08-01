@@ -1,6 +1,6 @@
 via::resource!(app = Unicorn);
 
-use diesel::prelude::*;
+use diesel::{BoolExpressionMethods, QueryDsl};
 use serde::Serialize;
 use via::request::PathParams;
 use via::{Error, Response, ResultExt, deny};

@@ -96,7 +96,7 @@ via_diesel::filters! {
 }
 
 via_diesel::sorts! {
-    pub fn recent(#[desc] created_at, id) on users;
+    pub fn by_username_asc(username) on users;
 }
 
 /// Deserializes a plaintext password directly into an opaque password hash.

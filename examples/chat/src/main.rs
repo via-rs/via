@@ -27,7 +27,7 @@ use via::{Router, Server, cookies, rescue};
 
 use app::{SESSION, Unicorn};
 use routes::auth::{login, logout, me};
-use routes::{channels, reactions, threads, users};
+use routes::{channels, reactions, replies, threads, users};
 use util::session::{self, auth_required, authenticate};
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
@@ -128,8 +128,8 @@ fn routes(home: via::Route<Unicorn>) {
                         .route("/:reaction-id", reactions::member());
 
                     // The ./:thread-id/replies resource
-                    path.route("/replies", threads::collection())
-                        .route("/:reply-id", threads::member())
+                    path.route("/replies", replies::collection())
+                        .route("/:reply-id", replies::member())
                         // The ./:thread-id/replies/:reply-id/reactions resource
                         .route("/reactions", reactions::collection())
                         .route("/:reaction-id", reactions::member());

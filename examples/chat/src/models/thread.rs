@@ -4,14 +4,18 @@ use diesel::pg::Pg;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use via_diesel::AsyncQueryDsl;
+use via::ResultExt;
+use via_diesel::paginate::{Keyset, PER_PAGE};
+use via_diesel::{AsyncQueryDsl, Paginate};
 
 use super::{Channel, ReactionPreview, User, UserPreview};
 use crate::app::Connection;
+use crate::models::Reaction;
 use crate::schema::{threads, users};
 use crate::util::Id;
 
-type JoinUsers = InnerJoin<threads::table, users::table>;
+pub type JoinUsers = InnerJoin<threads::table, users::table>;
+pub type SelectThreadWithUser = Select<JoinUsers, AsSelect<ThreadWithUser, Pg>>;
 
 #[derive(Associations, Debug, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
 #[diesel(belongs_to(Channel))]
@@ -22,6 +26,13 @@ pub struct Thread {
     id: Id,
     body: String,
 
+    channel_id: Id,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_id: Option<Id>,
+
+    user_id: Id,
+
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
 
@@ -30,10 +41,6 @@ pub struct Thread {
 
     total_reactions: i64,
     total_replies: i64,
-
-    channel_id: Id,
-    thread_id: Option<Id>,
-    user_id: Id,
 }
 
 #[derive(Debug, Deserialize, Insertable)]
@@ -69,12 +76,12 @@ pub struct ThreadDetails {
     #[serde(flatten)]
     thread: Thread,
 
+    user: UserPreview,
+
     reactions: Vec<ReactionPreview>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     replies: Vec<ThreadDetails>,
-
-    user: UserPreview,
 }
 
 via_diesel::filters! {
@@ -87,52 +94,58 @@ via_diesel::filters! {
 }
 
 via_diesel::sorts! {
-    pub fn recent(#[desc] created_at, id) on threads;
+    pub fn recent(#[desc] created_at, #[desc] id) on threads;
 }
 
-// fn split_own_reactions(reactions: &mut Vec<ReactionPreview>, id: &Id) -> Vec<ReactionPreview> {
-//     // Sort the reactions vec so that our own reactions are last.
-//     reactions.sort_by_key(|reaction| *id == reaction.to_id());
-
-//     // Find the first index of a reaction that belongs to the id predicate.
-//     let pivot = reactions
-//         .iter()
-//         .position(|reaction| *id == reaction.to_id())
-//         .unwrap_or(reactions.len());
-
-//     reactions.split_off(pivot)
-// }
-
 impl Thread {
-    // pub async fn find(connection: &mut Connection<'_>, id: &Id) -> via::Result<ThreadDetails> {
-    //     // Load the thread by id along with the first page of replies.
-    //     let mut threads = Thread::with_author()
-    //         .select(ThreadWithUser::as_select())
-    //         .filter(by_id(id).or(by_thread(id)))
-    //         .order(recent())
-    //         .limit(PER_PAGE + 1)
-    //         .load(connection)
-    //         .await?;
+    pub async fn find(connection: &mut Connection<'_>, id: Id) -> via::Result<ThreadDetails> {
+        let target = diesel::alias!(threads as target);
 
-    //     // Aggregate the reactions for each thread.
-    //     let mut reactions = {
-    //         let ids = threads.iter().map(Identifiable::id);
-    //         Reaction::to_threads(connection, ids).await?
-    //     };
+        let target_id = target.field(threads::id);
+        let target_thread_id = target.field(threads::thread_id);
 
-    //     // Take the last thread from the vec of threads. The query
-    //     // orders threads by created_at DESC. Therefore, the last item in the
-    //     // vec is always the parent.
-    //     let thread = threads.pop().or_not_found()?;
+        let belongs_to_target_root = target_thread_id
+            .is_null()
+            .and(
+                threads::id
+                    .eq(target_id)
+                    .or(threads::thread_id.eq(target_id.nullable())),
+            )
+            .or(target_thread_id.is_not_null().and(
+                threads::id
+                    .nullable()
+                    .eq(target_thread_id)
+                    .or(threads::thread_id.eq(target_thread_id)),
+            ));
 
-    //     // Move the reactions to thread into their own vec.
-    //     let own_reactions = split_own_reactions(&mut reactions, id);
+        // Load the thread by id along with the first page of replies.
+        let mut replies = {
+            let threads = threads::table
+                .inner_join(target.on(target_id.eq(id).and(belongs_to_target_root)))
+                .inner_join(users::table.on(users::id.eq(threads::user_id)))
+                .select(ThreadWithUser::as_select())
+                .filter(by_id(id).or(by_thread(id)))
+                .order(recent())
+                .limit(PER_PAGE + 1)
+                .load_async(connection)
+                .await?;
 
-    //     // Group replies to the thread with with their reactions.
-    //     let replies = ThreadDetails::grouped_by(threads, reactions);
+            // Side load the reactions to the threads in `threads`.
+            Reaction::to_threads(connection, threads).await?
+        };
 
-    //     Ok(thread.into_thread(own_reactions, replies))
-    // }
+        // Pop the parent thread from `replies`.
+        // They are ordered by recent. Therefore, the parent is always last.
+        let mut thread = replies.pop().or_not_found()?;
+
+        // Set the replies field of `thread` to `replies`.
+        thread.replies = replies;
+
+        // Reverse the replies to match their render sequence.
+        thread.replies.reverse();
+
+        Ok(thread)
+    }
 
     pub async fn create(connection: &mut Connection<'_>, init: NewThread) -> via::Result<Self> {
         diesel::insert_into(threads::table)

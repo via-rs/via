@@ -5,7 +5,7 @@ use via::guard::bytes::case_sensitive;
 use via::guard::{self, Predicate, method, on};
 use via::{Middleware, Response, err};
 
-use super::id::Id;
+use super::Id;
 use crate::Request;
 use crate::app::{IdentityExtension, Unicorn};
 use crate::models::User;

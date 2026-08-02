@@ -8,8 +8,14 @@ description = "An async diesel integration for Via built on top of diesel-async.
 homepage = "https://github.com/via-rs/via"
 repository = "https://github.com/via-rs/via"
 
+[features]
+postgres = ["diesel/postgres"]
+mysql = ["diesel/mysql"]
+sqlite = ["diesel/sqlite"]
+
 [dependencies]
 diesel-async = "0.9"
 diesel = "2"
 http = "1"
+serde = "1"
 via = { version = "=2.0.0-gm.61", path = "../via" }

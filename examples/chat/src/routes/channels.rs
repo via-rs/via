@@ -1,9 +1,12 @@
 via::resource!(app = Unicorn, guard = collection);
 
-use diesel::prelude::*;
+use diesel::{BoolExpressionMethods, Identifiable, QueryDsl};
+use http::StatusCode;
 use std::ops::ControlFlow;
+use tokio::task::coop;
 use via::{Payload, Response, ResultExt, deny};
-use via_diesel::{AsyncQueryDsl, LimitAndOffset, Paginate};
+use via_diesel::paginate::PER_PAGE;
+use via_diesel::{AsyncQueryDsl, LimitAndPage, Paginate};
 use via_pubsub::Event;
 
 use crate::models::subscription::{self, AuthClaims, ChannelSubscription};
@@ -18,24 +21,32 @@ struct Protected(ChannelSubscription);
 
 pub trait Subscriber {
     fn channel(&self) -> Option<&ChannelSubscription>;
+    fn channel_id(&self) -> Option<Id> {
+        self.channel().map(ChannelSubscription::channel_id)
+    }
 }
 
 pub async fn authorization(mut request: Request, next: Next) -> via::Result {
-    // Get the id of the active user from the session.
+    // Get the id of the user from the session.
     let me = request.me()?;
 
     // Parse an Id from the :channel-id path parameter.
     let id = request.param("channel-id").parse::<Id>()?;
 
-    // Find the active user's subscription to the channel.
+    // Find the current user's subscription to the channel.
     let channel = {
-        // Acquire a database connection.
+        // Checkout a database connection.
         let mut connection = request.app().database().await?;
+
+        // The user's subscription to the channel must exist and have the
+        // minimum auth claims in order to proceed.
+        let by_channel_and_user = subscription::by_channel(id)
+            .and(subscription::by_user(me))
+            .and(subscription::can_participate());
 
         // Execute the query.
         ChannelSubscription::query()
-            .filter(subscription::by_channel(id).and(subscription::by_user(me)))
-            .filter(subscription::can_participate())
+            .filter(by_channel_and_user)
             .first_async(&mut connection)
             .await?
     };
@@ -54,20 +65,17 @@ async fn index(request: Request, _: Next) -> via::Result {
     // Get the id of the active user from the session.
     let me = request.me()?;
 
-    // Get pagination params from the URI query.
-    let limit_and_offset = request.query::<LimitAndOffset>()?;
+    // Source pagination arguments from the URI query.
+    let by_page_number = request.query::<LimitAndPage>()?;
 
     // Load the active user's subscriptions.
     let channels = {
-        // Acquire a database connection.
+        // Checkout a database connection.
         let mut connection = request.app().database().await?;
 
-        // Execute the query.
-        subscriptions::table
-            .inner_join(channels::table)
-            .select(Channel::as_select())
+        ChannelSubscription::query()
             .filter(subscription::by_user(me))
-            .page(limit_and_offset)
+            .page(by_page_number)
             .load_async(&mut connection)
             .await?
     };
@@ -95,13 +103,14 @@ async fn create(request: Request, _: Next) -> via::Result {
         Channel::create(&mut connection, me, new_channel).await?
     };
 
-    // Subscribe the user to the channel they created.
-    app.pubsub().dispatch({
-        let interest = *channel.id();
-        Event::register(Some(me), interest)
-    });
+    // Create a "register" event with the current user id and channel id.
+    let event = Event::register(Some(me), *channel.id());
 
-    Response::build().status(201).data(channel)
+    // Dispatch the "register" event so the current user receives update
+    // notifications for changes that occur in `channel`.
+    app.pubsub().dispatch(event);
+
+    Response::build().status(StatusCode::CREATED).data(channel)
 }
 
 /// Find a channel by id.
@@ -113,41 +122,31 @@ async fn show(request: Request, _: Next) -> via::Result {
     // Clone the channel subscription we loaded during authorization.
     let subscription = request.channel().cloned().or_not_found()?;
 
-    let channel = {
+    // Load the associations for the channel in `subscription`.
+    let threads = {
         // Acquire a database connection.
         let mut connection = request.app().database().await?;
 
-        // Get a reference to the channel id from the subscription.
-        let channel_id = *subscription.channel().id();
+        // Get the id of the channel from `subscription`.
+        let channel_id = subscription.channel_id();
 
-        // Load the first page of recent messages in the channel.
-        let mut threads = ThreadWithUser::query()
+        // Load the first page of the most recent threads in the channel.
+        let mut recent = ThreadWithUser::query()
             .filter(thread::by_channel(channel_id).and(thread::is_thread()))
             .order(thread::recent())
-            .limit(25)
+            .limit(PER_PAGE)
             .load_async(&mut connection)
             .await?;
 
-        // Load the reactions for the threads in threads.
-        let threads = {
-            //
-            let ids = threads.iter().map(Identifiable::id).copied().collect();
+        // Reverse the first page of threads to match their render sequence.
+        recent.reverse();
 
-            // Load the reactions for each message in the first page.
-            let reactions = Reaction::to_threads(&mut connection, ids).await?;
-
-            // Reverse the order of the 25 most recent messages.
-            threads.reverse();
-
-            // Group reactions by their threads.
-            ThreadDetails::grouped_by(threads, reactions)
-        };
-
-        // Render threads within the channel.
-        subscription.with_threads(threads)
+        // Side load the top reactions to the threads in `threads`.
+        Reaction::to_threads(&mut connection, recent).await?
     };
 
-    Response::build().data(channel)
+    // Render `threads` within the channel subscription.
+    Response::build().data(subscription.with_threads(threads))
 }
 
 /// Update an existing channel.
@@ -166,18 +165,18 @@ async fn update(request: Request, _: Next) -> via::Result {
 
     // Aggregate the request body and deserialize a channel change set.
     let (body, app) = request.into_future();
-    let changes = body.timeout_after_secs(2).await?.data()?;
+    let change_set = body.timeout_after_secs(2).await?.data()?;
 
     // Apply the change set to the channel.
     let channel = {
         // Acquire a database connection.
         let mut connection = app.database().await?;
 
-        // Borrow the channel id from subscription.
-        let id = subscription.channel().id();
+        // Get the channel id from subscription.
+        let channel_id = subscription.channel_id();
 
         // Perform the update.
-        Channel::update(&mut connection, *id, changes).await?
+        Channel::update(&mut connection, channel_id, change_set).await?
     };
 
     Response::build().data(channel)
@@ -210,7 +209,7 @@ async fn destroy(request: Request, _: Next) -> via::Result {
         Channel::destroy(&mut connection, id).await?;
     }
 
-    Response::build().status(204).finish()
+    Response::build().status(StatusCode::NO_CONTENT).finish()
 }
 
 impl Subscriber for Request {

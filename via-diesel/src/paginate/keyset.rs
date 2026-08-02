@@ -1,15 +1,23 @@
 use diesel::dsl::{self as sql, IntoBoxed};
-use diesel::expression::AsExpression;
+use diesel::expression::{AsExpression, Expression};
 use diesel::expression_methods::{BoolExpressionMethods, ExpressionMethods};
-use diesel::pg::Pg;
 use diesel::query_dsl::methods::{BoxedDsl, FilterDsl, LimitDsl};
-use diesel::{Expression, QueryDsl, sql_types};
+use diesel::{QueryDsl, sql_types};
 use std::fmt::Display;
 use std::str::FromStr;
 use via::request::QueryParams;
 
 use super::Paginate;
 use super::limit::{DEFAULT_MAX_LIMIT, Limit};
+
+#[cfg(feature = "postgres")]
+type Db = diesel::pg::Pg;
+
+#[cfg(feature = "mysql")]
+type Db = diesel::mysql::Mysql;
+
+#[cfg(feature = "sqlite")]
+type Db = diesel::sqlite::Sqlite;
 
 type PivotValueExpr<Pc, Pv> = <Pv as AsExpression<sql::SqlTypeOf<Pc>>>::Expression;
 type TiebreakerValueExpr<Tc, Tv> = <Tv as AsExpression<sql::SqlTypeOf<Tc>>>::Expression;
@@ -30,7 +38,7 @@ pub struct Keyset<Pivot, Tiebreaker, const MAX: i64 = DEFAULT_MAX_LIMIT> {
     value: Option<KeysetArgs<Pivot, Tiebreaker>>,
 }
 
-pub struct KeysetExpr<Pc, Tc, Pv, Tv, const MAX: i64> {
+pub struct KeysetOf<Pc, Tc, Pv, Tv, const MAX: i64> {
     lhs: (Pc, Tc),
     rhs: Keyset<Pv, Tv, MAX>,
 }
@@ -41,43 +49,9 @@ struct KeysetArgs<Pv, Tv> {
     value: (Pv, Tv),
 }
 
-fn after<Pc, Tc, Pv, Tv>(lhs: &(Pc, Tc), rhs: &(Pv, Tv)) -> AfterKeyset<Pc, Tc, Pv, Tv>
-where
-    Pc: Expression + ExpressionMethods + Copy + Send,
-    <Pc as Expression>::SqlType: sql_types::SqlType<IsNull = sql_types::is_nullable::NotNull>,
-    //
-    sql::Eq<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
-    sql::Gt<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
-    //
-    Tc: Expression + ExpressionMethods + Copy + Send,
-    <Tc as Expression>::SqlType: sql_types::SqlType<IsNull = sql_types::is_nullable::NotNull>,
-    //
-    Pv: AsExpression<sql::SqlTypeOf<Pc>> + Copy + Send,
-    Tv: AsExpression<sql::SqlTypeOf<Tc>> + Copy + Send,
-{
-    lhs.0.gt(rhs.0).or(lhs.0.eq(rhs.0).and(lhs.1.gt(rhs.1)))
-}
-
-fn before<Pc, Tc, Pv, Tv>(lhs: &(Pc, Tc), rhs: &(Pv, Tv)) -> BeforeKeyset<Pc, Tc, Pv, Tv>
-where
-    Pc: Expression + ExpressionMethods + Copy + Send,
-    <Pc as Expression>::SqlType: sql_types::SqlType<IsNull = sql_types::is_nullable::NotNull>,
-    //
-    sql::Eq<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
-    sql::Lt<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
-    //
-    Tc: Expression + ExpressionMethods + Copy + Send,
-    <Tc as Expression>::SqlType: sql_types::SqlType<IsNull = sql_types::is_nullable::NotNull>,
-    //
-    Pv: AsExpression<sql::SqlTypeOf<Pc>> + Copy + Send,
-    Tv: AsExpression<sql::SqlTypeOf<Tc>> + Copy + Send,
-{
-    lhs.0.lt(rhs.0).or(lhs.0.eq(rhs.0).and(lhs.1.lt(rhs.1)))
-}
-
 impl<Pv, Tv, const MAX: i64> Keyset<Pv, Tv, MAX> {
-    pub fn of<Pc, Tc>(self, pivot: Pc, tiebreaker: Tc) -> KeysetExpr<Pc, Tc, Pv, Tv, MAX> {
-        KeysetExpr {
+    pub fn of<Pc, Tc>(self, pivot: Pc, tiebreaker: Tc) -> KeysetOf<Pc, Tc, Pv, Tv, MAX> {
+        KeysetOf {
             lhs: (pivot, tiebreaker),
             rhs: self,
         }
@@ -161,7 +135,7 @@ where
     }
 }
 
-impl<Pc, Tc, Pv, Tv, const MAX: i64> KeysetExpr<Pc, Tc, Pv, Tv, MAX> {
+impl<Pc, Tc, Pv, Tv, const MAX: i64> KeysetOf<Pc, Tc, Pv, Tv, MAX> {
     fn limit(&self) -> i64 {
         self.rhs.limit.value()
     }
@@ -171,49 +145,71 @@ impl<Pc, Tc, Pv, Tv, const MAX: i64> KeysetExpr<Pc, Tc, Pv, Tv, MAX> {
     }
 }
 
-impl<Src, Pc, Tc, Pv, Tv, const MAX: i64> Paginate<KeysetExpr<Pc, Tc, Pv, Tv, MAX>> for Src
+#[cfg(any(feature = "postgres", feature = "mysql", feature = "sqlite"))]
+impl<Src, Pc, Tc, Pv, Tv, const MAX: i64> Paginate<KeysetOf<Pc, Tc, Pv, Tv, MAX>> for Src
 where
-    Src: QueryDsl + BoxedDsl<'static, Pg>,
     //
+    // `Src` implements `QueryDsl` and `LimitDsl<i64>`.
     //
+    Src: QueryDsl + LimitDsl,
     //
-    IntoBoxed<'static, Src, Pg>: FilterDsl<AfterKeyset<Pc, Tc, Pv, Tv>, Output = IntoBoxed<'static, Src, Pg>>
-        + FilterDsl<BeforeKeyset<Pc, Tc, Pv, Tv>, Output = IntoBoxed<'static, Src, Pg>>
-        + LimitDsl<Output = IntoBoxed<'static, Src, Pg>>,
+    // The output of `Src::limit` implements both `QueryDsl` and `BoxedDsl` for
+    // `DB`.
     //
-    // A timestampz column and primary key column are required.
+    <Src as LimitDsl>::Output: QueryDsl + BoxedDsl<'static, Db>,
+    //
+    // The output of `QueryDsl::into_boxed` can be filtered by an `AfterKeyset`
+    // expression or a `BeforeKeyset` expression.
+    //
+    IntoBoxed<'static, <Src as LimitDsl>::Output, Db>: FilterDsl<
+            AfterKeyset<Pc, Tc, Pv, Tv>,
+            Output = IntoBoxed<'static, <Src as LimitDsl>::Output, Db>,
+        > + FilterDsl<
+            BeforeKeyset<Pc, Tc, Pv, Tv>,
+            Output = IntoBoxed<'static, <Src as LimitDsl>::Output, Db>,
+        >,
+    //
+    // The pivot column implements `Expression` with `ExpressionMethods` and
+    // when evaluated, it's `SqlType` is not null.
     //
     Pc: Expression + ExpressionMethods + Copy + Send,
     <Pc as Expression>::SqlType: sql_types::SqlType<IsNull = sql_types::is_nullable::NotNull>,
     //
-    sql::Eq<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
-    sql::Gt<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
-    sql::Lt<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
+    // The tiebreaker column implements `Expression` with `ExpressionMethods`
+    // and when evaluated, it's `SqlType` is not null.
     //
     Tc: Expression + ExpressionMethods + Copy + Send,
     <Tc as Expression>::SqlType: sql_types::SqlType<IsNull = sql_types::is_nullable::NotNull>,
     //
+    // The value expressions have the same SqlType as their respective columns
+    // and implement `Copy + Send`.
+    //
     Pv: AsExpression<sql::SqlTypeOf<Pc>> + Copy + Send,
     Tv: AsExpression<sql::SqlTypeOf<Tc>> + Copy + Send,
+    //
+    // The equality and comparison expressions on the pivot column and value
+    // evaluate to a `sql_types::Bool`.
+    //
+    sql::Eq<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
+    sql::Gt<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
+    sql::Lt<Pc, Pv>: Expression<SqlType = sql_types::Bool>,
 {
-    type Output = IntoBoxed<'static, Src, Pg>;
+    type Output = IntoBoxed<'static, <Src as LimitDsl>::Output, Db>;
 
-    fn page(self, keyset: KeysetExpr<Pc, Tc, Pv, Tv, MAX>) -> Self::Output {
-        let query = self.into_boxed::<Pg>();
+    fn page(self, keyset: KeysetOf<Pc, Tc, Pv, Tv, MAX>) -> Self::Output {
+        let query = LimitDsl::limit(self, keyset.limit()).into_boxed::<Db>();
 
-        match keyset.rhs() {
-            // After keyset
-            Some(rhs) if rhs.after => query
-                .limit(keyset.limit())
-                .filter(after::<Pc, Tc, Pv, Tv>(&keyset.lhs, &rhs.value)),
+        if let Some(rhs) = keyset.rhs() {
+            let lhs = &keyset.lhs;
+            let (pv, tv) = &rhs.value;
 
-            // Before keyset
-            Some(rhs) => query
-                .limit(keyset.limit())
-                .filter(before::<Pc, Tc, Pv, Tv>(&keyset.lhs, &rhs.value)),
-
-            // Empty keyset
-            None => query.limit(keyset.limit()),
+            if rhs.after {
+                query.filter(lhs.0.gt(*pv).or(lhs.0.eq(*pv).and(lhs.1.gt(*tv))))
+            } else {
+                query.filter(lhs.0.lt(*pv).or(lhs.0.eq(*pv).and(lhs.1.lt(*tv))))
+            }
+        } else {
+            query
         }
     }
 }

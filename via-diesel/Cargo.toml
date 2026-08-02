@@ -10,6 +10,8 @@ repository = "https://github.com/via-rs/via"
 
 [features]
 postgres = ["diesel/postgres"]
+mysql = ["diesel/mysql"]
+sqlite = ["diesel/sqlite"]
 
 [dependencies]
 diesel-async = "0.9"

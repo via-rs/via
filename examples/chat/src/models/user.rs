@@ -1,4 +1,4 @@
-use argon2::PasswordHash;
+use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::helper_types::{AsSelect, InnerJoin, InnerJoinOn, Select};
 use diesel::pg::{Pg, PgValue};
@@ -8,8 +8,9 @@ use diesel::{AsExpression, dsl::count, sql_types};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::{self, Debug, Formatter};
 use time::OffsetDateTime;
+use via::{ResultExt, deny};
 use via_diesel::AsyncQueryDsl;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::app::Connection;
 use crate::models::subscription::{self, ChannelSubscription};
@@ -36,11 +37,12 @@ pub struct User {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewUser {
     email: String,
     username: String,
-    #[serde(rename = "password")]
-    password_hash: Password,
+    password: Password,
+    confirm_password: Zeroizing<String>,
 }
 
 #[derive(AsChangeset, Deserialize)]
@@ -127,13 +129,19 @@ where
         )
 }
 
+#[inline]
+fn verify_password(value: &[u8], hash: &PasswordHash) -> Result<(), Unauthorized> {
+    Argon2::default()
+        .verify_password(value, hash)
+        .or(Err(Unauthorized))
+}
+
 impl User {
     pub async fn authenticate(
         connection: &mut Connection<'_>,
         params: AuthParams,
     ) -> via::Result<Self> {
-        use argon2::{Argon2, PasswordHash, PasswordVerifier};
-
+        // Find user matching `AuthParams` along with their PHC string.
         let (user, password) = users::table
             .select((Self::as_select(), users::password_hash))
             .filter(by_email(&params.email))
@@ -141,20 +149,40 @@ impl User {
             .await
             .or(Err(Unauthorized))?;
 
-        Argon2::default()
-            .verify_password(params.password.as_bytes(), &password.hash()?)
-            .map_or_else(|_| Err(Unauthorized.into()), |_| Ok(user))
+        // Parse a `PasswordHash` from `password`.
+        let password_hash = password.hash()?;
+
+        // Verify the password.
+        verify_password(params.password.as_bytes(), &password_hash)?;
+
+        Ok(user)
     }
 
-    pub async fn create(connection: &mut Connection<'_>, init: NewUser) -> via::Result<Self> {
-        let values = (
-            users::email.eq(init.email),
-            users::username.eq(init.username),
-            users::password_hash.eq(init.password_hash),
-        );
+    pub async fn create(connection: &mut Connection<'_>, mut init: NewUser) -> via::Result<Self> {
+        {
+            // Parse a `PasswordHash` from the PHC string created when the
+            // `NewUser` was deserialized.
+            let password_hash = init.password.hash()?;
 
+            // Verify the "confirmPassword" field against the password hash.
+            let verify_result = verify_password(init.confirm_password.as_bytes(), &password_hash);
+
+            // Eagerly zeroize the  plaintext "confirmPassword" field.
+            init.confirm_password.zeroize();
+
+            // If an error occurs, respond with a 400 Bad Request status code.
+            if verify_result.is_err() {
+                deny!(400, "passwords must match");
+            }
+        }
+
+        // Perform the insert.
         diesel::insert_into(users::table)
-            .values(values)
+            .values((
+                users::email.eq(init.email),
+                users::username.eq(init.username),
+                users::password_hash.eq(init.password),
+            ))
             .returning(Self::as_returning())
             .get_result_async(connection)
             .await

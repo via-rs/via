@@ -362,7 +362,7 @@ impl Payload for Aggregate {
     where
         T: DeserializeOwned,
     {
-        if let [frame] = self.payload.frames_mut() {
+        if let Some(frame) = self.payload.unary_mut() {
             let result = deserialize_json(frame.as_ref());
 
             // Make the visible length of the frame buffer 0.
@@ -415,7 +415,7 @@ impl Payloadz for Aggregate {
     where
         T: DeserializeOwned,
     {
-        if let [frame] = self.payload.frames_mut() {
+        if let Some(frame) = self.payload.unary_mut() {
             // If we do not have unique access to the frame, return self back
             // to the caller.
             if !frame.is_unique() {
@@ -671,5 +671,14 @@ impl RequestPayload {
     #[inline]
     fn frames_mut(&mut self) -> &mut [Bytes] {
         &mut self.frames
+    }
+
+    #[inline]
+    fn unary_mut(&mut self) -> Option<&mut Bytes> {
+        if self.frames.len() == 1 {
+            Some(&mut self.frames[0])
+        } else {
+            None
+        }
     }
 }

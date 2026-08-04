@@ -14,6 +14,7 @@ use serde::{Serialize, Serializer};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::hint;
 use std::io::{self, Error as IoError};
 
 pub use catch::{Catch, Propagate};
@@ -271,7 +272,10 @@ impl From<Error> for BoxError {
             ErrorSource::Message(string) => string.into(),
             ErrorSource::Other(source) => source,
             ErrorSource::Json(source) => source.into(),
-            ErrorSource::Restart => "restart".to_owned().into(),
+            ErrorSource::Restart => {
+                hint::cold_path();
+                "restart".to_owned().into()
+            }
         }
     }
 }

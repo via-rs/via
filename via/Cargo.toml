@@ -46,7 +46,7 @@ __test = ["cookie/signed", "fs", "ring", "tokio-tungstenite", "zeroize/serde"]
 
 [dependencies]
 aws-lc-rs = { version = "1", optional = true }
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 bitflags = "2"
 bytes = "1"
 cookie = { version = "0.18", features = ["percent-encode"] }

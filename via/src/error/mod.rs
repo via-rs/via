@@ -44,6 +44,8 @@ enum ErrorSource {
     Message(String),
     Other(BoxError),
     Json(serde_json::Error),
+
+    #[allow(dead_code)]
     Restart,
 }
 
@@ -195,6 +197,7 @@ impl Error {
         error
     }
 
+    #[allow(dead_code)]
     pub(crate) fn restart() -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -202,6 +205,7 @@ impl Error {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_restart(&self) -> bool {
         matches!(&self.source, ErrorSource::Restart)
     }

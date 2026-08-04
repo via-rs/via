@@ -44,6 +44,7 @@ enum ErrorSource {
     Message(String),
     Other(BoxError),
     Json(serde_json::Error),
+    Restart,
 }
 
 enum ErrorSourceRef<'a> {
@@ -51,6 +52,7 @@ enum ErrorSourceRef<'a> {
     Message(&'a str),
     Other(&'a (dyn std::error::Error + 'static)),
     Json(&'a serde_json::Error),
+    Restart,
 }
 
 #[derive(Serialize)]
@@ -193,6 +195,17 @@ impl Error {
         error
     }
 
+    pub(crate) fn restart() -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            source: ErrorSource::Restart,
+        }
+    }
+
+    pub(crate) fn is_restart(&self) -> bool {
+        matches!(&self.source, ErrorSource::Restart)
+    }
+
     #[inline]
     fn as_source(&self) -> ErrorSourceRef<'_> {
         match &self.source {
@@ -200,6 +213,7 @@ impl Error {
             ErrorSource::Message(message) => ErrorSourceRef::Message(message),
             ErrorSource::Other(source) => ErrorSourceRef::Other(source.as_ref()),
             ErrorSource::Json(source) => ErrorSourceRef::Json(source),
+            ErrorSource::Restart => ErrorSourceRef::Restart,
         }
     }
 
@@ -209,6 +223,7 @@ impl Error {
             ErrorSource::AllowMethod(error) => Err(Some(error)),
             ErrorSource::Other(error) => Err(Some(&**error)),
             ErrorSource::Json(error) => Err(Some(error)),
+            ErrorSource::Restart => Err(None),
         }
     }
 
@@ -240,6 +255,7 @@ impl Display for Error {
             ErrorSourceRef::AllowMethod(source) => Display::fmt(source, f),
             ErrorSourceRef::Other(source) => Display::fmt(source, f),
             ErrorSourceRef::Json(source) => Display::fmt(source, f),
+            ErrorSourceRef::Restart => write!(f, "restart"),
         }
     }
 }
@@ -251,6 +267,7 @@ impl From<Error> for BoxError {
             ErrorSource::Message(string) => string.into(),
             ErrorSource::Other(source) => source,
             ErrorSource::Json(source) => source.into(),
+            ErrorSource::Restart => "restart".to_owned().into(),
         }
     }
 }

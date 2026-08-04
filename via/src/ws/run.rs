@@ -315,12 +315,18 @@ where
         // Self is also PhantomPinned, preventing self from moving.
         let this = unsafe { self.get_unchecked_mut() };
 
-        let future = match this.facade.as_mut() {
-            Some(facade) => facade,
-            None => this.reconnect(),
+        let mut poll = match this.facade.as_mut() {
+            Some(facade) => Pin::new(facade).poll(context),
+            None => Pin::new(this.reconnect()).poll(context),
         };
 
-        match Pin::new(future).poll(context) {
+        if let Poll::Ready(Err(ControlFlow::Continue(ref error))) = poll
+            && error.is_restart()
+        {
+            poll = Pin::new(this.reconnect()).poll(context);
+        }
+
+        match poll {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
             Poll::Ready(Err(ControlFlow::Break(error))) => {
@@ -333,9 +339,13 @@ where
 
                 log!(warn(ws = 1), "{}", &error);
 
-                this.reconnect();
+                // The facade field is no longer valid.
+                this.facade = None;
+
+                // Register an artificial wake.
                 context.waker().wake_by_ref();
 
+                // Return pending.
                 Poll::Pending
             }
         }

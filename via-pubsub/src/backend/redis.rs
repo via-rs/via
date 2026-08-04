@@ -206,12 +206,11 @@ where
     }
 
     async fn recv(&mut self) -> Result<RawPeerEvent<T>, Catch> {
-        self.receiver.recv().await.map_err(|error| {
-            if let broadcast::error::RecvError::Lagged(n) = error {
-                let message = format!("capacity too small. skipped {} messages.", n);
-                ControlFlow::Continue(Error::new(message))
+        self.receiver.recv().await.or_else(|error| {
+            if let broadcast::error::RecvError::Lagged(len) = error {
+                Ok(RawPeerEvent::Lag(len))
             } else {
-                error::sender_dropped(0)
+                Err(error::sender_dropped(0))
             }
         })
     }

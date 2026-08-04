@@ -62,6 +62,8 @@ impl<T: Backend> Subscription<T> {
     #[inline]
     fn interested_in(&self, event: RawPeerEvent<T::Interest>) -> Option<PeerEvent<T::Interest>> {
         match event {
+            RawPeerEvent::Lag(len) => Some(PeerEvent::Lag(len)),
+
             RawPeerEvent::Logout(actor) => (actor == self.actor).then_some(PeerEvent::Logout),
 
             RawPeerEvent::Relay(interest, payload) => self

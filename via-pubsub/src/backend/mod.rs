@@ -36,6 +36,7 @@ pub trait Backend {
 
 #[derive(Clone, Debug)]
 pub enum PeerEvent<T> {
+    Lag(u64),
     Logout,
     Relay(Opaque),
     Register(T),
@@ -44,6 +45,7 @@ pub enum PeerEvent<T> {
 
 #[derive(Clone)]
 pub enum RawPeerEvent<T> {
+    Lag(u64),
     Logout(T),
     Relay(T, Opaque),
     Register(Option<T>, T),

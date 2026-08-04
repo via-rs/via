@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::task::coop;
 use via::deny;
 use via::error::{Catch, Propagate};
@@ -139,6 +139,13 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
 
         if let Some(event) = inbound {
             match event {
+                // Lag detected in `subscription`.
+                PeerEvent::Lag(len) => {
+                    log!(info(chat = 1), "lag notification; len = {}", len);
+                    channel.send(serialize_lag_notification(len)?).await?;
+                    return ws::restart().await;
+                }
+
                 // The user logged out.
                 PeerEvent::Logout => {
                     log!(info(chat = 1), "ws session ended");
@@ -147,8 +154,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
 
                 // Notification received from a peer.
                 PeerEvent::Relay(notification) => {
-                    log!(info(chat = 1), "relay notification");
-                    channel.send(notification).await?
+                    channel.send(notification).await?;
                 }
 
                 // The user was invited to a channel.
@@ -179,6 +185,16 @@ fn deserialize_client_event(message: &Message) -> via::Result<ClientEvent> {
     let text = str::from_utf8(payload)?;
 
     Ok(serde_json::from_str(text)?)
+}
+
+fn serialize_lag_notification(length: u64) -> ws::Result<String> {
+    #[derive(Serialize)]
+    #[serde(content = "data", rename_all = "lowercase", tag = "type")]
+    enum LagNotification {
+        Lag { length: u64 },
+    }
+
+    serde_json::to_string(&LagNotification::Lag { length }).or_continue()
 }
 
 #[cfg(all(debug_assertions, feature = "tokio-tungstenite"))]

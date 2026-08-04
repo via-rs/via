@@ -320,10 +320,10 @@ where
             None => Pin::new(this.reconnect()).poll(context),
         };
 
-        if let Poll::Ready(Err(ControlFlow::Continue(ref error))) = poll {
-            if error.is_restart() {
-                poll = Pin::new(this.reconnect()).poll(context);
-            }
+        if let Poll::Ready(Err(ControlFlow::Continue(ref error))) = poll
+            && error.is_restart()
+        {
+            poll = Pin::new(this.reconnect()).poll(context);
         }
 
         match poll {

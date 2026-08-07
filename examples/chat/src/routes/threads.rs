@@ -1,17 +1,18 @@
 via::resource!(app = Unicorn);
 
 use diesel::{BoolExpressionMethods, QueryDsl};
+use http::StatusCode;
 use serde::Serialize;
 use via::request::PathParams;
-use via::{Error, Response, ResultExt};
+use via::{Error, Response, ResultExt, deny};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
 use crate::models::reaction::{self, top_reactions_for};
-use crate::models::thread::{Thread, by_channel, by_id, recent, thread_id_is_null};
+use crate::models::thread::{Thread, by_channel, by_id, by_user, recent, thread_id_is_null};
 use crate::routes::channels::Subscriber;
 use crate::schema::threads;
-use crate::util::{Id, Iso8601};
+use crate::util::{Id, Iso8601, Session};
 use crate::{Next, Request, Unicorn};
 
 /// List threads.
@@ -109,11 +110,30 @@ async fn update(_: Request, _: Next) -> via::Result {
     todo!()
 }
 
-/// Delete a user account.
+/// Delete a thread by id.
 ///
-/// Responds to `DELETE /users/:user-id`.
+/// Responds to `DELETE /api/channels/:channel-id/threads/:thread-id`.
 ///
-/// The active user must be the user identified by `:user-id`.
-async fn destroy(_: Request, _: Next) -> via::Result {
-    todo!()
+/// The current user must be the user identified by `thread.user_id`.
+async fn destroy(request: Request, _: Next) -> via::Result {
+    // Get the current user's id from the session.
+    let me = request.me()?;
+
+    // Parse a uuid from the :thread-id path parameter.
+    let id = request.param("thread-id").parse()?;
+
+    // Acquire a database connection.
+    let mut connection = request.app().database().await?;
+
+    // Execute the DELETE.
+    // If the number of affected rows is < 1, 404 Not Found.
+    if let ..1 = diesel::delete(threads::table)
+        .filter(by_id(id).and(by_user(me)))
+        .execute_async(&mut connection)
+        .await?
+    {
+        deny!(404, "not found");
+    }
+
+    Response::build().status(StatusCode::NO_CONTENT).finish()
 }

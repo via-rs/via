@@ -7,8 +7,8 @@ use via::{Error, Response, ResultExt};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
-use crate::models::thread::{by_channel, by_id, is_thread, recent};
-use crate::models::{Reaction, Thread, ThreadWithUser};
+use crate::models::reaction::{self, top_reactions_for};
+use crate::models::thread::{Thread, by_channel, by_id, recent, thread_id_is_null};
 use crate::routes::channels::Subscriber;
 use crate::schema::threads;
 use crate::util::{Id, Iso8601};
@@ -33,15 +33,21 @@ async fn index(request: Request, _: Next) -> via::Result {
         let mut connection = request.app().database().await?;
 
         // Load the threads in the channel, paginated `by_keyset`.
-        let threads = ThreadWithUser::query()
-            .filter(by_channel(channel_id).and(is_thread()))
+        let threads = Thread::query()
+            .filter(by_channel(channel_id).and(thread_id_is_null()))
             .order(recent())
             .page(by_keyset.of(threads::created_at, threads::id))
             .load_async(&mut connection)
             .await?;
 
         // Side load the reactions to the threads in `threads`.
-        Reaction::to_threads(&mut connection, threads).await?
+        let reactions = {
+            let ids = Id::each(&threads).collect::<Vec<_>>();
+            top_reactions_for(&mut connection, ids).await?
+        };
+
+        // Group the aggregated reactions with the thread to which they belong.
+        reaction::group_by_thread(threads, reactions)
     };
 
     feed.reverse(); // Presented as append-only.
@@ -58,20 +64,37 @@ async fn create(_: Request, _: Next) -> via::Result {
     todo!()
 }
 
-/// Retrieve a thread or reply by id.
+/// Find a thread by id.
 ///
-/// Responds to:
-/// - `GET /api/channels/:channel-id/threads/:thread-id`
-/// - `GET /api/channels/:channel-id/threads/:thread-id/replies/:reply-id`
+/// Responds to `GET /api/channels/:channel-id/threads/:thread-id`.
 async fn show(request: Request, _: Next) -> via::Result {
-    // Parse an Id from the :thread-id path parameter.
+    // Get the channel id from the subscription we loaded during authorization.
+    // If the current user does not have an active subscription, 404 Not Found.
+    let channel_id = request.channel_id().or_not_found()?;
+
+    // Parse a uuid from the :thread-id path parameter.
     let id = request.param("thread-id").parse()?;
 
+    // Find the thread where id = :thread-id.
     let thread = {
         // Acquire a database connection.
         let mut connection = request.app().database().await?;
 
-        Thread::find(&mut connection, id).await?
+        // Find the matching thread.
+        let thread = Thread::query()
+            .filter(
+                by_id(id)
+                    .and(by_channel(channel_id))
+                    .and(thread_id_is_null()),
+            )
+            .first_async(&mut connection)
+            .await?;
+
+        // Side load the reactions to `thread`.
+        let reactions = top_reactions_for(&mut connection, vec![id]).await?;
+
+        // Render the top reactions aggregation within `thread`.
+        thread.with_reactions(reactions)
     };
 
     Response::build().data(thread)

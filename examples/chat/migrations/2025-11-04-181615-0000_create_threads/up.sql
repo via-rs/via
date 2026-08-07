@@ -1,13 +1,23 @@
 CREATE TABLE threads (
+  -- Keys
+
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
   thread_id UUID REFERENCES threads(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id),
 
+  -- Data
+
   body TEXT NOT NULL,
+
+  -- Timestamps
+
   created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+
+  -- Counters
+
   total_reactions BIGINT NOT NULL DEFAULT 0,
   total_replies BIGINT NOT NULL DEFAULT 0
 );

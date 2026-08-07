@@ -2,7 +2,7 @@ use diesel::backend::Backend;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::pg::Pg;
 use diesel::serialize::{self, Output, ToSql};
-use diesel::{AsExpression, sql_types};
+use diesel::{AsExpression, Identifiable, sql_types};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
@@ -20,6 +20,15 @@ pub struct InvalidIdError;
 impl Id {
     pub fn new(value: Uuid) -> Self {
         Self(value)
+    }
+
+    #[inline]
+    pub fn each<'a, I>(iter: I) -> impl Iterator<Item = Self>
+    where
+        I: IntoIterator,
+        I::Item: Identifiable<Id = &'a Self>,
+    {
+        iter.into_iter().map(Identifiable::id).copied()
     }
 
     pub fn value(&self) -> Uuid {

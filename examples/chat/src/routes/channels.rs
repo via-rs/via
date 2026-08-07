@@ -9,9 +9,10 @@ use via_diesel::paginate::PER_PAGE;
 use via_diesel::{AsyncQueryDsl, LimitAndPage, Paginate};
 use via_pubsub::Event;
 
+use crate::models::reaction::{self, top_reactions_for};
 use crate::models::subscription::{self, AuthClaims, ChannelSubscription};
 use crate::models::thread::{self, ThreadDetails, ThreadWithUser};
-use crate::models::{Channel, Reaction};
+use crate::models::{Channel, Reaction, Thread};
 use crate::schema::{channels, subscriptions};
 use crate::util::{Id, Session};
 use crate::{Next, Request, Unicorn};
@@ -123,30 +124,34 @@ async fn show(request: Request, _: Next) -> via::Result {
     let subscription = request.channel().cloned().or_not_found()?;
 
     // Load the associations for the channel in `subscription`.
-    let threads = {
+    let mut feed = {
         // Acquire a database connection.
         let mut connection = request.app().database().await?;
 
-        // Get the id of the channel from `subscription`.
-        let channel_id = subscription.channel_id();
-
         // Load the first page of the most recent threads in the channel.
-        let mut recent = ThreadWithUser::query()
-            .filter(thread::by_channel(channel_id).and(thread::is_thread()))
+        let threads = Thread::query()
+            .filter(thread::by_channel(subscription.channel_id()).and(thread::is_thread()))
             .order(thread::recent())
             .limit(PER_PAGE)
             .load_async(&mut connection)
             .await?;
 
-        // Reverse the first page of threads to match their render sequence.
-        recent.reverse();
+        // Side load the reactions to the threads in `threads`.
+        let reactions = {
+            let ids = Id::each(&threads).collect::<Vec<_>>();
+            top_reactions_for(&mut connection, ids).await?
+        };
 
-        // Side load the top reactions to the threads in `threads`.
-        Reaction::to_threads(&mut connection, recent).await?
+        // Group the aggregated reactions with the thread to which they belong.
+        reaction::group_by_thread(threads, reactions)
     };
 
-    // Render `threads` within the channel subscription.
-    Response::build().data(subscription.with_threads(threads))
+    feed.reverse(); // Presented as append-only.
+
+    // Render `feed` within the channel subscription.
+    let channel = subscription.with_threads(feed);
+
+    Response::build().data(channel)
 }
 
 /// Update an existing channel.

@@ -19,6 +19,9 @@ use crate::models::ThreadDetails;
 use crate::schema::reactions;
 use crate::util::Id;
 
+const UNIQUE_REACTIONS_PER_THREAD: i32 = 12;
+const USERNAMES_PER_REACTION: i32 = 6;
+
 #[derive(Debug)]
 pub struct InvalidEmojiError;
 
@@ -105,6 +108,24 @@ pub struct ReactionWithUser {
     user: UserPreview,
 }
 
+#[derive(Associations, Clone, QueryableByName, Serialize)]
+#[diesel(belongs_to(ThreadWithUser, foreign_key = thread_id))]
+#[diesel(table_name = reactions)]
+#[diesel(check_for_backend(Pg))]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionInThread {
+    emoji: Emoji,
+
+    #[serde(skip)]
+    thread_id: Id,
+
+    #[diesel(sql_type = sql_types::Array<sql_types::Text>)]
+    usernames: Vec<String>,
+
+    #[diesel(sql_type = sql_types::BigInt)]
+    total_count: i64,
+}
+
 via_diesel::filters! {
     pub fn by_id(id == Id) on reactions;
     pub fn by_user(user_id == Id) on reactions;
@@ -112,6 +133,33 @@ via_diesel::filters! {
 
 via_diesel::sorts! {
     pub fn recent(#[desc] created_at, id) on reactions;
+}
+
+pub async fn top_reactions_for<T>(
+    connection: &mut Connection<'_>,
+    ids: T,
+) -> via::Result<Vec<ReactionInThread>>
+where
+    T: Send + ToSql<sql_types::Array<sql_types::Uuid>, Pg>,
+{
+    diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
+        .bind::<sql_types::Array<sql_types::Uuid>, T>(ids)
+        .bind::<sql_types::Integer, _>(UNIQUE_REACTIONS_PER_THREAD)
+        .bind::<sql_types::Integer, _>(USERNAMES_PER_REACTION)
+        .load_async(connection)
+        .await
+}
+
+/// Group the aggregated reactions with the thread to which they belong.
+pub fn group_by_thread(
+    threads: Vec<ThreadWithUser>,
+    reactions: Vec<ReactionInThread>,
+) -> Vec<ThreadDetails> {
+    let iter = reactions.grouped_by(&threads).into_iter();
+
+    iter.zip(threads)
+        .map(|(reactions, thread)| thread.with_reactions(reactions))
+        .collect()
 }
 
 impl Reaction {
@@ -136,24 +184,6 @@ impl Reaction {
 
     pub fn query() -> reactions::table {
         reactions::table
-    }
-
-    pub async fn to_threads(
-        connection: &mut Connection<'_>,
-        threads: Vec<ThreadWithUser>,
-    ) -> via::Result<Vec<ThreadDetails>> {
-        const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
-        const USERNAMES_PER_REACTION: i32 = 6;
-
-        let thread_ids = threads.iter().map(|thread| thread.id()).copied().collect();
-        let reactions = diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
-            .bind::<sql_types::Array<sql_types::Uuid>, Vec<_>>(thread_ids)
-            .bind::<sql_types::Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
-            .bind::<sql_types::Integer, _>(USERNAMES_PER_REACTION)
-            .load_async(connection)
-            .await?;
-
-        Ok(ThreadDetails::grouped_by(threads, reactions))
     }
 
     pub fn with_user(self, user: UserPreview) -> ReactionWithUser {

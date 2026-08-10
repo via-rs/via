@@ -1,10 +1,10 @@
-//! Field projection helpers.
+//! Field projection helpers and combinators for well-known request fields.
 
 mod project;
 
+use http::HeaderName;
 use std::marker::PhantomData;
 
-use http::HeaderName;
 pub use project::*;
 
 use super::Predicate;

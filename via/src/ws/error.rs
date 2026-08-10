@@ -10,21 +10,30 @@ pub use tungstenite::error::Error as WebSocketError;
 #[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
 pub use tokio_websockets::error::Error as WebSocketError;
 
+/// Result type returned by WebSocket listeners.
 pub type Result<T = ()> = std::result::Result<T, Catch>;
 
+/// Error produced while validating a WebSocket upgrade request.
 #[derive(Debug)]
 pub enum UpgradeError {
+    /// The `Sec-WebSocket-Key` header is missing or invalid.
     SecWebsocketKey,
+    /// The `Sec-WebSocket-Version` header is missing or unsupported.
     SecWebsocketVersion,
+    /// The `Upgrade` header does not request a WebSocket upgrade.
     UnknownUpgradeType,
+    /// The `Connection` header does not contain `upgrade`.
     UpgradeRequired,
+    /// An unspecified WebSocket upgrade error occurred.
     Other,
 }
 
+/// Return a terminal WebSocket error for a closed connection.
 pub fn already_closed() -> Catch {
     ControlFlow::Break(Error::from_source(Box::new(WebSocketError::AlreadyClosed)))
 }
 
+/// Classify a WebSocket error as recoverable or terminal.
 pub fn rescue(error: WebSocketError) -> Catch {
     use std::io::ErrorKind;
 

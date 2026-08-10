@@ -11,14 +11,17 @@ use crate::server::tls::NegotiateAlpn;
 
 use super::{Acceptor, Alpn};
 
+/// `native-tls` acceptor wrapper.
 pub struct NativeTlsAcceptor(Arc<TlsAcceptor>);
 
+/// `native-tls` stream wrapper.
 pub struct NativeTlsStream {
     alpn: Alpn,
     stream: TlsStream<TcpStream>,
 }
 
 impl NativeTlsAcceptor {
+    /// Create a native TLS acceptor from an identity.
     pub fn new(identity: Identity) -> Self {
         Self(Arc::new(TlsAcceptor::from(
             native_tls::TlsAcceptor::builder(identity)

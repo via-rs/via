@@ -8,17 +8,20 @@ use std::task::{Context, Poll};
 
 use crate::{Error, err};
 
+/// Type-erased HTTP response body used by Via responses.
 pub struct ResponseBody {
     body: BoxBody<Bytes, Error>,
 }
 
 impl ResponseBody {
     #[inline]
+    /// Create a response body from a single contiguous byte buffer.
     pub fn new(buf: Bytes) -> Self {
         Self::boxed(Full::new(buf).map_err(|_| err!(500, "unreachable")))
     }
 
     #[inline]
+    /// Box any compatible streaming body as a `ResponseBody`.
     pub fn boxed<T>(body: T) -> Self
     where
         T: Body<Data = Bytes, Error = Error> + Send + Sync + 'static,

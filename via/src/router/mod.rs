@@ -6,8 +6,6 @@ mod switch;
 pub use route::{Prefix, Route};
 pub use switch::*;
 
-pub(crate) use switch::MethodNotAllowed;
-
 use std::sync::Arc;
 use via_router::{Router as Trie, Traverse};
 

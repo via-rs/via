@@ -9,6 +9,7 @@ use crate::error::Error;
 use crate::request::params::PathParam;
 use crate::request::{Envelope, PathParams, QueryParams};
 
+/// Request metadata passed to a WebSocket listener.
 #[derive(Debug)]
 pub struct Request<App = ()> {
     pub(super) on_upgrade: Option<OnUpgrade>,
@@ -17,10 +18,12 @@ pub struct Request<App = ()> {
 }
 
 impl<App> Request<App> {
+    /// Return a shared reference to the application state.
     pub fn app(&self) -> &App {
         &self.app
     }
 
+    /// Clone and return the shared application state handle.
     pub fn app_owned(&self) -> Shared<App> {
         self.app.clone()
     }
@@ -49,10 +52,12 @@ impl<App> Request<App> {
             /// the path parameter in the request's uri with the provided `name`.
             pub fn param<'b>(&self, name: &'b str) -> PathParam<'_, 'b>;
 
+            /// Convert the request query parameters into `T`.
             pub fn query<'a, T>(&'a self) -> crate::Result<T>
             where
                 T: TryFrom<QueryParams<'a>, Error = Error>;
 
+            /// Convert the request path parameters into `T`.
             pub fn params<'a, T>(&'a self) -> crate::Result<T>
             where
                 T: TryFrom<PathParams<'a>>,

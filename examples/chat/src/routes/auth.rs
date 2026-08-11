@@ -106,3 +106,26 @@ pub async fn me(request: Request, _: Next) -> via::Result {
 
     Response::build().data(user)
 }
+
+#[cfg(test)]
+mod tests {
+    use http::{Request, StatusCode};
+    use via::test::{Client, TestBody};
+
+    use crate::util::setup_integration_test;
+
+    #[tokio::test]
+    async fn me() -> via::Result<()> {
+        let client = setup_integration_test().await?;
+
+        let request = Request::get("/api/auth/me")
+            .header("accept", "*/*")
+            .body(Default::default())?;
+
+        let response = client.send(request).await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        Ok(())
+    }
+}

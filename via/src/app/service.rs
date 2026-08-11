@@ -12,7 +12,16 @@ use crate::response::{Response, ResponseBody};
 use crate::server::ServerConfig;
 use crate::{BoxFuture, Next, err};
 
+#[cfg(feature = "test-util")]
+use crate::test::TestBody;
+
 const MAX_URI_PATH_LEN: usize = 8092; // 8 KB
+
+#[cfg(feature = "test-util")]
+type ServiceRequest = http::Request<TestBody>;
+
+#[cfg(not(feature = "test-util"))]
+type ServiceRequest = http::Request<Incoming>;
 
 pub struct FutureResponse(BoxFuture);
 
@@ -70,22 +79,33 @@ impl<App> Clone for ServiceAdapter<App> {
     }
 }
 
+impl<App> Service<ServiceRequest> for ServiceAdapter<App> {
+    type Error = Infallible;
+    type Future = FutureResponse;
+    type Response = http::Response<ResponseBody>;
+
+    fn call(&self, request: ServiceRequest) -> Self::Future {
+        self.service.call(request)
+    }
+}
+
+#[cfg(feature = "test-util")]
 impl<App> Service<http::Request<Incoming>> for ServiceAdapter<App> {
     type Error = Infallible;
     type Future = FutureResponse;
     type Response = http::Response<ResponseBody>;
 
     fn call(&self, request: http::Request<Incoming>) -> Self::Future {
-        self.service.call(request)
+        self.service.call(request.map(TestBody::new))
     }
 }
 
-impl<App> Service<http::Request<Incoming>> for ViaService<App> {
+impl<App> Service<ServiceRequest> for ViaService<App> {
     type Error = Infallible;
     type Future = FutureResponse;
     type Response = http::Response<ResponseBody>;
 
-    fn call(&self, request: http::Request<Incoming>) -> Self::Future {
+    fn call(&self, request: ServiceRequest) -> Self::Future {
         let path = request.uri().path();
 
         // Immediately respond with 414 if the path length exceeds the maximum.

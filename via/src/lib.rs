@@ -75,6 +75,9 @@ pub mod request;
 pub mod response;
 pub mod router;
 
+#[cfg(feature = "test-util")]
+pub mod test;
+
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 pub mod ws;
 

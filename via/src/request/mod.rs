@@ -2,11 +2,19 @@
 
 pub mod params;
 
+mod body;
 mod payload;
 mod query;
 
+#[cfg(feature = "test-util")]
+mod builder;
+
+pub use body::{Aggregate, Coalesce, RequestBody};
 pub use params::{PathParams, QueryParams};
-pub use payload::{Aggregate, Coalesce, Payload, Payloadz, RequestBody};
+pub use payload::{Payload, Payloadz};
+
+#[cfg(feature = "test-util")]
+pub use builder::RequestBuilder;
 
 use cookie::CookieJar;
 use delegate::delegate;

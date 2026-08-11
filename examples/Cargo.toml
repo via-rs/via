@@ -21,7 +21,7 @@ tokio-websockets = ["via/tokio-websockets", "via-pubsub/tokio-websockets"]
 
 # Internal
 
-__test = ["fs", "ring", "tokio-tungstenite"]
+__test = ["fs", "ring", "tokio-tungstenite", "via/test-util"]
 
 [[example]]
 name = "chat"

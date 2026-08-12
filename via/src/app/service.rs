@@ -15,6 +15,9 @@ use crate::{BoxFuture, Next, err};
 #[cfg(feature = "test-util")]
 use crate::test::TestBody;
 
+#[cfg(feature = "test-util")]
+use super::Shared;
+
 const MAX_URI_PATH_LEN: usize = 8092; // 8 KB
 
 #[cfg(feature = "test-util")]
@@ -67,6 +70,11 @@ impl<App> ServiceAdapter<App> {
 
     pub(crate) fn config(&self) -> &ServerConfig {
         &self.service.config
+    }
+
+    #[cfg(feature = "test-util")]
+    pub(crate) fn app(&self) -> &Shared<App> {
+        self.service.via.app()
     }
 }
 

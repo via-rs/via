@@ -1,4 +1,6 @@
+mod request;
 mod service;
 mod smoke;
 
-pub use service::{Client, TestBody, TestService, service};
+pub use request::{RequestBuilder, TestBody};
+pub use service::{Client, TestService, service};

@@ -109,22 +109,51 @@ pub async fn me(request: Request, _: Next) -> via::Result {
 
 #[cfg(test)]
 mod tests {
-    use http::{Request, StatusCode};
-    use via::test::{Client, TestBody};
+    use http::{StatusCode, header::COOKIE};
+    use via::test::Client;
+    use via_diesel::AsyncQueryDsl;
 
-    use crate::util::setup_integration_test;
+    use crate::app::SESSION;
+    use crate::models::User;
+    use crate::util::{self, Authenticator};
 
     #[tokio::test]
     async fn me() -> via::Result<()> {
-        let client = setup_integration_test().await?;
+        // Create a test client.
+        let mut client = util::test::setup().await?;
 
-        let request = Request::get("/api/auth/me")
-            .header("accept", "*/*")
-            .body(Default::default())?;
+        // First, try to GET /api/auth/me without a session.
+        let response = client.get("/api/auth/me").await?;
 
-        let response = client.send(request).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "GET /api/auth/me without a session responds with 401 Unauthorized.",
+        );
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        // Find a user to use as a test case.
+        let user = {
+            let mut connection = client.app().database().await?;
+            User::query().first_async(&mut connection).await?
+        };
+
+        // Create a session with `user`.
+        util::test::login(&mut client, user.clone())?;
+
+        // Now, let's try again with a valid session.
+        let response = client.get("/api/auth/me").await?;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "GET /api/auth/me responds with 200 OK for requests made with a valid session."
+        );
+
+        assert_eq!(
+            user,
+            response.data::<User>().await?,
+            "The payload contained in the response is equal to the current user."
+        );
 
         Ok(())
     }

@@ -23,6 +23,7 @@ type JoinChannels = InnerJoinOn<JoinSubscriptions, channels::table, ThroughSubsc
 type ThroughSubscriptions = diesel::dsl::Eq<subscriptions::channel_id, channels::id>;
 
 #[derive(Clone, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct User {
     id: Id,

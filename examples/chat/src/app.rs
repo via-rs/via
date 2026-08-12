@@ -254,6 +254,11 @@ impl Unicorn {
     pub fn pubsub(&self) -> &Pubsub<Redis<Id, Notification>> {
         &self.pubsub
     }
+
+    #[cfg(test)]
+    pub fn signer(&self) -> &Key {
+        &self.signer
+    }
 }
 
 impl Authenticator for Unicorn {

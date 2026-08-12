@@ -77,6 +77,11 @@ impl Response {
         }
     }
 
+    #[cfg(feature = "test-util")]
+    pub fn into_body(self) -> ResponseBody {
+        self.inner.into_body()
+    }
+
     #[inline]
     fn inner(&self) -> &http::Response<ResponseBody> {
         &self.inner

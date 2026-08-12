@@ -115,12 +115,12 @@ mod tests {
 
     use crate::app::SESSION;
     use crate::models::User;
-    use crate::util::{self, Authenticator};
+    use crate::util::{Authenticator, test};
 
     #[tokio::test]
     async fn me() -> via::Result<()> {
         // Create a test client.
-        let mut client = util::test::setup().await?;
+        let mut client = test::setup().await?;
 
         // First, try to GET /api/auth/me without a session.
         let response = client.get("/api/auth/me").await?;
@@ -131,14 +131,8 @@ mod tests {
             "GET /api/auth/me without a session responds with 401 Unauthorized.",
         );
 
-        // Find a user to use as a test case.
-        let user = {
-            let mut connection = client.app().database().await?;
-            User::query().first_async(&mut connection).await?
-        };
-
-        // Create a session with `user`.
-        util::test::login(&mut client, user.clone())?;
+        // Create a test user and authenticate a client session with them.
+        let user = test::login(&mut client).await?;
 
         // Now, let's try again with a valid session.
         let response = client.get("/api/auth/me").await?;
@@ -154,6 +148,9 @@ mod tests {
             response.data::<User>().await?,
             "The payload contained in the response is equal to the current user."
         );
+
+        // Remove the test user and logout.
+        test::logout(&mut client, user).await?;
 
         Ok(())
     }

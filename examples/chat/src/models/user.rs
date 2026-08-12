@@ -74,6 +74,10 @@ pub struct AuthParams {
     password: Zeroizing<String>,
 }
 
+#[cfg(test)]
+#[derive(Deserialize)]
+pub struct TestPassword(Password);
+
 /// A write-only password credential.
 ///
 /// This type should never expose plaintext password material.
@@ -275,6 +279,23 @@ impl UserWithSubscriptions {
             id: self.id,
             email: self.email.clone(),
             username: self.username.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl NewUser {
+    pub fn new(
+        email: String,
+        username: String,
+        password: TestPassword,
+        confirm_password: Zeroizing<String>,
+    ) -> Self {
+        Self {
+            email,
+            username,
+            password: password.0,
+            confirm_password,
         }
     }
 }

@@ -261,17 +261,17 @@ impl Debug for RequestBody {
 }
 
 impl RequestPayload {
-    #[inline]
+    #[inline(always)]
     pub(super) fn frames(&self) -> &[Bytes] {
         &self.frames
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn frames_mut(&mut self) -> &mut [Bytes] {
         &mut self.frames
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn unary_mut(&mut self) -> Option<&mut Bytes> {
         if self.frames.len() == 1 {
             Some(&mut self.frames[0])

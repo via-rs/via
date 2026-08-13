@@ -100,7 +100,11 @@ pub mod test {
 
     /// Create a test client for `unicorn` with the routes defined in `main.rs`.
     pub async fn setup() -> via::Result<Client> {
-        dotenvy::from_filename(&resolve_env_file())?;
+        let env_file_path = resolve_env_file();
+
+        if dotenvy::from_filename(&env_file_path).is_err() {
+            log!(warn(setup = 0), ".env not found at {:?}", &env_file_path);
+        }
 
         let router = via::Router::new(crate::routes);
         let (_, unicorn) = Unicorn::new().await?;

@@ -110,7 +110,6 @@ jobs:
       - name: test examples
         uses: actions-rs/cargo@v1
         with:
-          working-directory: ./examples
           command: test
           args: --examples --features __test
 

@@ -50,6 +50,9 @@
 //! proud of.
 //!
 
+#[cfg(all(not(debug_assertions), feature = "test-util"))]
+compile_error!("The \"test-util\" feature cannot be active in release builds.");
+
 macro_rules! log {
     ($level:tt($name:ident = $indent:expr), $fmt:literal $(, $($arg:expr)*)?) => {
         $($(

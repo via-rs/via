@@ -98,6 +98,15 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Install diesel-cli
+        uses: actions-rs/cargo@v1
+        with:
+          command: install
+          args: --locked diesel_cli --no-default-features --features postgres
+
+      - name: Run migrations
+        run: diesel migration run --migration-dir examples/chat/migrations
+
       - name: test examples
         uses: actions-rs/cargo@v1
         with:

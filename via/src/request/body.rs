@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
+use tokio::task::coop;
 
 use crate::error::Error;
 
@@ -135,14 +136,25 @@ impl Future for Coalesce {
     type Output = Result<Aggregate, Error>;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        while let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) {
-            let frames = self.body.frames_mut()?;
-            if let Ok(data) = frame.into_data() {
-                frames.push(data);
+        loop {
+            let coop = ready!(coop::poll_proceed(context));
+
+            match Pin::new(&mut self.body).poll_frame(context)? {
+                Poll::Ready(Some(frame)) => {
+                    coop.made_progress();
+
+                    if let Ok(data) = frame.into_data() {
+                        self.body.frames_mut()?.push(data);
+                    }
+                }
+                Poll::Ready(None) => {
+                    return Poll::Ready(self.body.finish(None));
+                }
+                Poll::Pending => {
+                    return Poll::Pending;
+                }
             }
         }
-
-        Poll::Ready(self.body.finish(None))
     }
 }
 
@@ -287,23 +299,39 @@ impl Future for WithTrailers {
     type Output = Result<Aggregate, Error>;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        while let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) {
-            match frame.into_data() {
-                Ok(data) => {
-                    self.body.frames_mut()?.push(data);
-                }
-                Err(frame) => {
-                    let trailers = frame.into_trailers().map_err(|_| unknown_frame_type())?;
-                    if let Some(existing) = self.trailers.as_mut() {
-                        existing.extend(trailers);
-                    } else {
-                        self.trailers = Some(trailers);
+        loop {
+            let coop = ready!(coop::poll_proceed(context));
+
+            match Pin::new(&mut self.body).poll_frame(context)? {
+                Poll::Ready(Some(frame)) => {
+                    match frame.into_data() {
+                        Ok(data) => {
+                            self.body.frames_mut()?.push(data);
+                        }
+                        Err(frame) => {
+                            let Ok(trailers) = frame.into_trailers() else {
+                                let error = unknown_frame_type();
+                                return Poll::Ready(Err(error));
+                            };
+
+                            if let Some(existing) = self.trailers.as_mut() {
+                                existing.extend(trailers);
+                            } else {
+                                self.trailers = Some(trailers);
+                            }
+                        }
                     }
+
+                    coop.made_progress();
+                }
+                Poll::Ready(None) => {
+                    let trailers = self.trailers.take();
+                    return Poll::Ready(self.body.finish(trailers));
+                }
+                Poll::Pending => {
+                    return Poll::Pending;
                 }
             }
         }
-
-        let trailers = self.trailers.take();
-        Poll::Ready(self.body.finish(trailers))
     }
 }

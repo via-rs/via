@@ -105,11 +105,12 @@ jobs:
           args: --locked diesel_cli --no-default-features --features postgres
 
       - name: Run migrations
-        run: diesel migration run --migration-dir examples/chat/migrations
+        run: diesel migration run --migration-dir ./examples/chat/migrations
 
       - name: test examples
         uses: actions-rs/cargo@v1
         with:
+          working-directory: ./examples
           command: test
           args: --examples --features __test
 

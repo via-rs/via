@@ -14,6 +14,7 @@ pub struct TestService<App> {
     cookies: CookieJar,
 }
 
+/// Create a test client with the provided `router` for `app`.
 pub fn service<App>(router: Router<App>, app: App) -> TestService<App> {
     let via = Via::new(router, app);
     let config = Default::default();
@@ -26,6 +27,8 @@ pub fn service<App>(router: Router<App>, app: App) -> TestService<App> {
 }
 
 impl<App> TestService<App> {
+    /// Include the provided key-value pair in the headers of each request made
+    /// with this client.
     pub fn header<K, V>(mut self, key: K, value: V) -> Result<Self, Error>
     where
         HeaderName: TryFrom<K>,
@@ -41,10 +44,13 @@ impl<App> TestService<App> {
         Ok(self)
     }
 
+    /// Returns reference to the shared application associated with this
+    /// client.
     pub fn app(&self) -> &Shared<App> {
         self.service.app()
     }
 
+    /// Returns a mutable reference to the cookies associated with this client.
     pub fn cookies_mut(&mut self) -> &mut CookieJar {
         &mut self.cookies
     }

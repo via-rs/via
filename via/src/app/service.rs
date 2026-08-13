@@ -92,6 +92,7 @@ impl<App> Service<ServiceRequest> for ServiceAdapter<App> {
     type Future = FutureResponse;
     type Response = http::Response<ResponseBody>;
 
+    #[inline(never)]
     fn call(&self, request: ServiceRequest) -> Self::Future {
         self.service.call(request)
     }
@@ -113,6 +114,7 @@ impl<App> Service<ServiceRequest> for ViaService<App> {
     type Future = FutureResponse;
     type Response = http::Response<ResponseBody>;
 
+    #[inline(never)]
     fn call(&self, request: ServiceRequest) -> Self::Future {
         let path = request.uri().path();
 

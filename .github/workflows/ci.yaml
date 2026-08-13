@@ -88,6 +88,8 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/via_test
       REDIS_URL: redis://localhost:6379
+      PUBSUB_SIGNER: "w8WXZvNLcUA/CSMocY9+wQDdd+utTnXmZLHa9HJEyCo="
+      SESSION_SIGNER: "JcXrxXSUb1XRET/ewRkj7C6ntiVxiDN82j5rzpr43kWzSkH8AhqYmRMjKgOV/ErwVpuLn14OhA0aO7ZqkAjUWg=="
 
     steps:
       - uses: actions/checkout@master

@@ -156,6 +156,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn logout() -> via::Result<()> {
+        // Create a test client.
+        let mut client = test::setup().await?;
+
+        // First, try to DELETE /api/auth without a session.
+        let response = client.delete("/api/auth").await?;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "DELETE /api/auth without a session responds with 403 Forbidden.",
+        );
+
+        // Create a test user and authenticate a client session with them.
+        let user = test::login(&mut client).await?;
+
+        // Now, let's try again with a valid session.
+        let response = client.delete("/api/auth").await?;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::NO_CONTENT,
+            "DELETE /api/auth with a valid session responds with 204 No Content."
+        );
+
+        // Finally, GET /api/auth/me to confirm that logout was successful.
+        let response = client.get("/api/auth/me").await?;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "GET /api/auth/me responds with 401 Unauthorized after logout."
+        );
+
+        // Remove the test user and logout.
+        test::logout(&mut client, user).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn login() -> via::Result<()> {
         // Create a test client.
         let mut client = test::setup().await?;

@@ -7,9 +7,12 @@ use serde::de::DeserializeOwned;
 use super::request::TestBody;
 use crate::{Error, Request, Response};
 
+/// An HTTP client used to dispatch requests during tests.
 pub trait Client<App>: Sized {
+    /// Dispatches an HTTP request and returns the resulting response.
     fn send(&mut self, request: http::Request<TestBody>) -> impl Future<Output = crate::Result>;
 
+    /// Sends a `CONNECT` request to `uri`.
     fn connect<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
@@ -18,6 +21,7 @@ pub trait Client<App>: Sized {
         Request::<App>::connect(uri).send(self)
     }
 
+    /// Sends a `DELETE` request to `uri`.
     fn delete<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
@@ -26,6 +30,7 @@ pub trait Client<App>: Sized {
         Request::<App>::delete(uri).send(self)
     }
 
+    /// Sends a `GET` request to `uri`.
     fn get<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
@@ -34,6 +39,7 @@ pub trait Client<App>: Sized {
         Request::<App>::get(uri).send(self)
     }
 
+    /// Sends a `HEAD` request to `uri`.
     fn head<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
@@ -42,6 +48,7 @@ pub trait Client<App>: Sized {
         Request::<App>::head(uri).send(self)
     }
 
+    /// Sends an `OPTIONS` request to `uri`.
     fn options<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
@@ -50,6 +57,7 @@ pub trait Client<App>: Sized {
         Request::<App>::options(uri).send(self)
     }
 
+    /// Sends a `TRACE` request to `uri`.
     fn trace<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,

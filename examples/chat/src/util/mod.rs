@@ -29,13 +29,24 @@ pub mod test {
             // The time in milliseconds that have passed since the UNIX epoch.
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
 
-            // Perform a couple of allocations before checking out a database
-            // connection. We just used `clock_gettime` with a NON-monotonic
-            // clock.
+            // Sample wall-clock time and expose only its whole-millisecond
+            // value before performing the allocations that precede database
+            // checkout.
             //
-            // In production, it is a best practice to use `Instant::now()` as
-            // it uses `CLOCK_MONOTONIC` with `clock_gettime`. The only reason
-            // we use `SystemTime` in tests is to teach it's edges.
+            // Compared with a high-resolution `Instant` measurement taken
+            // near checkout, this timestamp is a less precise oracle for when
+            // checkout occurs: it is quantized to millisecond buckets, and the
+            // intervening allocations introduce variable delay.
+            //
+            // This follows the same defense-in-depth principle as reducing
+            // high-resolution timer precision in browsers.
+            //
+            // Neither quantization nor allocation jitter is a critical
+            // security property. Repeated observations may recover finer
+            // timing information.
+            //
+            // Use an explicitly tick-based clock when precise timing
+            // disclosure would be catastrophic.
 
             let email = format!("test-user-{}@kontinue.boo", now);
             let username = format!("test-user-{}", now);

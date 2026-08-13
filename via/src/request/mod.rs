@@ -2,11 +2,13 @@
 
 pub mod params;
 
+mod body;
 mod payload;
 mod query;
 
+pub use body::{Aggregate, Coalesce, RequestBody};
 pub use params::{PathParams, QueryParams};
-pub use payload::{Aggregate, Coalesce, Payload, Payloadz, RequestBody};
+pub use payload::{Payload, Payloadz};
 
 use cookie::CookieJar;
 use delegate::delegate;

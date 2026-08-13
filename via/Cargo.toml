@@ -23,6 +23,8 @@ mime = ["dep:mime"]
 native-tls = ["dep:native-tls", "dep:tokio-native-tls", "hyper/http2"]
 rustls-23 = ["dep:rustls", "dep:tokio-rustls", "hyper/http2"]
 
+test-util = []
+
 tokio-tungstenite = [
     "dep:base64",
     "dep:futures-channel",

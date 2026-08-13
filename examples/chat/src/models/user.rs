@@ -23,6 +23,7 @@ type JoinChannels = InnerJoinOn<JoinSubscriptions, channels::table, ThroughSubsc
 type ThroughSubscriptions = diesel::dsl::Eq<subscriptions::channel_id, channels::id>;
 
 #[derive(Clone, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[serde(rename_all = "camelCase")]
 pub struct User {
     id: Id,
@@ -68,10 +69,15 @@ pub struct UserWithSubscriptions {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 pub struct AuthParams {
     email: String,
     password: Zeroizing<String>,
 }
+
+#[cfg(test)]
+#[derive(Deserialize)]
+pub struct TestPassword(Password);
 
 /// A write-only password credential.
 ///
@@ -315,5 +321,39 @@ impl FromSql<sql_types::Text, Pg> for Password {
 impl ToSql<sql_types::Text, Pg> for Password {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
         <str as ToSql<sql_types::Text, Pg>>::to_sql(&self.hash, out)
+    }
+}
+
+#[cfg(test)]
+impl AuthParams {
+    pub fn new(email: &str, password: &str) -> Self {
+        Self {
+            email: email.to_owned(),
+            password: password.to_owned().into(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl NewUser {
+    pub fn new(
+        email: String,
+        username: String,
+        password: TestPassword,
+        confirm_password: Zeroizing<String>,
+    ) -> Self {
+        Self {
+            email,
+            username,
+            password: password.0,
+            confirm_password,
+        }
+    }
+}
+
+#[cfg(test)]
+impl User {
+    pub fn email(&self) -> &str {
+        &self.email
     }
 }

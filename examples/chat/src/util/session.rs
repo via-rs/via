@@ -47,14 +47,15 @@ pub fn auth_required() -> impl for<'a> Predicate<Request, Error<'a> = &'a Unauth
 }
 
 pub fn needs_verified() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
-    let is_auth_request = on::path(case_sensitive(b"/api/auth"));
-
-    guard::or((
-        // The request is a mutation and the target is not /api/auth.
-        (method::is_mutation(), guard::not(is_auth_request)),
-        // The active user account has not been verified in the past hour.
-        guard::bool(on(Identity::is_expired, IdentityExtension).opt()),
-    ))
+    (
+        // The request target is not /api/auth.
+        guard::not(on::path(case_sensitive(b"/api/auth"))),
+        // The request method describes a mutation or the session is stale.
+        guard::or((
+            method::is_mutation(),
+            guard::bool(on(Identity::is_expired, IdentityExtension).opt()),
+        )),
+    )
 }
 
 #[inline(always)]

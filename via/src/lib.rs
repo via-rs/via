@@ -50,6 +50,9 @@
 //! proud of.
 //!
 
+#[cfg(all(not(debug_assertions), feature = "test-util"))]
+compile_error!("The \"test-util\" feature cannot be active in release builds.");
+
 macro_rules! log {
     ($level:tt($name:ident = $indent:expr), $fmt:literal $(, $($arg:expr)*)?) => {
         $($(
@@ -74,6 +77,9 @@ pub mod guard;
 pub mod request;
 pub mod response;
 pub mod router;
+
+#[cfg(feature = "test-util")]
+pub mod test;
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 pub mod ws;

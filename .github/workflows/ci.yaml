@@ -56,6 +56,65 @@ jobs:
           command: test
           args: --package via-router
 
+  test_examples:
+    name: test examples
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: via_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d via_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/via_test
+      REDIS_URL: redis://localhost:6379/?protocol=resp3
+      PUBSUB_SIGNER: "w8WXZvNLcUA/CSMocY9+wQDdd+utTnXmZLHa9HJEyCo="
+      SESSION_SIGNER: "JcXrxXSUb1XRET/ewRkj7C6ntiVxiDN82j5rzpr43kWzSkH8AhqYmRMjKgOV/ErwVpuLn14OhA0aO7ZqkAjUWg=="
+
+    steps:
+      - uses: actions/checkout@master
+
+      - name: Install stable Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install diesel-cli
+        uses: actions-rs/cargo@v1
+        with:
+          command: install
+          args: --locked diesel_cli --no-default-features --features postgres
+
+      - name: Run migrations
+        run: diesel migration run --migration-dir ./examples/chat/migrations
+
+      - name: test examples
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --examples --features __test
+
   fmt_clippy_and_docs:
     name: fmt, clippy, and docs
     runs-on: ubuntu-latest

@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::service::Client;
+use super::client::Client;
 use crate::{Error, Request, Response};
 
 pub struct RequestBuilder<App> {

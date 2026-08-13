@@ -110,11 +110,11 @@ pub async fn me(request: Request, _: Next) -> via::Result {
 #[cfg(test)]
 mod tests {
     use http::{StatusCode, header::COOKIE};
-    use via::test::Client;
+    use via::{Request, test::Client};
     use via_diesel::AsyncQueryDsl;
 
     use crate::app::SESSION;
-    use crate::models::User;
+    use crate::models::user::{AuthParams, User};
     use crate::util::{Authenticator, test};
 
     #[tokio::test]
@@ -135,6 +135,80 @@ mod tests {
         let user = test::login(&mut client).await?;
 
         // Now, let's try again with a valid session.
+        let response = client.get("/api/auth/me").await?;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "GET /api/auth/me responds with 200 OK for requests made with a valid session."
+        );
+
+        assert_eq!(
+            user,
+            response.data::<User>().await?,
+            "The payload contained in the response is equal to the current user."
+        );
+
+        // Remove the test user and logout.
+        test::logout(&mut client, user).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn login() -> via::Result<()> {
+        // Create a test client.
+        let mut client = test::setup().await?;
+
+        // Create a test user and authenticate a client session with them.
+        let user = test::login(&mut client).await?;
+
+        // First, try to POST /api/auth/login with an existing session.
+        let response = Request::post("/api/auth")
+            .data(AuthParams::new(user.email(), "password"))
+            .send(&mut client)
+            .await?;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "POST /api/auth with an active session responds with 403 Forbidden.",
+        );
+
+        // Remove the session cookie from the client so we can test login.
+        *client.cookies_mut() = Default::default();
+
+        // Now, let's try to POST /api/auth with the wrong password.
+        let response = Request::post("/api/auth")
+            .data(AuthParams::new(user.email(), "password"))
+            .send(&mut client)
+            .await?;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "POST /api/auth with invalid credentials responds with 401 Unauthorized.",
+        );
+
+        // Now, let's try to POST /api/auth with valid credentials.
+        let response = Request::post("/api/auth")
+            .data(AuthParams::new(user.email(), test::DROWSSAP))
+            .send(&mut client)
+            .await?;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::CREATED,
+            "POST /api/auth with valid credentials responds with 201 Created.",
+        );
+
+        assert_eq!(
+            user,
+            response.data::<User>().await?,
+            "The payload contained in the response is equal to the current user.",
+        );
+
+        // Finally, GET /api/auth/me to confirm that login was successful.
         let response = client.get("/api/auth/me").await?;
 
         assert_eq!(

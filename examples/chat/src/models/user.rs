@@ -69,6 +69,7 @@ pub struct UserWithSubscriptions {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(Serialize))]
 pub struct AuthParams {
     email: String,
     password: Zeroizing<String>,
@@ -283,23 +284,6 @@ impl UserWithSubscriptions {
     }
 }
 
-#[cfg(test)]
-impl NewUser {
-    pub fn new(
-        email: String,
-        username: String,
-        password: TestPassword,
-        confirm_password: Zeroizing<String>,
-    ) -> Self {
-        Self {
-            email,
-            username,
-            password: password.0,
-            confirm_password,
-        }
-    }
-}
-
 impl Password {
     #[inline]
     fn as_bytes(&self) -> &[u8] {
@@ -337,5 +321,39 @@ impl FromSql<sql_types::Text, Pg> for Password {
 impl ToSql<sql_types::Text, Pg> for Password {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
         <str as ToSql<sql_types::Text, Pg>>::to_sql(&self.hash, out)
+    }
+}
+
+#[cfg(test)]
+impl AuthParams {
+    pub fn new(email: &str, password: &str) -> Self {
+        Self {
+            email: email.to_owned(),
+            password: password.to_owned().into(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl NewUser {
+    pub fn new(
+        email: String,
+        username: String,
+        password: TestPassword,
+        confirm_password: Zeroizing<String>,
+    ) -> Self {
+        Self {
+            email,
+            username,
+            password: password.0,
+            confirm_password,
+        }
+    }
+}
+
+#[cfg(test)]
+impl User {
+    pub fn email(&self) -> &str {
+        &self.email
     }
 }

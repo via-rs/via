@@ -1,25 +1,32 @@
 use bytes::Bytes;
+use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::request::Builder;
-use http::{HeaderName, HeaderValue, Method, Uri, Version};
+use http::{HeaderName, HeaderValue, Method, StatusCode, Uri, Version};
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::BodyExt;
-use http_body_util::combinators::BoxBody;
+use serde::Serialize;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use super::client::Client;
+use crate::response::ResponseBody;
 use crate::{Error, Request, Response};
 
 pub struct RequestBuilder<App> {
     request: Builder,
-    body: Option<TestBody>,
+    body: Result<Option<TestBody>, Error>,
     _app: PhantomData<App>,
 }
 
 #[derive(Debug, Default)]
 pub struct TestBody {
-    body: BoxBody<Bytes, Error>,
+    body: ResponseBody,
+}
+
+#[derive(Serialize)]
+struct JsonData<T> {
+    data: T,
 }
 
 macro_rules! methods {
@@ -37,7 +44,7 @@ macro_rules! methods {
             {
                 RequestBuilder {
                     request: http::request::Request::$name(uri),
-                    body: None,
+                    body: Ok(None),
                     _app: PhantomData,
                 }
             }
@@ -104,18 +111,40 @@ impl<App> RequestBuilder<App> {
 
     pub fn body<T>(mut self, body: T) -> Self
     where
-        T: Body<Data = Bytes> + Send + Sync + 'static,
-        Error: From<T::Error>,
+        TestBody: From<T>,
     {
-        self.body = Some(TestBody::new(body));
+        self.body = Ok(Some(body.into()));
         self
     }
 
-    pub async fn send(self, client: &impl Client<App>) -> Result<Response, Error> {
-        let body = self.body.unwrap_or_default();
-        let request = self.request.body(body)?;
+    pub fn data<T>(self, data: T) -> Self
+    where
+        T: Serialize,
+    {
+        self.json(&JsonData { data })
+    }
 
-        client.send(request).await
+    pub fn json(mut self, body: &impl Serialize) -> Self {
+        match serde_json::to_vec(body) {
+            Ok(body) => self
+                .header(CONTENT_LENGTH, body.len())
+                .header(CONTENT_TYPE, "application/json; charset=utf-8")
+                .body(body),
+
+            Err(error) => {
+                self.body = Err(Error::from_serde_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    error,
+                ));
+
+                self
+            }
+        }
+    }
+
+    pub async fn send(self, client: &mut impl Client<App>) -> Result<Response, Error> {
+        let body = self.body?.unwrap_or_default();
+        client.send(self.request.body(body)?).await
     }
 }
 
@@ -126,7 +155,7 @@ impl TestBody {
         Error: From<T::Error>,
     {
         Self {
-            body: BoxBody::new(body.map_err(Error::from)),
+            body: ResponseBody::boxed(body.map_err(Error::from)),
         }
     }
 }
@@ -148,5 +177,16 @@ impl Body for TestBody {
 
     fn size_hint(&self) -> SizeHint {
         self.body.size_hint()
+    }
+}
+
+impl<T> From<T> for TestBody
+where
+    ResponseBody: From<T>,
+{
+    fn from(body: T) -> Self {
+        Self {
+            body: ResponseBody::from(body),
+        }
     }
 }

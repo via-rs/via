@@ -12,44 +12,25 @@ pub mod test {
     use diesel::Identifiable;
     use http::header::ACCEPT;
     use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use uuid::Uuid;
     use via::test::{TestService, service};
 
     use super::session::Authenticator;
     use crate::app::{SESSION, Unicorn};
     use crate::models::user::{NewUser, User};
 
-    const DROWSSAP: &str = "drowssap";
+    pub const DROWSSAP: &str = "drowssap";
 
     pub type Client = TestService<Unicorn>;
 
     /// Create a test user and authenticate a session for them in `client`.
     pub async fn login(client: &mut Client) -> via::Result<User> {
         let user = {
-            // The time in milliseconds that have passed since the UNIX epoch.
-            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+            // Use a UUID as a suffix to prevent key collisions.
+            let uuid = Uuid::new_v4();
 
-            // Sample wall-clock time and expose only its whole-millisecond
-            // value before performing the allocations that precede database
-            // checkout.
-            //
-            // Compared with a high-resolution `Instant` measurement taken
-            // near checkout, this timestamp is a less precise oracle for when
-            // checkout occurs: it is quantized to millisecond buckets, and the
-            // intervening allocations introduce variable delay.
-            //
-            // This follows the same defense-in-depth principle as reducing
-            // high-resolution timer precision in browsers.
-            //
-            // Neither quantization nor allocation jitter is a critical
-            // security property. Repeated observations may recover finer
-            // timing information.
-            //
-            // Use an explicitly tick-based clock when precise timing
-            // disclosure would be catastrophic.
-
-            let email = format!("test-user-{}@kontinue.boo", now);
-            let username = format!("test-user-{}", now);
+            let email = format!("test-user-{}@kontinue.boo", uuid);
+            let username = format!("test-user-{}", uuid);
 
             // Zeroizing behavior in tests is not pedantic.
             //

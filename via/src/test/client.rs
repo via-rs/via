@@ -8,9 +8,9 @@ use super::request::TestBody;
 use crate::{Error, Request, Response};
 
 pub trait Client<App>: Sized {
-    fn send(&self, request: http::Request<TestBody>) -> impl Future<Output = crate::Result>;
+    fn send(&mut self, request: http::Request<TestBody>) -> impl Future<Output = crate::Result>;
 
-    fn connect<T>(&self, uri: T) -> impl Future<Output = crate::Result>
+    fn connect<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
         <T as TryInto<Uri>>::Error: Into<http::Error>,
@@ -18,7 +18,7 @@ pub trait Client<App>: Sized {
         Request::<App>::connect(uri).send(self)
     }
 
-    fn delete<T>(&self, uri: T) -> impl Future<Output = crate::Result>
+    fn delete<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
         <T as TryInto<Uri>>::Error: Into<http::Error>,
@@ -26,7 +26,7 @@ pub trait Client<App>: Sized {
         Request::<App>::delete(uri).send(self)
     }
 
-    fn get<T>(&self, uri: T) -> impl Future<Output = crate::Result>
+    fn get<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
         <T as TryInto<Uri>>::Error: Into<http::Error>,
@@ -34,7 +34,7 @@ pub trait Client<App>: Sized {
         Request::<App>::get(uri).send(self)
     }
 
-    fn head<T>(&self, uri: T) -> impl Future<Output = crate::Result>
+    fn head<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
         <T as TryInto<Uri>>::Error: Into<http::Error>,
@@ -42,7 +42,7 @@ pub trait Client<App>: Sized {
         Request::<App>::head(uri).send(self)
     }
 
-    fn options<T>(&self, uri: T) -> impl Future<Output = crate::Result>
+    fn options<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
         <T as TryInto<Uri>>::Error: Into<http::Error>,
@@ -50,7 +50,7 @@ pub trait Client<App>: Sized {
         Request::<App>::options(uri).send(self)
     }
 
-    fn trace<T>(&self, uri: T) -> impl Future<Output = crate::Result>
+    fn trace<T>(&mut self, uri: T) -> impl Future<Output = crate::Result>
     where
         T: TryInto<Uri>,
         <T as TryInto<Uri>>::Error: Into<http::Error>,

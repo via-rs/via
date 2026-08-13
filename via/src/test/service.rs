@@ -1,12 +1,12 @@
-use cookie::CookieJar;
-use http::header::COOKIE;
+use cookie::{Cookie, CookieJar};
+use http::header::{COOKIE, SET_COOKIE};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use hyper::service::Service;
 
 use super::client::Client;
 use super::request::TestBody;
-use crate::app::{ServiceAdapter, Shared, Via};
-use crate::{Error, Router};
+use crate::app::{ServiceAdapter, Via};
+use crate::{Error, Response, Router, Shared};
 
 pub struct TestService<App> {
     service: ServiceAdapter<App>,
@@ -57,8 +57,10 @@ impl<App> TestService<App> {
 }
 
 impl<App> Client<App> for TestService<App> {
-    fn send(&self, mut request: http::Request<TestBody>) -> impl Future<Output = crate::Result> {
-        let service = self.service.clone();
+    fn send(
+        &mut self,
+        mut request: http::Request<TestBody>,
+    ) -> impl Future<Output = crate::Result> {
         let headers = self.headers.clone();
         let cookies = self.cookies.iter().fold(String::new(), |value, cookie| {
             value + "; " + &cookie.to_string()
@@ -78,7 +80,20 @@ impl<App> Client<App> for TestService<App> {
             }
 
             // Call the test service adapter to get a response future.
-            Ok(service.call(request).await?.into())
+            let response = Response::from(self.service.call(request).await?);
+
+            // Add the cookies in the "set-cookie" headers to the client cookies.
+            for value in response.headers().get_all(SET_COOKIE) {
+                // Fail early if the header value is not valid UTF-8.
+                let input = value.to_str()?.to_owned();
+
+                // Fail late if the cookie could not be parsed.
+                if let Ok(cookie) = Cookie::parse(input) {
+                    self.cookies.add_original(cookie);
+                }
+            }
+
+            Ok(response)
         }
     }
 }

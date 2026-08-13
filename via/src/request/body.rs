@@ -137,15 +137,14 @@ impl Future for Coalesce {
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         loop {
+            let coop = ready!(coop::poll_proceed(context));
+
             match Pin::new(&mut self.body).poll_frame(context)? {
                 Poll::Ready(Some(frame)) => {
+                    coop.made_progress();
+
                     if let Ok(data) = frame.into_data() {
                         self.body.frames_mut()?.push(data);
-                    }
-
-                    if !coop::has_budget_remaining() {
-                        context.waker().wake_by_ref();
-                        return Poll::Pending;
                     }
                 }
                 Poll::Ready(None) => {
@@ -301,6 +300,8 @@ impl Future for WithTrailers {
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         loop {
+            let coop = ready!(coop::poll_proceed(context));
+
             match Pin::new(&mut self.body).poll_frame(context)? {
                 Poll::Ready(Some(frame)) => {
                     match frame.into_data() {
@@ -321,10 +322,7 @@ impl Future for WithTrailers {
                         }
                     }
 
-                    if !coop::has_budget_remaining() {
-                        context.waker().wake_by_ref();
-                        return Poll::Pending;
-                    }
+                    coop.made_progress();
                 }
                 Poll::Ready(None) => {
                     let trailers = self.trailers.take();

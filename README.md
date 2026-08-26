@@ -82,7 +82,7 @@ This project is inspired by:
 
 ## Dedication
 
-For Chester and Kristina. Make them smile. Build something that you are
+For Chester and Christina. Make them smile. Build something that you are
 proud of.
 
 ## License

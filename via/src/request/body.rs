@@ -186,6 +186,23 @@ impl RequestBody {
         }
     }
 
+    #[cfg(feature = "test-util")]
+    #[inline]
+    pub(crate) fn into_inner(self) -> TestBody {
+        self.body
+    }
+
+    #[cfg(not(feature = "test-util"))]
+    #[inline]
+    pub(crate) fn into_inner(self) -> hyper::body::Incoming {
+        self.body
+    }
+
+    #[inline]
+    pub(crate) fn remaining(&self) -> usize {
+        self.remaining
+    }
+
     fn finish(&mut self, trailers: Option<HeaderMap>) -> Result<Aggregate, Error> {
         let frames = self.frames.take().ok_or_else(already_read)?;
 

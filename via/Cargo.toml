@@ -59,7 +59,6 @@ futures-sink = { version = "0.3", optional = true }
 futures-task = { version = "0.3", optional = true }
 http = "1"
 http-body = "1"
-http-body-util = "0.1"
 httpdate = { version = "1", optional = true }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
@@ -73,6 +72,10 @@ tokio-websockets = { version = "0.13", features = ["ring", "server"], optional =
 via-macros = { path = "../via-macros", version = "1" }
 via-router = { path = "../via-router", version = "3.0.0-beta.35" }
 zeroize = "1"
+
+[dependencies.http-body-util]
+version = "0.1"
+features = ["channel"]
 
 [dependencies.native-tls]
 version = "0.2"

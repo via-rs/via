@@ -13,6 +13,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::io::ReaderStream;
 
 use super::{Finalize, Response, ResponseBuilder};
+use crate::error::BoxError;
 use crate::{Error, deny};
 
 /// The amount of data that can be buffered in memory when streaming a file.
@@ -200,7 +201,7 @@ impl FileStream {
 }
 
 impl Stream for FileStream {
-    type Item = Result<Frame<Bytes>, Error>;
+    type Item = Result<Frame<Bytes>, BoxError>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.file).poll_next(context) {
@@ -227,7 +228,7 @@ impl Stream for FileStream {
             Poll::Ready(Some(Err(error))) => {
                 self.remaining = 0;
                 self.permit = None;
-                Poll::Ready(Some(Err(Error::from_io_error(error))))
+                Poll::Ready(Some(Err(Box::new(error))))
             }
         }
     }

@@ -19,7 +19,7 @@ use std::fmt::{self, Debug, Formatter};
 use crate::ResultExt;
 use crate::app::Shared;
 use crate::error::Error;
-use crate::response::{Finalize, Response, ResponseBuilder};
+use crate::response::{Finalize, Response, ResponseBody, ResponseBuilder};
 use params::PathParam;
 
 /// The component parts of an HTTP request head and their derivatives.
@@ -413,7 +413,7 @@ impl<App> Debug for Request<App> {
 impl<App> Finalize for Request<App> {
     fn finalize(self, response: ResponseBuilder) -> Result<Response, Error> {
         use http::header::{CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING};
-        use http_body_util::combinators::BoxBody;
+        use http_body_util::Limited;
 
         let headers = self.headers();
 
@@ -426,6 +426,10 @@ impl<App> Finalize for Request<App> {
             response = response.header(CONTENT_TYPE, content_type);
         }
 
-        response.body(BoxBody::new(self.body).into())
+        // RequestBody would assume aggregation.
+        let remaining = self.body.remaining();
+        let body = Limited::new(self.body.into_inner(), remaining);
+
+        response.body(ResponseBody::spawn(body))
     }
 }

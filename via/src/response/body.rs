@@ -50,7 +50,7 @@ impl<T> Future for PipeTask<T>
 where
     T: Body<Data = Bytes, Error = BoxError> + Send,
 {
-    type Output = Result<(), BoxError>;
+    type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         self.pipe.as_mut().poll(context)
@@ -83,7 +83,7 @@ impl<T> Future for Pipe<T>
 where
     T: Body<Data = Bytes, Error = BoxError> + Send,
 {
-    type Output = Result<(), BoxError>;
+    type Output = ();
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let coop = ready!(coop::poll_proceed(context));
@@ -96,7 +96,7 @@ where
                 // stalled. The safest thing we can do is consider it a timeout.
                 if let Some(tx) = dest.take_if(|tx| tx.try_send(frame).is_err()) {
                     tx.abort("write interrupted".to_owned().into());
-                    Poll::Ready(Ok(()))
+                    Poll::Ready(())
                 } else {
                     Poll::Pending
                 }
@@ -104,13 +104,12 @@ where
             Some(Err(error)) => {
                 if let Some(tx) = dest.take() {
                     tx.abort(error);
-                    Poll::Ready(Ok(()))
-                } else {
-                    Poll::Ready(Err(error))
                 }
+
+                Poll::Ready(())
             }
             None => {
-                Poll::Ready(Ok(())) // Exhausted
+                Poll::Ready(()) // Exhausted
             }
         }
     }

@@ -27,7 +27,6 @@ struct PipeTask<T> {
 
 struct Pipe<T> {
     source: T,
-    queue: Option<Frame<Bytes>>,
     dest: Option<Sender<Bytes, BoxError>>,
 }
 
@@ -36,7 +35,6 @@ impl<T> PipeTask<T> {
         Self {
             pipe: Box::pin(Pipe {
                 source,
-                queue: None,
                 dest: Some(dest),
             }),
         }
@@ -63,34 +61,28 @@ where
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let coop = ready!(coop::poll_proceed(context));
 
-        if let Some(frame) = self.queue.take() {
-            // If sending the message fails, rx was dropped or the connection
-            // stalled. The safest thing we can do is consider it a timeout.
-            if let Some(tx) = self.dest.take_if(|tx| tx.try_send(frame).is_err()) {
-                tx.abort("body write timeout".to_owned().into());
-                return Poll::Ready(());
-            }
-        }
-
-        match Pin::new(&mut self.source).poll_frame(context) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => Poll::Ready(()),
-            Poll::Ready(Some(Ok(frame))) => {
+        match ready!(Pin::new(&mut self.source).poll_frame(context)) {
+            Some(Ok(frame)) => {
                 coop.made_progress();
 
-                if let Some(tx) = self.dest.as_mut() {
-                    self.queue = tx.try_send(frame).err();
-                    Poll::Pending
-                } else {
+                // If sending the message fails, rx was dropped or the connection
+                // stalled. The safest thing we can do is consider it a timeout.
+                if let Some(tx) = self.dest.take_if(|tx| tx.try_send(frame).is_err()) {
+                    tx.abort("write interrupted".to_owned().into());
                     Poll::Ready(())
+                } else {
+                    Poll::Pending
                 }
             }
-            Poll::Ready(Some(Err(error))) => {
+            Some(Err(error)) => {
                 if let Some(tx) = self.dest.take() {
                     tx.abort(error);
                 }
 
                 Poll::Ready(())
+            }
+            None => {
+                Poll::Ready(()) // Exhausted
             }
         }
     }

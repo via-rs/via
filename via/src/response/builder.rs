@@ -139,7 +139,7 @@ impl ResponseBuilder {
 
 impl<T> Finalize for T
 where
-    T: Stream<Item = Result<Frame<Bytes>, BoxError>> + Send + Unpin + 'static,
+    T: Stream<Item = Result<Frame<Bytes>, BoxError>> + Send + 'static,
 {
     #[inline]
     fn finalize(self, builder: ResponseBuilder) -> Result<Response, Error> {

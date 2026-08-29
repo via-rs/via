@@ -85,32 +85,37 @@ where
 {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        let coop = ready!(coop::poll_proceed(context));
-        let (src, dest) = self.project();
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            let coop = ready!(coop::poll_proceed(context));
+            let (src, dest) = self.as_mut().project();
 
-        match ready!(src.poll_frame(context)) {
-            Some(Ok(frame)) => {
-                coop.made_progress();
-                // If sending the message fails, rx was dropped or the connection
-                // stalled. The safest thing we can do is consider it a timeout.
-                if let Some(tx) = dest.take_if(|tx| tx.try_send(frame).is_err()) {
-                    tx.abort("write interrupted".to_owned().into());
-                    Poll::Ready(())
-                } else {
-                    Poll::Pending
-                }
-            }
-            Some(Err(error)) => {
-                if let Some(tx) = dest.take() {
-                    tx.abort(error);
-                }
+            match ready!(src.poll_frame(context)) {
+                Some(Ok(frame)) => {
+                    coop.made_progress();
 
-                Poll::Ready(())
-            }
-            None => {
-                Poll::Ready(()) // Exhausted
-            }
+                    // Do not allow the producer to outpace the consumer.
+                    if let Some(tx) = dest.take_if(|tx| tx.try_send(frame).is_err()) {
+                        log!(error(pipe = 0), "write interrupted");
+                        tx.abort("write interrupted".to_owned().into());
+                        return Poll::Ready(());
+                    }
+                }
+                Some(Err(error)) => {
+                    log!(error(pipe = 0), "error");
+
+                    if let Some(tx) = dest.take() {
+                        tx.abort(error);
+                    } else {
+                        log!(error(pipe = 0), "{}", error);
+                    }
+
+                    return Poll::Ready(());
+                }
+                None => {
+                    return Poll::Ready(()); // Exhausted
+                }
+            };
         }
     }
 }

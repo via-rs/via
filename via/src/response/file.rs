@@ -18,7 +18,7 @@ use crate::{Error, deny};
 
 /// The amount of data that can be buffered in memory when streaming a file.
 ///
-const BUFFER_SIZE: usize = 64 * 1024; // 64KB
+const BUFFER_SIZE: usize = 8 * 1024; // 64KB
 
 /// A function pointer used to generate an etag.
 ///

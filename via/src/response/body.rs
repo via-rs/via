@@ -1,13 +1,15 @@
 use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
-use http_body_util::channel::{Channel, Sender};
-use http_body_util::{Either, Full};
+use http_body_util::{Channel, Either, Full};
 use std::fmt::{self, Debug, Formatter};
+use std::marker::PhantomPinned;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
-use tokio::task::coop;
+use tokio::task::{self, coop};
 
 use crate::error::BoxError;
+
+type Dest = http_body_util::channel::Sender<Bytes, BoxError>;
 
 pub struct ResponseBody {
     body: Either<ChannelBody, ReadyBody>,
@@ -26,16 +28,19 @@ struct PipeTask<T> {
 }
 
 struct Pipe<T> {
-    source: T,
-    dest: Option<Sender<Bytes, BoxError>>,
+    src: T,
+    dest: Option<Dest>,
+    _pin: PhantomPinned,
 }
 
 impl<T> PipeTask<T> {
-    fn new(source: T, dest: Sender<Bytes, BoxError>) -> Self {
+    #[inline]
+    fn new(src: T, dest: Dest) -> Self {
         Self {
             pipe: Box::pin(Pipe {
-                source,
+                src,
                 dest: Some(dest),
+                _pin: PhantomPinned,
             }),
         }
     }
@@ -43,46 +48,69 @@ impl<T> PipeTask<T> {
 
 impl<T> Future for PipeTask<T>
 where
-    T: Body<Data = Bytes, Error = BoxError> + Send + Unpin,
+    T: Body<Data = Bytes, Error = BoxError> + Send,
 {
-    type Output = ();
+    type Output = Result<(), BoxError>;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         self.pipe.as_mut().poll(context)
     }
 }
 
+impl<T> Pipe<T> {
+    #[inline(always)]
+    fn project(self: Pin<&mut Self>) -> (Pin<&mut T>, &mut Option<Dest>) {
+        // Safety:
+        //
+        // `Pipe` can only be constructed as `Pin<Box<Pipe>>` guaranteeing a
+        // stable memory address.
+        //
+        // `Pipe` also contains a `_pin: PhantomPinned` field, preventing
+        // accidental moves at compile time.
+        let this = unsafe { self.get_unchecked_mut() };
+
+        // Safety:
+        //
+        // `Pin<&mut T>` is used once to poll the producer. `src` never moves
+        // out of `self` in the process.
+        let src = unsafe { Pin::new_unchecked(&mut this.src) };
+
+        (src, &mut this.dest)
+    }
+}
+
 impl<T> Future for Pipe<T>
 where
-    T: Body<Data = Bytes, Error = BoxError> + Send + Unpin,
+    T: Body<Data = Bytes, Error = BoxError> + Send,
 {
-    type Output = ();
+    type Output = Result<(), BoxError>;
 
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let coop = ready!(coop::poll_proceed(context));
+        let (src, dest) = self.project();
 
-        match ready!(Pin::new(&mut self.source).poll_frame(context)) {
+        match ready!(src.poll_frame(context)) {
             Some(Ok(frame)) => {
                 coop.made_progress();
-
                 // If sending the message fails, rx was dropped or the connection
                 // stalled. The safest thing we can do is consider it a timeout.
-                if let Some(tx) = self.dest.take_if(|tx| tx.try_send(frame).is_err()) {
+                if let Some(tx) = dest.take_if(|tx| tx.try_send(frame).is_err()) {
                     tx.abort("write interrupted".to_owned().into());
-                    Poll::Ready(())
+                    Poll::Ready(Ok(()))
                 } else {
                     Poll::Pending
                 }
             }
             Some(Err(error)) => {
-                if let Some(tx) = self.dest.take() {
+                if let Some(tx) = dest.take() {
                     tx.abort(error);
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Ready(Err(error))
                 }
-
-                Poll::Ready(())
             }
             None => {
-                Poll::Ready(()) // Exhausted
+                Poll::Ready(Ok(())) // Exhausted
             }
         }
     }
@@ -99,16 +127,16 @@ impl ResponseBody {
     }
 
     #[inline]
-    pub fn spawn<T>(source: T) -> Self
+    pub fn spawn<T>(src: T) -> Self
     where
-        T: Body<Data = Bytes, Error = BoxError> + Send + Unpin + 'static,
+        T: Body<Data = Bytes, Error = BoxError> + Send + 'static,
     {
-        let (tx, rx) = Channel::new(1);
+        let (dest, body) = Channel::new(1);
 
-        tokio::spawn(PipeTask::new(source, tx));
+        task::spawn(PipeTask::new(src, dest));
 
         Self {
-            body: Either::Left(ChannelBody { body: rx }),
+            body: Either::Left(ChannelBody { body }),
         }
     }
 }

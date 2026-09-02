@@ -69,7 +69,13 @@ pub trait Client<App>: Sized {
 
 impl Response {
     pub async fn bytes(self) -> Result<Bytes, Error> {
-        let payload = self.into_body().collect().await?;
+        let payload = match self.into_body().collect().await {
+            Ok(payload) => payload,
+            Err(source) => {
+                return Err(Error::from_source(source));
+            }
+        };
+
         let mut buf = payload.aggregate();
 
         Ok(buf.copy_to_bytes(buf.remaining()))

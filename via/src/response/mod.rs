@@ -2,6 +2,7 @@
 
 mod body;
 mod builder;
+mod channel;
 mod redirect;
 
 #[cfg(feature = "fs")]

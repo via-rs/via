@@ -3,15 +3,17 @@ use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::request::Builder;
 use http::{HeaderName, HeaderValue, Method, StatusCode, Uri, Version};
 use http_body::{Body, Frame, SizeHint};
-use http_body_util::BodyExt;
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full};
 use serde::Serialize;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use super::client::Client;
-use crate::response::ResponseBody;
-use crate::{Error, Request, Response};
+use crate::error::{BoxError, Error};
+use crate::request::Request;
+use crate::response::Response;
 
 pub struct RequestBuilder<App> {
     request: Builder,
@@ -21,7 +23,7 @@ pub struct RequestBuilder<App> {
 
 #[derive(Debug, Default)]
 pub struct TestBody {
-    body: ResponseBody,
+    body: BoxBody<Bytes, BoxError>,
 }
 
 #[derive(Serialize)]
@@ -152,10 +154,10 @@ impl TestBody {
     pub(crate) fn new<T>(body: T) -> Self
     where
         T: Body<Data = Bytes> + Send + Sync + 'static,
-        Error: From<T::Error>,
+        BoxError: From<T::Error>,
     {
         Self {
-            body: ResponseBody::boxed(body.map_err(Error::from)),
+            body: BoxBody::new(body.map_err(BoxError::from)),
         }
     }
 }
@@ -168,7 +170,9 @@ impl Body for TestBody {
         mut self: Pin<&mut Self>,
         context: &mut Context,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Pin::new(&mut self.body).poll_frame(context)
+        Pin::new(&mut self.body)
+            .poll_frame(context)
+            .map_err(Error::from_source)
     }
 
     fn is_end_stream(&self) -> bool {
@@ -182,11 +186,9 @@ impl Body for TestBody {
 
 impl<T> From<T> for TestBody
 where
-    ResponseBody: From<T>,
+    Full<Bytes>: From<T>,
 {
     fn from(body: T) -> Self {
-        Self {
-            body: ResponseBody::from(body),
-        }
+        Self::new(Full::from(body))
     }
 }

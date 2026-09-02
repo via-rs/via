@@ -1,23 +1,24 @@
 use bytes::Bytes;
 use futures_core::Stream;
-use http::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED};
-use http_body::Frame;
+use http::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED, TRANSFER_ENCODING};
 use httpdate::HttpDate;
 use std::fs::Metadata;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, ready};
 use tokio::fs::File as TokioFile;
 use tokio::io::AsyncReadExt;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::io::ReaderStream;
 
-use super::{Finalize, Response, ResponseBuilder};
+use super::{Response, ResponseBuilder};
+use crate::response::ResponseBody;
 use crate::{Error, deny};
 
 /// The amount of data that can be buffered in memory when streaming a file.
 ///
-const BUFFER_SIZE: usize = 64 * 1024; // 64KB
+const BUFFER_SIZE: usize = 8 * 1024; // 64KB
 
 /// A function pointer used to generate an etag.
 ///
@@ -39,7 +40,7 @@ enum MaybeRead {
     Eager(usize, Metadata, Vec<u8>),
 
     /// The file is too large to read into memory.
-    Lazy(u64, Metadata, TokioFile),
+    Lazy(Metadata, TokioFile),
 }
 
 /// A stream that wraps the `AsyncRead` impl for `TokioFile`.
@@ -47,7 +48,6 @@ enum MaybeRead {
 struct FileStream {
     file: ReaderStream<TokioFile>,
     permit: Option<OwnedSemaphorePermit>,
-    remaining: u64,
 }
 
 /// Attempt to open the file and access the metadata at the provided path.
@@ -66,7 +66,7 @@ async fn maybe_read(path: impl AsRef<Path>, max_alloc_size: u64) -> Result<Maybe
 
     if capacity > max_alloc_size {
         file.set_max_buf_size(BUFFER_SIZE);
-        Ok(MaybeRead::Lazy(capacity, metadata, file))
+        Ok(MaybeRead::Lazy(metadata, file))
     } else {
         let mut data = Vec::with_capacity(capacity as usize);
         //                                ^^^^^^^^
@@ -137,13 +137,17 @@ impl File {
 
     /// Respond with a stream of the file contents in chunks.
     ///
-    pub async fn stream(self) -> crate::Result {
+    pub async fn stream(mut self) -> crate::Result {
         let mut file = open_async(&*self.path).await?;
         let metadata = file.metadata().await.map_err(Error::from_io_error)?;
-        let response = self.set_headers(&metadata)?;
 
         file.set_max_buf_size(BUFFER_SIZE);
-        FileStream::new(file, self.permit, metadata.len()).finalize(response)
+
+        let stream = FileStream::new(file, self.permit.take());
+
+        self.set_headers(&metadata)?
+            .header(TRANSFER_ENCODING, "chunked")
+            .body(ResponseBody::pipe(stream))
     }
 
     /// Respond with the contents of the file.
@@ -153,16 +157,22 @@ impl File {
     ///
     pub async fn serve(mut self, max_alloc_size: u64) -> crate::Result {
         let max_alloc_size = max_alloc_size.min(isize::MAX as u64);
+        let permit = self.permit.take();
 
         match maybe_read(&self.path, max_alloc_size).await? {
             MaybeRead::Eager(len, metadata, data) => {
-                let response = self.set_headers(&metadata)?;
-                self.permit = None;
-                response.header(CONTENT_LENGTH, len).body(data.into())
+                let buf = Bytes::from(data);
+
+                self.set_headers(&metadata)?
+                    .header(CONTENT_LENGTH, len)
+                    .body(ResponseBody::new(buf))
             }
-            MaybeRead::Lazy(len, metadata, file) => {
-                let response = self.set_headers(&metadata)?;
-                FileStream::new(file, self.permit, len).finalize(response)
+            MaybeRead::Lazy(metadata, file) => {
+                let stream = FileStream::new(file, permit);
+
+                self.set_headers(&metadata)?
+                    .header(TRANSFER_ENCODING, "chunked")
+                    .body(ResponseBody::pipe(stream))
             }
         }
     }
@@ -190,45 +200,24 @@ impl File {
 }
 
 impl FileStream {
-    fn new(file: TokioFile, permit: Option<OwnedSemaphorePermit>, remaining: u64) -> Self {
+    fn new(file: TokioFile, permit: Option<OwnedSemaphorePermit>) -> Self {
         Self {
             file: ReaderStream::with_capacity(file, BUFFER_SIZE),
             permit,
-            remaining,
         }
     }
 }
 
 impl Stream for FileStream {
-    type Item = Result<Frame<Bytes>, Error>;
+    type Item = Result<Bytes, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.file).poll_next(context) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => {
-                self.permit = None;
-                self.remaining = 0;
-                Poll::Ready(None)
-            }
-            Poll::Ready(Some(Ok(next))) => {
-                match self.remaining.checked_sub(next.len() as u64) {
-                    Some(0) | None => {
-                        self.remaining = 0;
-                        // Wake ASAP, we know the stream has ended.
-                        context.waker().wake_by_ref();
-                    }
-                    Some(remaining) => {
-                        self.remaining = remaining;
-                    }
-                }
+        let next = ready!(Pin::new(&mut self.file).poll_next(context));
 
-                Poll::Ready(Some(Ok(Frame::data(next))))
-            }
-            Poll::Ready(Some(Err(error))) => {
-                self.remaining = 0;
-                self.permit = None;
-                Poll::Ready(Some(Err(Error::from_io_error(error))))
-            }
+        if next.is_none() {
+            self.permit = None;
         }
+
+        Poll::Ready(next)
     }
 }

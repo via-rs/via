@@ -430,6 +430,6 @@ impl<App> Finalize for Request<App> {
         let remaining = self.body.remaining();
         let body = Limited::new(self.body.into_inner(), remaining);
 
-        response.body(ResponseBody::spawn(body))
+        response.body(ResponseBody::boxed(body))
     }
 }

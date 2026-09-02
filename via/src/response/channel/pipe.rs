@@ -70,8 +70,7 @@ where
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            // Ideally, this returns pending and wake gets registered without
-            // polling `dest` for readiness.
+            // Fairness is enforced where backpressure accumulates.
             let coop = ready!(coop::poll_proceed(context));
             let (src, mut dest) = self.as_mut().project();
 

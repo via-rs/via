@@ -1,14 +1,10 @@
-use bytes::Bytes;
-use futures_core::Stream;
-use http::header::{CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING};
+use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::{HeaderName, HeaderValue, StatusCode, Version};
-use http_body::Frame;
-use http_body_util::StreamBody;
 use serde::Serialize;
 
 use super::Response;
 use super::body::ResponseBody;
-use crate::error::{BoxError, Error};
+use crate::error::Error;
 
 /// Define how a type finalizes a [`ResponseBuilder`].
 ///
@@ -134,17 +130,5 @@ impl ResponseBuilder {
     #[inline]
     pub fn finish(self) -> Result<Response, Error> {
         self.body(ResponseBody::default())
-    }
-}
-
-impl<T> Finalize for T
-where
-    T: Stream<Item = Result<Frame<Bytes>, BoxError>> + Send + 'static,
-{
-    #[inline]
-    fn finalize(self, builder: ResponseBuilder) -> Result<Response, Error> {
-        builder
-            .header(TRANSFER_ENCODING, "chunked")
-            .body(ResponseBody::spawn(StreamBody::new(self)))
     }
 }

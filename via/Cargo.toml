@@ -16,7 +16,7 @@ default = []
 aws-lc-rs = ["dep:aws-lc-rs", "rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
 ring = ["dep:ring", "rustls/ring", "tokio-rustls/ring"]
 
-fs = ["dep:httpdate", "tokio/fs", "tokio/io-util", "tokio-util"]
+fs = ["dep:httpdate", "tokio/fs", "tokio/io-util", "tokio-util/io"]
 
 mime = ["dep:mime"]
 
@@ -27,19 +27,17 @@ test-util = []
 
 tokio-tungstenite = [
     "dep:base64",
-    "dep:futures-channel",
-    "dep:futures-sink",
     "dep:futures-task",
     "dep:tungstenite",
-    "dep:tokio-tungstenite"
+    "dep:tokio-tungstenite",
+    "futures-channel/sink"
 ]
 
 tokio-websockets = [
     "dep:base64",
-    "dep:futures-channel",
-    "dep:futures-sink",
     "dep:futures-task",
-    "dep:tokio-websockets"
+    "dep:tokio-websockets",
+    "futures-channel/sink"
 ]
 
 # Internal
@@ -53,9 +51,9 @@ bitflags = "2"
 bytes = "1"
 cookie = { version = "0.18", features = ["percent-encode"] }
 delegate = "0.13"
-futures-channel = { version = "0.3", features = ["sink"], optional = true }
+futures-channel = "0.3"
 futures-core = "0.3"
-futures-sink = { version = "0.3", optional = true }
+futures-sink = "0.3"
 futures-task = { version = "0.3", optional = true }
 http = "1"
 http-body = "1"
@@ -68,6 +66,7 @@ serde = { version = "1", features = ["derive"]  }
 serde_json = "1"
 smallvec = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tokio-util = { version = "0.7", default-features = false }
 tokio-websockets = { version = "0.13", features = ["ring", "server"], optional = true }
 via-macros = { path = "../via-macros", version = "1" }
 via-router = { path = "../via-router", version = "3.0.0-beta.35" }
@@ -109,12 +108,6 @@ default-features = false
 [dependencies.tokio-rustls]
 version = "0.26"
 optional = true
-default-features = false
-
-[dependencies.tokio-util]
-version = "0.7"
-optional = true
-features = ["io"]
 default-features = false
 
 [dev-dependencies]

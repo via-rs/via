@@ -1,133 +1,91 @@
 use bytes::Bytes;
+use futures_core::Stream;
 use http_body::{Body, Frame, SizeHint};
-use http_body_util::{Channel, Either, Full};
+use http_body_util::{Full, combinators::BoxBody};
 use std::fmt::{self, Debug, Formatter};
-use std::marker::PhantomPinned;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
-use tokio::task::{self, coop};
+use tokio::task;
 
+use super::channel::{ChannelBody, PipeTask};
 use crate::error::BoxError;
 
-type Dest = http_body_util::channel::Sender<Bytes, BoxError>;
-
 pub struct ResponseBody {
-    body: Either<ChannelBody, ReadyBody>,
-}
-
-struct ChannelBody {
-    body: Channel<Bytes, BoxError>,
+    body: BoxBody<Bytes, BoxError>,
 }
 
 struct ReadyBody {
     body: Full<Bytes>,
 }
 
-struct PipeTask<T> {
-    pipe: Pin<Box<Pipe<T>>>,
+struct StreamBody<T, E> {
+    body: T,
+    _err: PhantomData<E>,
 }
 
-struct Pipe<T> {
-    src: T,
-    dest: Option<Dest>,
-    _pin: PhantomPinned,
-}
+impl Body for ReadyBody {
+    type Data = Bytes;
+    type Error = BoxError;
 
-impl<T> PipeTask<T> {
-    #[inline]
-    fn new(src: T, dest: Dest) -> Self {
-        Self {
-            pipe: Box::pin(Pipe {
-                src,
-                dest: Some(dest),
-                _pin: PhantomPinned,
-            }),
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        context: &mut Context,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        match ready!(Pin::new(&mut self.body).poll_frame(context)) {
+            Some(Ok(frame)) => Poll::Ready(Some(Ok(frame))),
+            None => Poll::Ready(None),
+
+            // The error type of `self.body` is `Infallible`.
+            // At a minimum, this arm is a cold path. Ideally it is eliminated.
+            Some(Err(_)) => unreachable!(),
         }
     }
-}
 
-impl<T> Future for PipeTask<T>
-where
-    T: Body<Data = Bytes, Error = BoxError> + Send,
-{
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        self.pipe.as_mut().poll(context)
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
     }
-}
 
-impl<T> Pipe<T> {
-    #[inline(always)]
-    fn project(self: Pin<&mut Self>) -> (Pin<&mut T>, &mut Option<Dest>) {
-        // Safety:
-        //
-        // `Pipe` can only be constructed as `Pin<Box<Pipe>>` guaranteeing a
-        // stable memory address.
-        //
-        // `Pipe` also contains a `_pin: PhantomPinned` field, preventing
-        // accidental moves at compile time.
-        let this = unsafe { self.get_unchecked_mut() };
-
-        // Safety:
-        //
-        // `Pin<&mut T>` is used once to poll the producer. `src` never moves
-        // out of `self` in the process.
-        let src = unsafe { Pin::new_unchecked(&mut this.src) };
-
-        (src, &mut this.dest)
-    }
-}
-
-impl<T> Future for Pipe<T>
-where
-    T: Body<Data = Bytes, Error = BoxError> + Send,
-{
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        loop {
-            let coop = ready!(coop::poll_proceed(context));
-            let (src, dest) = self.as_mut().project();
-
-            match ready!(src.poll_frame(context)) {
-                Some(Ok(frame)) => {
-                    coop.made_progress();
-
-                    // Do not allow the producer to outpace the consumer.
-                    if let Some(tx) = dest.take_if(|tx| tx.try_send(frame).is_err()) {
-                        log!(error(pipe = 0), "write interrupted");
-                        tx.abort("write interrupted".to_owned().into());
-                        return Poll::Ready(());
-                    }
-                }
-                Some(Err(error)) => {
-                    log!(error(pipe = 0), "error");
-
-                    if let Some(tx) = dest.take() {
-                        tx.abort(error);
-                    } else {
-                        log!(error(pipe = 0), "{}", error);
-                    }
-
-                    return Poll::Ready(());
-                }
-                None => {
-                    return Poll::Ready(()); // Exhausted
-                }
-            };
-        }
+    fn size_hint(&self) -> SizeHint {
+        self.body.size_hint()
     }
 }
 
 impl ResponseBody {
     #[inline]
     pub fn new(buf: Bytes) -> Self {
+        Self::boxed(ReadyBody {
+            body: Full::new(buf),
+        })
+    }
+
+    #[inline]
+    pub fn boxed<T>(body: T) -> Self
+    where
+        T: Body<Data = Bytes, Error = BoxError> + Send + Sync + 'static,
+    {
         Self {
-            body: Either::Right(ReadyBody {
-                body: Full::new(buf),
-            }),
+            body: BoxBody::new(body),
         }
+    }
+
+    #[inline]
+    pub fn once(buf: Bytes) -> Self {
+        Self::spawn(ReadyBody {
+            body: Full::new(buf),
+        })
+    }
+
+    #[inline]
+    pub fn pipe<T, E>(src: T) -> Self
+    where
+        T: Stream<Item = Result<Bytes, E>> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::spawn(StreamBody {
+            body: src,
+            _err: PhantomData,
+        })
     }
 
     #[inline]
@@ -135,13 +93,13 @@ impl ResponseBody {
     where
         T: Body<Data = Bytes, Error = BoxError> + Send + 'static,
     {
-        let (dest, body) = Channel::new(1);
+        let (dest, body) = ChannelBody::new();
 
+        // Spawn a task to pipe the frames from `src` to `dest`.
         task::spawn(PipeTask::new(src, dest));
 
-        Self {
-            body: Either::Left(ChannelBody { body }),
-        }
+        // Return the receiver in a `BoxBody`.
+        Self::boxed(body)
     }
 }
 
@@ -154,54 +112,6 @@ impl Body for ResponseBody {
         context: &mut Context,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         Pin::new(&mut self.body).poll_frame(context)
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.body.is_end_stream()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        self.body.size_hint()
-    }
-}
-
-impl Body for ChannelBody {
-    type Data = Bytes;
-    type Error = BoxError;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        context: &mut Context,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Pin::new(&mut self.body).poll_frame(context)
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.body.is_end_stream()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        self.body.size_hint()
-    }
-}
-
-impl Body for ReadyBody {
-    type Data = Bytes;
-    type Error = BoxError;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        context: &mut Context,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        match Pin::new(&mut self.body).poll_frame(context) {
-            Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(frame))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-
-            // The error type of `self.body` is `Infallible`.
-            // At a minimum, this arm is a cold path. Ideally it is eliminated.
-            Poll::Ready(Some(Err(_))) => unreachable!(),
-        }
     }
 
     fn is_end_stream(&self) -> bool {
@@ -258,5 +168,36 @@ impl From<&'_ [u8]> for ResponseBody {
     #[inline]
     fn from(slice: &'_ [u8]) -> Self {
         Self::new(Bytes::copy_from_slice(slice))
+    }
+}
+
+impl<T, E> StreamBody<T, E> {
+    #[inline(always)]
+    fn project(self: Pin<&mut Self>) -> Pin<&mut T> {
+        // Safety:
+        //
+        // The memory address of `self` is stable and pin-safe and body never
+        // moves out of `self` from the returned `Pin<&mut T>`.
+        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.body) }
+    }
+}
+
+impl<T, E> Body for StreamBody<T, E>
+where
+    T: Stream<Item = Result<Bytes, E>> + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        context: &mut Context,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        match ready!(self.project().poll_next(context)) {
+            Some(Ok(buf)) => Poll::Ready(Some(Ok(Frame::data(buf)))),
+            Some(Err(error)) => Poll::Ready(Some(Err(Box::new(error)))),
+            None => Poll::Ready(None),
+        }
     }
 }

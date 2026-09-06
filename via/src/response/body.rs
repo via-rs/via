@@ -1,9 +1,7 @@
 use bytes::Bytes;
-use futures_core::Stream;
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::{Full, combinators::BoxBody};
 use std::fmt::{self, Debug, Formatter};
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 use tokio::task;
@@ -17,11 +15,6 @@ pub struct ResponseBody {
 
 struct ReadyBody {
     body: Full<Bytes>,
-}
-
-struct StreamBody<T, E> {
-    body: T,
-    _err: PhantomData<E>,
 }
 
 impl Body for ReadyBody {
@@ -73,18 +66,6 @@ impl ResponseBody {
     pub fn once(buf: Bytes) -> Self {
         Self::spawn(ReadyBody {
             body: Full::new(buf),
-        })
-    }
-
-    #[inline]
-    pub fn pipe<T, E>(src: T) -> Self
-    where
-        T: Stream<Item = Result<Bytes, E>> + Send + 'static,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        Self::spawn(StreamBody {
-            body: src,
-            _err: PhantomData,
         })
     }
 
@@ -168,36 +149,5 @@ impl From<&'_ [u8]> for ResponseBody {
     #[inline]
     fn from(slice: &'_ [u8]) -> Self {
         Self::new(Bytes::copy_from_slice(slice))
-    }
-}
-
-impl<T, E> StreamBody<T, E> {
-    #[inline(always)]
-    fn project(self: Pin<&mut Self>) -> Pin<&mut T> {
-        // Safety:
-        //
-        // The memory address of `self` is stable and pin-safe and body never
-        // moves out of `self` from the returned `Pin<&mut T>`.
-        unsafe { Pin::map_unchecked_mut(self, |this| &mut this.body) }
-    }
-}
-
-impl<T, E> Body for StreamBody<T, E>
-where
-    T: Stream<Item = Result<Bytes, E>> + Send + 'static,
-    E: std::error::Error + Send + Sync + 'static,
-{
-    type Data = Bytes;
-    type Error = BoxError;
-
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        context: &mut Context,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        match ready!(self.project().poll_next(context)) {
-            Some(Ok(buf)) => Poll::Ready(Some(Ok(Frame::data(buf)))),
-            Some(Err(error)) => Poll::Ready(Some(Err(Box::new(error)))),
-            None => Poll::Ready(None),
-        }
     }
 }

@@ -1,9 +1,10 @@
 use bytes::Bytes;
 use futures_core::Stream;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED, TRANSFER_ENCODING};
+use http_body::Frame;
+use http_body_util::StreamBody;
 use httpdate::HttpDate;
 use std::fs::Metadata;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
@@ -13,6 +14,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::io::ReaderStream;
 
 use super::{Response, ResponseBuilder};
+use crate::error::BoxError;
 use crate::response::ResponseBody;
 use crate::{Error, deny};
 
@@ -147,7 +149,7 @@ impl File {
 
         self.set_headers(&metadata)?
             .header(TRANSFER_ENCODING, "chunked")
-            .body(ResponseBody::pipe(stream))
+            .body(ResponseBody::boxed(StreamBody::new(stream)))
     }
 
     /// Respond with the contents of the file.
@@ -172,7 +174,7 @@ impl File {
 
                 self.set_headers(&metadata)?
                     .header(TRANSFER_ENCODING, "chunked")
-                    .body(ResponseBody::pipe(stream))
+                    .body(ResponseBody::boxed(StreamBody::new(stream)))
             }
         }
     }
@@ -209,15 +211,19 @@ impl FileStream {
 }
 
 impl Stream for FileStream {
-    type Item = Result<Bytes, io::Error>;
+    type Item = Result<Frame<Bytes>, BoxError>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let next = ready!(Pin::new(&mut self.file).poll_next(context));
-
-        if next.is_none() {
-            self.permit = None;
+        match ready!(Pin::new(&mut self.file).poll_next(context)) {
+            Some(Ok(buf)) => Poll::Ready(Some(Ok(Frame::data(buf)))),
+            None => {
+                self.permit = None;
+                Poll::Ready(None)
+            }
+            Some(Err(error)) => {
+                self.permit = None;
+                Poll::Ready(Some(Err(Box::new(error))))
+            }
         }
-
-        Poll::Ready(next)
     }
 }

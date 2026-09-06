@@ -87,7 +87,7 @@ where
                     src.poll_frame(context) // capacity available
                 }
                 Poll::Pending => {
-                    if let ..2 = this.pending {
+                    if this.pending < 2 {
                         this.pending += 1;
                         return Poll::Pending;
                     } else {
@@ -121,7 +121,7 @@ where
                     return Poll::Ready(()); // Exhausted
                 }
                 Poll::Pending => {
-                    if let ..2 = this.pending {
+                    if this.pending < 2 {
                         this.pending += 1;
                         return Poll::Pending;
                     } else {

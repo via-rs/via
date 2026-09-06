@@ -10,13 +10,14 @@ mod file;
 
 pub use body::ResponseBody;
 pub use builder::{Finalize, ResponseBuilder};
-use delegate::delegate;
+pub use channel::Sender;
 pub use redirect::Redirect;
 
 #[cfg(feature = "fs")]
 pub use file::File;
 
 use cookie::CookieJar;
+use delegate::delegate;
 use http::{Extensions, HeaderMap, StatusCode, Version};
 use std::fmt::{self, Debug, Formatter};
 

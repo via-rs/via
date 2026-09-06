@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 use tokio::task;
 
-use super::channel::{ChannelBody, PipeTask};
+use super::channel::{ChannelBody, PipeTask, Sender};
 use crate::error::BoxError;
 
 pub struct ResponseBody {
@@ -63,24 +63,29 @@ impl ResponseBody {
     }
 
     #[inline]
+    pub fn channel(f: impl FnOnce(Sender)) -> Self {
+        let (tx, body) = ChannelBody::new();
+        let body = Self::boxed(body);
+
+        f(tx);
+
+        body
+    }
+
     pub fn once(buf: Bytes) -> Self {
         Self::spawn(ReadyBody {
             body: Full::new(buf),
         })
     }
 
-    #[inline]
     pub fn spawn<T>(src: T) -> Self
     where
         T: Body<Data = Bytes, Error = BoxError> + Send + 'static,
     {
-        let (dest, body) = ChannelBody::new();
-
-        // Spawn a task to pipe the frames from `src` to `dest`.
-        task::spawn(PipeTask::new(src, dest));
-
-        // Return the receiver in a `BoxBody`.
-        Self::boxed(body)
+        Self::channel(|dest| {
+            // Spawn a task to pipe the frames from `src` to `dest`.
+            task::spawn(PipeTask::new(src, dest));
+        })
     }
 }
 

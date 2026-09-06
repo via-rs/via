@@ -1,10 +1,10 @@
 mod pipe;
+mod sender;
 
 pub(super) use pipe::PipeTask;
+pub use sender::Sender;
 
 use bytes::Bytes;
-use delegate::delegate;
-use futures_channel::mpsc::SendError;
 use futures_channel::{mpsc, oneshot};
 use futures_core::Stream;
 use http_body::{Body, Frame};
@@ -21,17 +21,12 @@ pub struct ChannelBody {
     rx: RecvFrame,
 }
 
-pub(super) struct Sender {
-    err: Option<oneshot::Sender<BoxError>>,
-    tx: mpsc::Sender<Frame<Bytes>>,
-}
-
 impl ChannelBody {
     #[inline]
     pub fn new() -> (Sender, Self) {
         let (etx, erx) = oneshot::channel();
         let (tx, rx) = mpsc::channel(0);
-        let sender = Sender { err: Some(etx), tx };
+        let sender = Sender::new(etx, tx);
         let body = Self { rx, err: erx };
 
         (sender, body)
@@ -74,26 +69,6 @@ impl Body for ChannelBody {
                 this.rx.close();
                 Poll::Ready(None)
             }
-        }
-    }
-}
-
-impl Sender {
-    delegate! {
-        to self.tx {
-            fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), SendError>>;
-        }
-    }
-
-    fn send_frame(&mut self, frame: Frame<Bytes>) -> Result<(), SendError> {
-        self.tx.start_send(frame)
-    }
-
-    fn send_error(&mut self, error: BoxError) -> Result<(), BoxError> {
-        if let Some(tx) = self.err.take() {
-            tx.send(error)
-        } else {
-            Err(error)
         }
     }
 }

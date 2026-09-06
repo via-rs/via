@@ -3,7 +3,6 @@ use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::request::Builder;
 use http::{HeaderName, HeaderValue, Method, StatusCode, Uri, Version};
 use http_body::{Body, Frame, SizeHint};
-use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use serde::Serialize;
 use std::marker::PhantomData;
@@ -13,7 +12,7 @@ use std::task::{Context, Poll};
 use super::client::Client;
 use crate::error::{BoxError, Error};
 use crate::request::Request;
-use crate::response::Response;
+use crate::response::{Response, ResponseBody};
 
 pub struct RequestBuilder<App> {
     request: Builder,
@@ -21,9 +20,9 @@ pub struct RequestBuilder<App> {
     _app: PhantomData<App>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TestBody {
-    body: BoxBody<Bytes, BoxError>,
+    body: ResponseBody,
 }
 
 #[derive(Serialize)]
@@ -157,7 +156,7 @@ impl TestBody {
         BoxError: From<T::Error>,
     {
         Self {
-            body: BoxBody::new(body.map_err(BoxError::from)),
+            body: ResponseBody::spawn(body.map_err(BoxError::from)),
         }
     }
 }
@@ -181,6 +180,12 @@ impl Body for TestBody {
 
     fn size_hint(&self) -> SizeHint {
         self.body.size_hint()
+    }
+}
+
+impl Default for TestBody {
+    fn default() -> Self {
+        Self::from(String::new())
     }
 }
 

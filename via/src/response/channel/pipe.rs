@@ -12,15 +12,24 @@ pub struct PipeTask<T> {
 }
 
 struct Pipe<T> {
+    pending: u8,
     src: T,
     dest: Sender,
+}
+
+fn src_not_responding() -> BoxError {
+    "pipe task src became unresponsive.".to_owned().into()
 }
 
 impl<T> PipeTask<T> {
     #[inline]
     pub fn new(src: T, dest: Sender) -> Self {
         Self {
-            pipe: Box::pin(Pipe { src, dest }),
+            pipe: Box::pin(Pipe {
+                pending: 0,
+                src,
+                dest,
+            }),
         }
     }
 }
@@ -36,72 +45,105 @@ where
     }
 }
 
-impl<T> Pipe<T> {
-    #[inline(always)]
-    fn project(self: Pin<&mut Self>) -> (Pin<&mut T>, Pin<&mut Sender>) {
-        // Safety:
-        //
-        // `Pipe` can only be constructed as `Pin<Box<Pipe>>` guaranteeing a
-        // stable memory address.
-        //
-        // Data that the pinning invariants of `Pipe` depend upon do not move
-        // from any `Pin<&mut _>` created from `this`.
-        let this = unsafe { self.get_unchecked_mut() };
-
-        // Safety:
-        //
-        // `Pin<&mut T>` is used once to poll the producer. `src` never moves
-        // out of `self` in the process. We trust that `T` is well behaved with
-        // regards to it's own pinning invariants.
-        let src = unsafe { Pin::new_unchecked(&mut this.src) };
-
-        // `Sender` is `Unpin` and does not require `unsafe` for projection.
-        let dest = Pin::new(&mut this.dest);
-
-        (src, dest)
-    }
-}
-
 impl<T> Future for Pipe<T>
 where
     T: Body<Data = Bytes, Error = BoxError> + Send,
 {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        // Safety:
+        //
+        // `Self` only occurs as a field of `PipeTask` as `Pin<Box<Self>>`. The
+        // visibility rules in this module uphold this invariant.
+        //
+        // Data that the pinning requirements of this implementation depend
+        // upon do not move out of `self`. The only field that is mutated
+        // directly is the `pending` counter byte.
+        let this = unsafe { self.get_unchecked_mut() };
+
         loop {
+            // Safety:
+            //
+            // `Pin<&mut T>` is used once per iteration to poll `src` for the
+            // next frame. Typically, this loop completes one full iteration.
+            //
+            // `src` is guaranteed a stable memory address because `Self` only
+            // occurs as a field of `PipeTask` as `Pin<Box<Self>>`. The `src`
+            // field is never modified once it is initialized.
+            //
+            // Since `src` is a generic implementation of `Body`, we trust that
+            // this implementation does not violate the pinning requirements
+            // of `PipeTask`. For example, replacing the value of
+            // `Pin<&mut Self>` with unsafe code.
+            let src = unsafe { Pin::new_unchecked(&mut this.src) };
+
             // Fairness is enforced where backpressure accumulates.
             let coop = ready!(coop::poll_proceed(context));
-            let (src, mut dest) = self.as_mut().project();
 
-            // We know the channel is not full because it would return pending.
-            if ready!(dest.poll_ready(context)).is_err() {
-                log!(warn(pipe = 0), "readiness error. connection closed.");
-                return Poll::Ready(());
-            }
+            // Poll `src` for the next frame when `dest` has capacity for it.
+            let poll_frame = match this.dest.poll_ready(context) {
+                Poll::Ready(Ok(_)) => {
+                    src.poll_frame(context) // capacity available
+                }
+                Poll::Pending => {
+                    if let ..2 = this.pending {
+                        this.pending += 1;
+                        return Poll::Pending;
+                    } else {
+                        log!(warn(pipe = 0), "dest became unresponsive.");
+                        this.dest.close_channel();
+                        return Poll::Ready(());
+                    }
+                }
+                Poll::Ready(Err(_)) => {
+                    log!(warn(pipe = 0), "connection closed.");
+                    return Poll::Ready(());
+                }
+            };
 
-            match ready!(src.poll_frame(context)) {
-                Some(Ok(frame)) => {
+            match poll_frame {
+                Poll::Ready(Some(Ok(frame))) => {
                     // We have exclusive access to `dest` and we just confirmed
                     // readiness. If an error occurs, the connection closed.
-                    if dest.send_frame(frame).is_err() {
-                        log!(warn(pipe = 0), "send error. connection closed.");
+                    if this.dest.send_frame(frame).is_err() {
+                        log!(warn(pipe = 0), "connection closed.");
                         return Poll::Ready(());
                     }
 
+                    // Progress is made when a `frame` from `src` is accepted by `dest`.
                     coop.made_progress();
+
+                    // Reset the counter when progress is made.
+                    this.pending = 0;
                 }
-                Some(Err(error)) => {
+                Poll::Ready(None) => {
+                    return Poll::Ready(()); // Exhausted
+                }
+                Poll::Pending => {
+                    if let ..2 = this.pending {
+                        this.pending += 1;
+                        return Poll::Pending;
+                    } else {
+                        let error = src_not_responding();
+
+                        if let Err(error) = this.dest.send_error(error) {
+                            log!(error(pipe = 0), "{}", error);
+                        } else {
+                            this.dest.close_channel();
+                        }
+
+                        return Poll::Ready(());
+                    }
+                }
+                Poll::Ready(Some(Err(error))) => {
                     // The connection closed, preventing the error from
                     // propagating. Log the error in debug builds.
-                    if let Err(error) = dest.send_error(error) {
+                    if let Err(error) = this.dest.send_error(error) {
                         log!(error(pipe = 0), "{}", error);
                     }
 
                     return Poll::Ready(());
-                }
-                None => {
-                    return Poll::Ready(()); // Exhausted
                 }
             }
         }

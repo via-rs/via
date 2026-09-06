@@ -13,12 +13,9 @@ use std::task::{Context, Poll, ready};
 
 use crate::error::BoxError;
 
-type RecvError = oneshot::Receiver<BoxError>;
-type RecvFrame = mpsc::Receiver<Frame<Bytes>>;
-
 pub struct ChannelBody {
-    err: RecvError,
-    rx: RecvFrame,
+    err: oneshot::Receiver<BoxError>,
+    rx: mpsc::Receiver<Frame<Bytes>>,
 }
 
 impl ChannelBody {

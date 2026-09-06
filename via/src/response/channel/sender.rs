@@ -24,17 +24,34 @@ impl Sender {
     }
 
     delegate! {
-        to self.sender.tx {
+        to self.sender {
+            pub(super) fn close_channel(&mut self);
             pub(super) fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), SendError>>;
+            pub(super) fn send_frame(&mut self, frame: Frame<Bytes>) -> Result<(), SendError>;
+            pub(super) fn send_error(&mut self, error: BoxError) -> Result<(), BoxError>;
+
+        }
+    }
+}
+
+impl SenderImpl {
+    delegate! {
+        to self.tx {
+            fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), SendError>>;
         }
     }
 
-    pub(super) fn send_frame(&mut self, frame: Frame<Bytes>) -> Result<(), SendError> {
-        self.sender.tx.start_send(frame)
+    fn close_channel(&mut self) {
+        self.tx.close_channel();
+        self.err = None;
     }
 
-    pub(super) fn send_error(&mut self, error: BoxError) -> Result<(), BoxError> {
-        if let Some(tx) = self.sender.err.take() {
+    fn send_frame(&mut self, frame: Frame<Bytes>) -> Result<(), SendError> {
+        self.tx.start_send(frame)
+    }
+
+    fn send_error(&mut self, error: BoxError) -> Result<(), BoxError> {
+        if let Some(tx) = self.err.take() {
             tx.send(error)
         } else {
             Err(error)

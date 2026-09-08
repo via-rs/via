@@ -12,13 +12,9 @@ pub struct PipeTask<T> {
 }
 
 struct Pipe<T> {
-    pending: u8,
+    pending: bool,
     src: T,
     dest: Sender,
-}
-
-fn src_not_responding() -> BoxError {
-    "pipe task src became unresponsive.".to_owned().into()
 }
 
 impl<T> PipeTask<T> {
@@ -26,7 +22,7 @@ impl<T> PipeTask<T> {
     pub fn new(src: T, dest: Sender) -> Self {
         Self {
             pipe: Box::pin(Pipe {
-                pending: 0,
+                pending: false,
                 src,
                 dest,
             }),
@@ -87,14 +83,8 @@ where
                     src.poll_frame(context) // capacity available
                 }
                 Poll::Pending => {
-                    if this.pending < 2 {
-                        this.pending += 1;
-                        return Poll::Pending;
-                    } else {
-                        log!(warn(pipe = 0), "dest became unresponsive.");
-                        this.dest.close_channel();
-                        return Poll::Ready(());
-                    }
+                    // The responsiveness of `dest` is outside of our control.
+                    return Poll::Pending;
                 }
                 Poll::Ready(Err(_)) => {
                     log!(warn(pipe = 0), "connection closed.");
@@ -115,17 +105,15 @@ where
                     coop.made_progress();
 
                     // Reset the counter when progress is made.
-                    this.pending = 0;
+                    this.pending = false;
                 }
                 Poll::Ready(None) => {
                     return Poll::Ready(()); // Exhausted
                 }
                 Poll::Pending => {
-                    if this.pending < 2 {
-                        this.pending += 1;
-                        return Poll::Pending;
-                    } else {
-                        let error = src_not_responding();
+                    if this.pending {
+                        let message = "pipe task src became unresponsive.".to_owned();
+                        let error = BoxError::from(message);
 
                         if let Err(error) = this.dest.send_error(error) {
                             log!(error(pipe = 0), "{}", error);
@@ -134,6 +122,9 @@ where
                         }
 
                         return Poll::Ready(());
+                    } else {
+                        this.pending = true;
+                        return Poll::Pending;
                     }
                 }
                 Poll::Ready(Some(Err(error))) => {

@@ -187,8 +187,9 @@ mod tests {
 
         fn poll_frame(
             self: Pin<&mut Self>,
-            _: &mut Context<'_>,
+            context: &mut Context<'_>,
         ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            context.waker().wake_by_ref();
             Poll::Pending
         }
     }
@@ -316,13 +317,8 @@ mod tests {
                     // Poll `src` for the next frame.
                     let poll = Pin::new(&mut pipe).poll(context);
 
-                    if poll.is_pending() {
-                        // Increment the `polls` counter.
-                        polls.fetch_add(1, Ordering::SeqCst);
-                    }
-
-                    // Register a wake to simulate `src` progress.
-                    context.waker().wake_by_ref();
+                    // Increment the `polls` counter.
+                    polls.fetch_add(1, Ordering::SeqCst);
 
                     poll
                 });

@@ -178,8 +178,19 @@ mod tests {
 
     const GREETING: Bytes = Bytes::from_static(b"Hello, world!");
 
-    /// An `impl Body` that always returns `Poll::Pending`.
+    /// An `impl Body` that always returns `Pending`.
+    ///
+    /// This is used to test the `src` "watchdog" feature of `PipeTask`.
     struct NeverBody;
+
+    /// An `impl Body` that returns `Pending` before delegating to `ReadyBody`.
+    ///
+    /// This is used to ensure that the `PipeTask` allows non-consecutive
+    /// `Pending` poll attempts.
+    struct YieldThenBody {
+        did_yield: bool,
+        body: ReadyBody,
+    }
 
     impl Body for NeverBody {
         type Data = Bytes;
@@ -191,6 +202,33 @@ mod tests {
         ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
             context.waker().wake_by_ref();
             Poll::Pending
+        }
+    }
+
+    impl YieldThenBody {
+        fn new(body: ReadyBody) -> Self {
+            Self {
+                did_yield: false,
+                body,
+            }
+        }
+    }
+
+    impl Body for YieldThenBody {
+        type Data = Bytes;
+        type Error = BoxError;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            context: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            if self.did_yield {
+                Pin::new(&mut self.body).poll_frame(context)
+            } else {
+                context.waker().wake_by_ref();
+                self.did_yield = true;
+                return Poll::Pending;
+            }
         }
     }
 
@@ -271,7 +309,7 @@ mod tests {
     async fn pipe_task_exits_when_src_is_exhausted() {
         let handle = Arc::new(());
         let body = ResponseBody::channel(|dest| {
-            let src = ReadyBody::new(GREETING);
+            let src = YieldThenBody::new(ReadyBody::new(GREETING));
             let pipe = PipeTask::new(src, dest);
             let handle = Arc::clone(&handle);
 

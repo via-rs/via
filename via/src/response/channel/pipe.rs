@@ -1,11 +1,16 @@
 use bytes::Bytes;
 use http_body::Body;
+use std::fmt::{self, Display, Formatter};
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 use tokio::task::coop;
 
 use super::Sender;
 use crate::error::BoxError;
+
+/// The concrete error for when `src` returns consecutively returns pending.
+#[derive(Debug)]
+struct SrcNotResponding;
 
 pub struct PipeTask<T> {
     pipe: Pin<Box<Pipe<T>>>,
@@ -112,8 +117,7 @@ where
                 }
                 Poll::Pending => {
                     if this.pending {
-                        let message = "pipe task src became unresponsive.".to_owned();
-                        let error = BoxError::from(message);
+                        let error = Box::new(SrcNotResponding);
 
                         if let Err(error) = this.dest.send_error(error) {
                             log!(error(pipe = 0), "{}", error);
@@ -138,5 +142,12 @@ where
                 }
             }
         }
+    }
+}
+
+impl std::error::Error for SrcNotResponding {}
+impl Display for SrcNotResponding {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "pipe task `src` is not responding.")
     }
 }

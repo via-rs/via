@@ -165,8 +165,9 @@ impl From<&'_ [u8]> for ResponseBody {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use futures_core::Stream;
     use http_body::{Body, Frame};
-    use http_body_util::BodyExt;
+    use http_body_util::{BodyExt, StreamBody};
     use std::pin::Pin;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -178,18 +179,34 @@ mod tests {
 
     const GREETING: Bytes = Bytes::from_static(b"Hello, world!");
 
-    /// An `impl Body` that always returns `Pending`.
-    ///
-    /// This is used to test the `src` "watchdog" feature of `PipeTask`.
+    /// An `impl Body` that is immediately `Poll::Ready` with an error.
+    struct ErrorBody;
+
+    /// An `impl Body` that always returns `Poll::Pending`.
     struct NeverBody;
 
-    /// An `impl Body` that returns `Pending` before delegating to `ReadyBody`.
-    ///
-    /// This is used to ensure that the `PipeTask` allows non-consecutive
-    /// `Pending` poll attempts.
+    /// An `impl Stream` that splits `GREETING` into two frames.
+    struct SplitGreeting {
+        parts: Vec<Bytes>,
+    }
+
+    /// An `impl Body` that returns `Poll::Pending` before delegating to a
+    /// `ReadyBody`.
     struct YieldThenBody {
         did_yield: bool,
         body: ReadyBody,
+    }
+
+    impl Body for ErrorBody {
+        type Data = Bytes;
+        type Error = BoxError;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            Poll::Ready(Some(Err("an error occurred.".into())))
+        }
     }
 
     impl Body for NeverBody {
@@ -202,6 +219,30 @@ mod tests {
         ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
             context.waker().wake_by_ref();
             Poll::Pending
+        }
+    }
+
+    impl SplitGreeting {
+        fn new() -> Self {
+            let mut head = GREETING;
+            let tail = head.split_off(head.iter().position(|byte| b' ' == *byte).unwrap());
+
+            Self {
+                parts: vec![tail, head],
+            }
+        }
+    }
+
+    impl Stream for SplitGreeting {
+        type Item = Result<Frame<Bytes>, BoxError>;
+
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            context: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            let next = self.parts.pop().map(|next| Ok(Frame::data(next)));
+            context.waker().wake_by_ref();
+            Poll::Ready(next)
         }
     }
 
@@ -274,6 +315,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_produces_the_same_result_as_boxed() {
+        let boxed = ResponseBody::boxed(StreamBody::new(SplitGreeting::new()))
+            .collect()
+            .await
+            .expect("`SplitGreeting` is infallible.");
+
+        // Eagerly convert `boxed` into a contiguous `Bytes`.
+        let expect = boxed.to_bytes();
+
+        let spawn = ResponseBody::spawn(StreamBody::new(SplitGreeting::new()))
+            .collect()
+            .await
+            .expect("`SplitGreeting` is infallible.");
+
+        assert_eq!(
+            expect, GREETING,
+            "`SplitGreeting` yields `GREETING` in two parts.",
+        );
+
+        assert_eq!(
+            expect,
+            spawn.to_bytes(),
+            "when given the same stream, `boxed` and `spawn` produce the same result.",
+        );
+    }
+
+    #[tokio::test]
     async fn pipe_task_exits_when_dest_is_dropped() {
         let handle = Arc::new(());
         let body = ResponseBody::channel(|dest| {
@@ -302,6 +370,34 @@ mod tests {
             1,
             Arc::strong_count(&handle),
             "the pipe task exits when `dest` is dropped."
+        );
+    }
+
+    #[tokio::test]
+    async fn pipe_task_exits_when_src_errors() {
+        let handle = Arc::new(());
+        let body = ResponseBody::channel(|dest| {
+            let handle = Arc::clone(&handle);
+            let pipe = PipeTask::new(ErrorBody, dest);
+
+            task::spawn(async move {
+                let _handle = handle;
+                pipe.await
+            });
+        });
+
+        assert_eq!(
+            2,
+            Arc::strong_count(&handle),
+            "a clone of `handle` should move into the pipe task.",
+        );
+
+        body.collect().await.expect_err("`src` is an `ErrorBody`.");
+
+        assert_eq!(
+            1,
+            Arc::strong_count(&handle),
+            "the pipe task exits when `src` errors."
         );
     }
 

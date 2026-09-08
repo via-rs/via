@@ -268,7 +268,7 @@ mod tests {
             } else {
                 context.waker().wake_by_ref();
                 self.did_yield = true;
-                return Poll::Pending;
+                Poll::Pending
             }
         }
     }

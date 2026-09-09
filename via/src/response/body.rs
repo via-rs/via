@@ -79,6 +79,28 @@ impl ResponseBody {
         body
     }
 
+    /// Send an immediately available `buf` to a separately scheduled task before
+    /// the body is returned to the connection.
+    ///
+    /// This deliberately reduces spatial and temporal locality between the code
+    /// producing the body and the code consuming it. Increasing the difficulty
+    /// of opportunistic memory inspection that relies on predictable execution
+    /// timing or determinstic locality, for compact, high-value response
+    /// payloads such as authentication tokens.
+    ///
+    /// This is not a memory-isolation or confidentiality boundary. Prefer
+    /// [`ResponseBody::new`] as a general purpose body constructor as `once`
+    /// can introduce scheduler overhead when used excessively.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use bytes::Bytes;
+    /// # use via::response::ResponseBody;
+    /// #
+    /// let jwt = Bytes::copy_from_slice(b"base64.jwt.");
+    /// let body = ResponseBody::once(jwt);
+    /// ```
     pub fn once(buf: Bytes) -> Self {
         Self::spawn(ReadyBody::new(buf))
     }

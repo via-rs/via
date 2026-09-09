@@ -98,8 +98,11 @@ impl ResponseBody {
     /// # use bytes::Bytes;
     /// # use via::response::ResponseBody;
     /// #
+    /// # #[tokio::main]
+    /// # async fn main() {
     /// let jwt = Bytes::copy_from_slice(b"base64.jwt.");
     /// let body = ResponseBody::once(jwt);
+    /// # }
     /// ```
     pub fn once(buf: Bytes) -> Self {
         Self::spawn(ReadyBody::new(buf))

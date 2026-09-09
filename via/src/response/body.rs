@@ -124,10 +124,21 @@ impl Body for ResponseBody {
     type Error = BoxError;
 
     fn poll_frame(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         context: &mut Context,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Pin::new(&mut self.body).poll_frame(context)
+        // Safety:
+        //
+        // We delegate `poll_frame` to the `BoxBody` at `self.body` that could
+        // have been initialized with an `impl Body + !Unpin`. The `body` field
+        // does not move out of `self`.
+        //
+        // Additionally, `BoxBody` owns the allocation containing the erased
+        // body along with the invariants required to project and poll the
+        // contained `impl Body` for the next frame.
+        let body = unsafe { self.map_unchecked_mut(|this| &mut this.body) };
+
+        body.poll_frame(context)
     }
 
     fn is_end_stream(&self) -> bool {

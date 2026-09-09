@@ -112,7 +112,7 @@ where
                     Poll::Ready(Some(Ok(frame))) => {
                         if this.dest.send_frame(frame).is_err() {
                             // We have exclusive access to `dest` and we polled
-                            // it's readiness.
+                            // its readiness.
                             //
                             // The channel disconnecting between the call to
                             // `poll_ready` and `send_frame` is practically

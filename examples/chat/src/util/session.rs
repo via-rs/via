@@ -48,13 +48,12 @@ pub fn auth_required() -> impl for<'a> Predicate<Request, Error<'a> = &'a Unauth
 
 pub fn needs_verified() -> impl for<'a> Predicate<Request, Error<'a> = ()> {
     (
+        // The request method describes a mutation.
+        method::is_mutation(),
+        // The session is stale.
+        guard::bool(on(Identity::is_expired, IdentityExtension).opt()),
         // The request target is not /api/auth.
         guard::not(on::path(case_sensitive(b"/api/auth"))),
-        // The request method describes a mutation or the session is stale.
-        guard::or((
-            method::is_mutation(),
-            guard::bool(on(Identity::is_expired, IdentityExtension).opt()),
-        )),
     )
 }
 

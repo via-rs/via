@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
-use http_body_util::{Full, combinators::BoxBody};
+use http_body_util::{Full, combinators::UnsyncBoxBody};
 use std::fmt::{self, Debug, Formatter};
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
@@ -10,7 +10,7 @@ use super::channel::{ChannelBody, PipeTask, Sender};
 use crate::error::BoxError;
 
 pub struct ResponseBody {
-    body: BoxBody<Bytes, BoxError>,
+    body: UnsyncBoxBody<Bytes, BoxError>,
 }
 
 struct ReadyBody {
@@ -89,38 +89,38 @@ impl ResponseBody {
         Self::spawn(ReadyBody::new(buf))
     }
 
-    /// Create a new [`ResponseBody`] by wrapping `T` in a [`BoxBody`].
+    /// Create a new [`ResponseBody`] by wrapping `T` in an [`UnsyncBoxBody`].
     ///
     /// This is the constructor from which every permutation of [`ResponseBody`]
     /// is created.
     ///
-    /// [`BoxBody`] provides the minimal amount polymorphism required to support
-    /// both immediately ready and streaming responses while also guaranteeing
-    /// memory safety for well-behaved implementations of [`Body`] with a
-    /// stable heap address.
+    /// [`UnsyncBoxBody`] provides the minimal amount polymorphism required to
+    /// support both immediately ready and streaming responses while also
+    /// guaranteeing memory safety for well-behaved implementations of [`Body`]
+    /// with a stable heap address.
     #[inline]
     pub fn boxed<T>(body: T) -> Self
     where
-        T: Body<Data = Bytes, Error = BoxError> + Send + Sync + 'static,
+        T: Body<Data = Bytes, Error = BoxError> + Send + 'static,
     {
         Self {
-            body: BoxBody::new(body),
+            body: UnsyncBoxBody::new(body),
         }
     }
 
     /// Send the provided `body` to a separately scheduled task before the
     /// canonical response body is returned to the connection.
     ///
-    /// The `spawn` constructor is preferred when you need an `impl Body + !Sync`
-    /// or when you want to deliberately reduce the spatial and temporal locality
-    /// between the code producing the body and the authority (I/O boundary). For
-    /// example, implementing cloud functions where the bytes of the response body
+    /// The `spawn` constructor is preferred when you want to deliberately
+    /// reduce the spatial and temporal locality between the code producing the
+    /// body and the authority (I/O boundary). For example, you are creating
+    /// infrastructure for cloud functions where the bytes of the response body
     /// are sourced from some FFI.
     ///
     /// This is not a memory-isolation or confidentiality boundary. Prefer
     /// [`ResponseBody::boxed`] as a general purpose body constructor for
-    /// custom implementations of [`Body`] as `spawn` introduces scheduler
-    /// overhead.
+    /// custom implementations of [`Body`] to avoid the cost of scheduler
+    /// overhead when task isolation is not important.
     pub fn spawn<T>(body: T) -> Self
     where
         T: Body<Data = Bytes, Error = BoxError> + Send + 'static,
@@ -162,13 +162,13 @@ impl Body for ResponseBody {
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         // Safety:
         //
-        // We delegate `poll_frame` to the `BoxBody` at `self.body` that could
-        // have been initialized with an `impl Body + !Unpin`. The `body` field
-        // does not move out of `self`.
+        // We delegate `poll_frame` to the `UnsyncBoxBody` at `self.body` that
+        // could have been initialized with an `impl Body + !Unpin`. The `body`
+        // field does not move out of `self`.
         //
-        // Additionally, `BoxBody` owns the allocation containing the erased
-        // body along with the invariants required to project and poll the
-        // contained `impl Body` for the next frame.
+        // Additionally, `UnsyncBoxBody` owns the allocation containing the
+        // erased body along with the invariants required to project and poll
+        // the contained `impl Body` for the next frame.
         let body = unsafe { self.map_unchecked_mut(|this| &mut this.body) };
 
         body.poll_frame(context)

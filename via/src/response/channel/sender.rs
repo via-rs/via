@@ -7,6 +7,8 @@ use std::task::{Context, Poll};
 
 use crate::error::BoxError;
 
+/// The sending half of the channel created by
+/// [`ResponseBody::channel`](crate::response::ResponseBody::channel).
 pub struct Sender {
     sender: SenderImpl,
 }
@@ -16,20 +18,35 @@ struct SenderImpl {
     tx: mpsc::Sender<Frame<Bytes>>,
 }
 
+/// Documentation sourced from [`futures_channel::mpsc::Sender`].
+impl Sender {
+    delegate! {
+        to self.sender {
+            /// Closes this channel from the sender side, preventing any new
+            /// messages.
+            pub fn close_channel(&mut self);
+
+            /// Polls the channel to determine if there is guaranteed capacity
+            /// to send at least one item without waiting.
+            pub fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), SendError>>;
+
+            /// Send a message on the channel.
+            ///
+            /// This function should only be called after `Poll::Ready(_)` is
+            /// returned by [`Self::poll_ready`].
+            pub fn send_frame(&mut self, frame: Frame<Bytes>) -> Result<(), SendError>;
+
+            /// Close the channel from the sender side with the provided
+            /// `error`, preventing any new messages.
+            pub fn send_error(&mut self, error: BoxError) -> Result<(), BoxError>;
+        }
+    }
+}
+
 impl Sender {
     pub(super) fn new(err: oneshot::Sender<BoxError>, tx: mpsc::Sender<Frame<Bytes>>) -> Self {
         Self {
             sender: SenderImpl { err: Some(err), tx },
-        }
-    }
-
-    delegate! {
-        to self.sender {
-            pub(super) fn close_channel(&mut self);
-            pub(super) fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), SendError>>;
-            pub(super) fn send_frame(&mut self, frame: Frame<Bytes>) -> Result<(), SendError>;
-            pub(super) fn send_error(&mut self, error: BoxError) -> Result<(), BoxError>;
-
         }
     }
 }

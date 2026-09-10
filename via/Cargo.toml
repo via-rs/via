@@ -27,6 +27,7 @@ test-util = []
 
 tokio-tungstenite = [
     "dep:base64",
+    "dep:futures-sink",
     "dep:futures-task",
     "dep:tungstenite",
     "dep:tokio-tungstenite",
@@ -35,6 +36,7 @@ tokio-tungstenite = [
 
 tokio-websockets = [
     "dep:base64",
+    "dep:futures-sink",
     "dep:futures-task",
     "dep:tokio-websockets",
     "futures-channel/sink"
@@ -53,7 +55,7 @@ cookie = { version = "0.18", features = ["percent-encode"] }
 delegate = "0.13"
 futures-channel = "0.3"
 futures-core = "0.3"
-futures-sink = "0.3"
+futures-sink = { version = "0.3", optional = true }
 futures-task = { version = "0.3", optional = true }
 http = "1"
 http-body = "1"

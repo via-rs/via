@@ -54,39 +54,20 @@ impl Body for ReadyBody {
 }
 
 impl ResponseBody {
+    /// Create a new [`ResponseBody`] from the provided `buf`.
     #[inline]
     pub fn new(buf: Bytes) -> Self {
         Self::boxed(ReadyBody::new(buf))
     }
 
-    #[inline]
-    pub fn boxed<T>(body: T) -> Self
-    where
-        T: Body<Data = Bytes, Error = BoxError> + Send + Sync + 'static,
-    {
-        Self {
-            body: BoxBody::new(body),
-        }
-    }
-
-    #[inline]
-    pub fn channel(f: impl FnOnce(Sender)) -> Self {
-        let (tx, body) = ChannelBody::new();
-        let body = Self::boxed(body);
-
-        f(tx);
-
-        body
-    }
-
     /// Send an immediately available `buf` to a separately scheduled task before
-    /// the body is returned to the connection.
+    /// the canonical response body is returned to the connection.
     ///
     /// This deliberately reduces spatial and temporal locality between the code
-    /// producing the body and the code consuming it. Increasing the difficulty
-    /// of opportunistic memory inspection that relies on predictable execution
-    /// timing or determinstic locality, for compact, high-value response
-    /// payloads such as authentication tokens.
+    /// producing the body and the authority (I/O boundary). Increasing the
+    /// difficulty of opportunistic memory inspection that relies on predictable
+    /// execution timing or determinstic locality, for compact, high-value
+    /// response payloads such as authentication tokens.
     ///
     /// This is not a memory-isolation or confidentiality boundary. Prefer
     /// [`ResponseBody::new`] as a general purpose body constructor as `once`
@@ -108,14 +89,66 @@ impl ResponseBody {
         Self::spawn(ReadyBody::new(buf))
     }
 
-    pub fn spawn<T>(src: T) -> Self
+    /// Create a new [`ResponseBody`] by wrapping `T` in a [`BoxBody`].
+    ///
+    /// This is the constructor from which every permutation of [`ResponseBody`]
+    /// is created.
+    ///
+    /// [`BoxBody`] provides the minimal amount polymorphism required to support
+    /// both immediately ready and streaming responses while also guaranteeing
+    /// memory safety for well-behaved implementations of [`Body`] with a
+    /// stable heap address.
+    #[inline]
+    pub fn boxed<T>(body: T) -> Self
+    where
+        T: Body<Data = Bytes, Error = BoxError> + Send + Sync + 'static,
+    {
+        Self {
+            body: BoxBody::new(body),
+        }
+    }
+
+    /// Send the provided `body` to a separately scheduled task before the
+    /// canonical response body is returned to the connection.
+    ///
+    /// The `spawn` constructor is preferred when you need an `impl Body + !Sync`
+    /// or when you want to deliberately reduce the spatial and temporal locality
+    /// between the code producing the body and the authority (I/O boundary). For
+    /// example, implementing cloud functions where the bytes of the response body
+    /// are sourced from some FFI.
+    ///
+    /// This is not a memory-isolation or confidentiality boundary. Prefer
+    /// [`ResponseBody::boxed`] as a general purpose body constructor for
+    /// custom implementations of [`Body`] as `spawn` introduces scheduler
+    /// overhead.
+    pub fn spawn<T>(body: T) -> Self
     where
         T: Body<Data = Bytes, Error = BoxError> + Send + 'static,
     {
-        Self::channel(|dest| {
-            // Spawn a task to pipe the frames from `src` to `dest`.
-            task::spawn(PipeTask::new(src, dest));
+        Self::channel(|tx| {
+            task::spawn(PipeTask::new(body, tx));
         })
+    }
+
+    /// Create a [`ResponseBody`] that receives frames from the [`Sender`]
+    /// passed as an argument to the closure provided.
+    ///
+    /// The `channel` constructor serves a similar purpose to `spawn` without
+    /// making assumptions about the task that produces the frames of the
+    /// response. Prefer `channel` when you want to fully own the pipeline that
+    /// produces the frames of a [`ResponseBody`]. For example, you want to
+    /// perform additional work in that task that produces each frame to offset
+    /// the cost of scheduling a separate task or you can tolerate a receiver
+    /// `lead > 0` and error responses start to trigger alarms because the
+    /// `src` passed to `spawn` becomes "unresponsive".
+    #[inline]
+    pub fn channel(f: impl FnOnce(Sender)) -> Self {
+        let (tx, body) = ChannelBody::new();
+        let body = Self::boxed(body);
+
+        f(tx);
+
+        body
     }
 }
 

@@ -160,6 +160,6 @@ impl std::error::Error for NotResponding {}
 
 impl Display for NotResponding {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "pipe task `src` is not responding.")
+        write!(f, "ResponseBody::spawn is not responding.")
     }
 }

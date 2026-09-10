@@ -110,7 +110,6 @@ fn deserialize_password<'de, D>(deserializer: D) -> Result<Zeroizing<String>, D:
 where
     D: Deserializer<'de>,
 {
-    use argon2::password_hash::{SaltString, rand_core::OsRng};
     use argon2::{Argon2, PasswordHasher};
     use serde::de::Error;
 
@@ -125,7 +124,7 @@ where
 
     Argon2::default()
         // Hash the plain text password using the Argon2id algorithm.
-        .hash_password(password, &SaltString::generate(&mut OsRng))
+        .hash_password(password)
         // Extract a Zeroizing<String> of the hash from the result.
         .map_or_else(
             // If an error occurs, return an opaque error message.
@@ -291,7 +290,7 @@ impl Password {
     }
 
     #[inline]
-    fn hash(&self) -> via::Result<PasswordHash<'_>> {
+    fn hash(&self) -> via::Result<PasswordHash> {
         match PasswordHash::new(self.hash.as_str()) {
             Ok(hash) => Ok(hash),
             Err(_) => Err(via::err!(500, "internal server error")),

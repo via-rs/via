@@ -9,7 +9,7 @@ use futures_channel::{mpsc, oneshot};
 use futures_core::Stream;
 use http_body::{Body, Frame};
 use std::pin::Pin;
-use std::task::{Context, Poll, ready};
+use std::task::{Context, Poll};
 
 use crate::error::BoxError;
 
@@ -38,33 +38,22 @@ impl Body for ChannelBody {
         self: Pin<&mut Self>,
         context: &mut Context,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        // The receiving halves of the channels in `self` are `Unpin`.
-        //
-        // Working with the inner mutable borrow behind `Pin<&mut Self>`
-        // should result in the smallest number of derefs / reborrows.
-        //
-        // Exactly what we want for this particular use case.
+        // `self` can only meaningfully exist in an `UnsyncBoxBody`.
         let this = self.get_mut();
 
-        match Pin::new(&mut this.err).poll(context) {
-            Poll::Pending => {
-                // Poll the producer for the next frame.
-                match ready!(Pin::new(&mut this.rx).poll_next(context)) {
-                    Some(frame) => Poll::Ready(Some(Ok(frame))),
-                    None => {
-                        this.rx.close();
-                        Poll::Ready(None)
-                    }
-                }
-            }
-            Poll::Ready(Ok(error)) => {
-                // The producer errored.
+        // Poll the `err` channel first. It will also propagate a dropped sender.
+        if let Poll::Ready(result) = Pin::new(&mut this.err).poll(context) {
+            if let Ok(error) = result {
+                this.rx.close(); // Eagerly close the channel.
                 Poll::Ready(Some(Err(error)))
-            }
-            Poll::Ready(Err(_)) => {
-                // The producer exited.
-                this.rx.close();
+            } else {
                 Poll::Ready(None)
+            }
+        } else {
+            match Pin::new(&mut this.rx).poll_next(context) {
+                Poll::Ready(Some(frame)) => Poll::Ready(Some(Ok(frame))),
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
             }
         }
     }

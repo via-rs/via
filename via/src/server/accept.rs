@@ -20,6 +20,9 @@ use crate::error::ServerError;
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use super::tls::{Alpn, NegotiateAlpn};
 
+#[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+use super::tcp::TcpStream;
+
 macro_rules! serve_unless_cancelled {
     ($cancellation:ident, $connection:ident) => {
         tokio::select! {
@@ -163,7 +166,7 @@ where
         // task size: 928
         #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
         connections.spawn(&recycler, async move {
-            let io = IoWithPermit::new(io, permit);
+            let io = IoWithPermit::new(TcpStream::new(io), permit);
             let serve = serve_http1_connection(io, service, cancellation);
 
             serve.await

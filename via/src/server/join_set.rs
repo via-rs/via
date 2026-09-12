@@ -71,11 +71,6 @@ impl JoinSet {
             next,
         };
 
-        // We have exclusive access to `next` and we know that it is empty.
-        if tx.try_send(Cohort::new()).is_err() {
-            unreachable!();
-        }
-
         (tx, join_set)
     }
 

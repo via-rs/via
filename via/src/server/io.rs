@@ -21,6 +21,31 @@ impl<T> IoWithPermit<T> {
     }
 }
 
+impl<T> IoWithPermit<T> {
+    #[inline(always)]
+    fn project(self: Pin<&mut Self>) -> Pin<&mut WithHyperIo<T>> {
+        // Safety:
+        //
+        // We need to project the `io` field in order to write forwarding impls
+        // of `AsyncRead` and `AsyncWrite` for `Self`. `T` is usually `Unpin`.
+        //
+        // However, this wrapper type need not make assumptions about the
+        // `Unpin`-ness of `T`. It only exists to keep the semaphore permit
+        // live for the duration of the connection.
+        //
+        // Therefore, we use unsafe to project the `io` field with the smallest
+        // number of instructions required to write the forwarding impls.
+        //
+        // The `Unpin`-ness of self is derived from `T` and the specific pin
+        // requirements required by the canonical impls of `AsyncRead` and
+        // `AsyncWrite` for `T` are handle by `T` because it owns the
+        // allocation upholding these safety requirements.
+        //
+        // This is a trust boundary.
+        unsafe { self.map_unchecked_mut(|this| &mut this.io) }
+    }
+}
+
 // Explicitly impl Drop to make a supply-chain risk a build-time error.
 //
 // Rationale:
@@ -32,41 +57,41 @@ impl<T> Drop for IoWithPermit<T> {
     fn drop(&mut self) {}
 }
 
-impl<T: AsyncRead + Unpin> AsyncRead for IoWithPermit<T> {
+impl<T: AsyncRead> AsyncRead for IoWithPermit<T> {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         context: &mut Context,
         buf: &mut ReadBuf,
     ) -> Poll<io::Result<()>> {
-        AsyncRead::poll_read(Pin::new(&mut self.io), context, buf)
+        AsyncRead::poll_read(self.project(), context, buf)
     }
 }
 
-impl<T: AsyncRead + Unpin> Read for IoWithPermit<T> {
+impl<T: AsyncRead> Read for IoWithPermit<T> {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         context: &mut Context,
         buf: ReadBufCursor,
     ) -> Poll<io::Result<()>> {
-        Read::poll_read(Pin::new(&mut self.io), context, buf)
+        Read::poll_read(self.project(), context, buf)
     }
 }
 
-impl<T: AsyncWrite + Unpin> AsyncWrite for IoWithPermit<T> {
+impl<T: AsyncWrite> AsyncWrite for IoWithPermit<T> {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         context: &mut Context,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        AsyncWrite::poll_write(Pin::new(&mut self.io), context, buf)
+        AsyncWrite::poll_write(self.project(), context, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
-        AsyncWrite::poll_flush(Pin::new(&mut self.io), context)
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
+        AsyncWrite::poll_flush(self.project(), context)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
-        AsyncWrite::poll_shutdown(Pin::new(&mut self.io), context)
+    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
+        AsyncWrite::poll_shutdown(self.project(), context)
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -74,29 +99,29 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for IoWithPermit<T> {
     }
 
     fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         context: &mut Context,
         bufs: &[io::IoSlice],
     ) -> Poll<io::Result<usize>> {
-        AsyncWrite::poll_write_vectored(Pin::new(&mut self.io), context, bufs)
+        AsyncWrite::poll_write_vectored(self.project(), context, bufs)
     }
 }
 
-impl<T: AsyncWrite + Unpin> Write for IoWithPermit<T> {
+impl<T: AsyncWrite> Write for IoWithPermit<T> {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         context: &mut Context,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Write::poll_write(Pin::new(&mut self.io), context, buf)
+        Write::poll_write(self.project(), context, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
-        Write::poll_flush(Pin::new(&mut self.io), context)
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
+        Write::poll_flush(self.project(), context)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
-        Write::poll_shutdown(Pin::new(&mut self.io), context)
+    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context) -> Poll<io::Result<()>> {
+        Write::poll_shutdown(self.project(), context)
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -104,10 +129,10 @@ impl<T: AsyncWrite + Unpin> Write for IoWithPermit<T> {
     }
 
     fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         context: &mut Context,
         bufs: &[io::IoSlice],
     ) -> Poll<io::Result<usize>> {
-        Write::poll_write_vectored(Pin::new(&mut self.io), context, bufs)
+        Write::poll_write_vectored(self.project(), context, bufs)
     }
 }

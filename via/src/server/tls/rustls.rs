@@ -58,12 +58,15 @@ impl Acceptor for RustlsAcceptor {
 
 impl MaybeTlsStream {
     #[inline]
-    fn with_stream<F, T>(mut self: Pin<&mut Self>, f: F) -> Poll<io::Result<T>>
+    fn with_stream<F, T>(self: Pin<&mut Self>, f: F) -> Poll<io::Result<T>>
     where
         F: FnOnce(Pin<&mut TlsStream<TcpStream>>) -> Poll<io::Result<T>>,
     {
-        if let ReadyState::Stream(stream) = &mut self.state {
-            f(Pin::new(stream))
+        let this = self.get_mut();
+
+        if let ReadyState::Stream(stream) = &mut this.state {
+            let stream = Pin::new(stream);
+            f(stream)
         } else {
             Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
         }
@@ -109,8 +112,9 @@ impl AsyncWrite for MaybeTlsStream {
 impl Future for MaybeTlsStream {
     type Output = io::Result<Alpn>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let ReadyState::Handshake(accept) = &mut self.state else {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let ReadyState::Handshake(accept) = &mut this.state else {
             return Poll::Ready(Err(io::ErrorKind::AlreadyExists.into()));
         };
 
@@ -121,38 +125,42 @@ impl Future for MaybeTlsStream {
                 _ => Alpn::HTTP_11,
             };
 
-            self.state = ReadyState::Stream(stream);
+            this.state = ReadyState::Stream(stream);
 
             alpn
         })
     }
 }
 
+impl RustlsStream {
+    #[inline(always)]
+    fn project(self: Pin<&mut Self>) -> Pin<&mut MaybeTlsStream> {
+        let this = self.get_mut();
+        this.tls.as_mut()
+    }
+}
+
 impl AsyncRead for RustlsStream {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &mut ReadBuf,
     ) -> Poll<io::Result<()>> {
-        self.tls.as_mut().poll_read(cx, buf)
+        self.project().poll_read(cx, buf)
     }
 }
 
 impl AsyncWrite for RustlsStream {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        self.tls.as_mut().poll_write(cx, buf)
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        self.project().poll_write(cx, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        self.tls.as_mut().poll_flush(cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        self.project().poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        self.tls.as_mut().poll_shutdown(cx)
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        self.project().poll_shutdown(cx)
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -160,11 +168,11 @@ impl AsyncWrite for RustlsStream {
     }
 
     fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context,
         bufs: &[io::IoSlice],
     ) -> Poll<io::Result<usize>> {
-        self.tls.as_mut().poll_write_vectored(cx, bufs)
+        self.project().poll_write_vectored(cx, bufs)
     }
 }
 

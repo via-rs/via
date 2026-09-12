@@ -1,12 +1,10 @@
 use hyper::server::conn::*;
 use hyper_util::rt::TokioTimer;
-use std::mem;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
-use tokio::task::{JoinSet, coop};
 use tokio::time::timeout;
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
@@ -14,12 +12,16 @@ use hyper_util::rt::TokioExecutor;
 
 use super::cancel::Cancellation;
 use super::io::IoWithPermit;
+use super::join_set::JoinSet;
 use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
 use crate::error::ServerError;
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use super::tls::{Alpn, NegotiateAlpn};
+
+#[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+use super::tcp::TcpStream;
 
 macro_rules! serve_unless_cancelled {
     ($cancellation:ident, $connection:ident) => {
@@ -66,8 +68,8 @@ where
         Arc::new(Semaphore::new(max_connections - 1))
     };
 
-    // A JoinSet to track and join active connections.
-    let mut connections = JoinSet::new();
+    // Connections are spawned in a rotating `JoinSet`.
+    let (recycler, mut connections) = JoinSet::new();
 
     // Notify the accept loop and connection tasks to initiate a graceful
     // shutdown when a "ctrl-c" notification is sent to the process.
@@ -139,7 +141,7 @@ where
 
         // Spawn a task to serve the connection.
         #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-        connections.spawn({
+        connections.spawn(&recycler, {
             let handshake = acceptor.accept(io);
 
             // native-tls task size: 1952
@@ -161,58 +163,26 @@ where
             }
         });
 
-        // task size: 928
+        // task size: 880
         #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
-        connections.spawn(async move {
-            let io = IoWithPermit::new(io, permit);
+        connections.spawn(&recycler, async move {
+            let io = IoWithPermit::new(TcpStream::new(io), permit);
             let serve = serve_http1_connection(io, service, cancellation);
 
             serve.await
         });
-
-        if connections.len() >= 999 {
-            let batch = mem::take(&mut connections);
-            tokio::spawn(drain_connections(false, batch));
-        }
     };
 
-    // Try to drain each inflight connection before `config.shutdown_timeout`.
-    match timeout(
+    // Join the connections in the current cohort within the shutdown timeout.
+    let graceful_shutdown = timeout(
         service.config().shutdown_timeout(),
-        drain_connections(true, connections),
-    )
-    .await
-    {
-        Ok(_) => exit_code,
-        Err(_) => ExitCode::FAILURE,
-    }
-}
-
-async fn drain_connections(immediate: bool, mut connections: JoinSet<Result<(), ServerError>>) {
-    log!(
-        info(gc = 0),
-        "joining {} inflight connections...",
-        connections.len()
+        connections.join(recycler),
     );
 
-    while let Some(result) = connections.join_next().await {
-        #[cfg(not(debug_assertions))]
-        drop(result);
-
-        #[cfg(debug_assertions)]
-        match result {
-            Ok(Ok(_)) => {}
-            Err(error) => {
-                log!(error(gc = 1), "(connection) -> {}", &error);
-            }
-            Ok(Err(error)) => {
-                log!(error(gc = 1), "(service) -> {}", &error);
-            }
-        }
-
-        if !immediate {
-            coop::consume_budget().await;
-        }
+    if graceful_shutdown.await.is_ok() {
+        exit_code
+    } else {
+        ExitCode::FAILURE
     }
 }
 

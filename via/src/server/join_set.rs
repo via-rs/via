@@ -94,10 +94,9 @@ impl JoinSet {
             let sender = sender.clone();
 
             // Recycle an cohort or create a new one.
-            // This dissociates load from allocations in a hot path.
+            // This dissociates load from the allocation in `Cohort::new()`.
             let mut next = match self.next.try_recv() {
                 // Ideally we always have a cohort ready.
-                // This lowers the likelyhood of reallocating in `spawn`.
                 Ok(cohort) => cohort,
                 // There isn't a cohort available to recycle.
                 Err(TryRecvError::Empty) => Cohort::new(),

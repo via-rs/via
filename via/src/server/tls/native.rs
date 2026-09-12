@@ -52,31 +52,35 @@ impl Acceptor for NativeTlsAcceptor {
     }
 }
 
+impl NativeTlsStream {
+    #[inline(always)]
+    fn project(mut self: Pin<&mut Self>) -> Pin<&mut TlsStream<TcpStream>> {
+        // Reify the borrow immediately before crossing the FFI boundary.
+        Pin::new(&mut self.stream)
+    }
+}
+
 impl AsyncRead for NativeTlsStream {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &mut ReadBuf,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_read(cx, buf)
+        self.project().poll_read(cx, buf)
     }
 }
 
 impl AsyncWrite for NativeTlsStream {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write(cx, buf)
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        self.project().poll_write(cx, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_flush(cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        self.project().poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_shutdown(cx)
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        self.project().poll_shutdown(cx)
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -84,11 +88,11 @@ impl AsyncWrite for NativeTlsStream {
     }
 
     fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context,
         bufs: &[io::IoSlice],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write_vectored(cx, bufs)
+        self.project().poll_write_vectored(cx, bufs)
     }
 }
 

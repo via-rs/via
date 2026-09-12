@@ -54,19 +54,22 @@ impl Acceptor for NativeTlsAcceptor {
 
 impl NativeTlsStream {
     #[inline(always)]
-    fn project(mut self: Pin<&mut Self>) -> Pin<&mut TlsStream<TcpStream>> {
+    fn project(self: Pin<&mut Self>) -> Pin<&mut TlsStream<TcpStream>> {
         // Reify the borrow immediately before crossing the FFI boundary.
-        Pin::new(&mut self.stream)
+        let this = &mut *self.get_mut();
+
+        // Return the projection.
+        Pin::new(&mut this.stream)
     }
 }
 
 impl AsyncRead for NativeTlsStream {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &mut ReadBuf,
     ) -> Poll<io::Result<()>> {
-        self.project().poll_read(cx, buf)
+        Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
 

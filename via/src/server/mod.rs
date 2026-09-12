@@ -7,6 +7,9 @@ mod io;
 mod join_set;
 mod tls;
 
+#[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+mod tcp;
+
 use std::process::ExitCode;
 use std::time::Duration;
 use tokio::net::{TcpListener, ToSocketAddrs};

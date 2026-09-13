@@ -177,12 +177,18 @@ where
         }
     };
 
-    // Join the connections in the current cohort within the shutdown timeout.
-    connections
-        .join(service.config().shutdown_timeout(), recycler)
-        .await;
+    if exit_code == ExitCode::SUCCESS {
+        // Join the connections in the current cohort within the shutdown timeout.
+        let graceful_shutdown = connections.join(service.config().shutdown_timeout(), recycler);
 
-    exit_code
+        if graceful_shutdown.await.is_ok() {
+            exit_code
+        } else {
+            ExitCode::FAILURE
+        }
+    } else {
+        exit_code
+    }
 }
 
 async fn serve_http1_connection<App, Io>(

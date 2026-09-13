@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{OnceCell, mpsc};
 use tokio::task::{self, JoinError, coop};
-use tokio::time::{Duration, Instant, Timeout};
+use tokio::time::{Duration, Instant, Timeout, timeout, timeout_at};
 
 use crate::error::ServerError;
 
@@ -29,40 +29,39 @@ pub struct StartedAt {
 }
 
 struct JoinContext {
-    is_cooperative: bool,
     timeout_after: Duration,
     started_at: StartedAt,
     recycler: Sender,
 }
 
+async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
+    while let Some(result) = cohort.join_next().await {
+        #[cfg(not(debug_assertions))]
+        drop(result);
+
+        #[cfg(debug_assertions)]
+        match result {
+            Ok(Ok(_)) => {}
+            Err(error) => {
+                log!(error(cohort = 1), "(connection) -> {}", &error);
+            }
+            Ok(Err(error)) => {
+                log!(error(cohort = 1), "(service) -> {}", &error);
+            }
+        }
+
+        if is_cooperative {
+            coop::consume_budget().await;
+        }
+    }
+}
+
 async fn join_cohort(mut cohort: Cohort, context: JoinContext) {
     log!(info(cohort = 0), "joining {} connections.", cohort.size());
 
-    let future = async {
-        while let Some(result) = cohort.join_next().await {
-            #[cfg(not(debug_assertions))]
-            drop(result);
-
-            #[cfg(debug_assertions)]
-            match result {
-                Ok(Ok(_)) => {}
-                Err(error) => {
-                    log!(error(cohort = 1), "(connection) -> {}", &error);
-                }
-                Ok(Err(error)) => {
-                    log!(error(cohort = 1), "(service) -> {}", &error);
-                }
-            }
-
-            if context.is_cooperative {
-                coop::consume_budget().await;
-            }
-        }
-    };
-
     let future = context
         .started_at
-        .timeout_in(context.timeout_after, future)
+        .timeout_in(context.timeout_after, join_connections(true, &mut cohort))
         .await;
 
     if future.await.is_err() {
@@ -79,9 +78,22 @@ async fn join_cohort(mut cohort: Cohort, context: JoinContext) {
         }
     }
 
-    if context.is_cooperative && context.recycler.try_send(cohort).is_err() {
+    if let Err(error) = context.recycler.try_send(cohort) {
+        let mut cohort = error.into_inner();
+
         // Placeholder for tracing...
-        log!(error(cohort = 2), "cohort cannot be recycled.");
+        log!(error(cohort = 1), "cohort cannot be recycled.");
+
+        // If the cohort contains connections that could not be joined, detach.
+        if cohort.is_dirty {
+            log!(
+                error(cohort = 2),
+                "detaching {} connections.",
+                cohort.size()
+            );
+
+            cohort.tasks.detach_all();
+        }
     }
 }
 
@@ -108,11 +120,15 @@ impl Cohort {
 
 impl JoinSet {
     pub(super) fn new() -> (Sender, Self) {
-        let (tx, next) = mpsc::channel(2);
+        let (tx, next) = mpsc::channel(1);
         let join_set = Self {
             current: Cohort::new(),
             next,
         };
+
+        if tx.try_send(Cohort::new()).is_err() {
+            unreachable!();
+        }
 
         (tx, join_set)
     }
@@ -156,27 +172,30 @@ impl JoinSet {
         }
     }
 
-    pub(super) fn join(self, timeout_after: Duration, recycler: Sender) -> impl Future {
-        let context = JoinContext::shutdown(timeout_after, recycler);
-        join_cohort(self.current, context)
+    pub(super) async fn join(mut self, timeout_after: Duration, recycler: Sender) -> Result {
+        let join_primary = join_connections(false, &mut self.current);
+
+        if timeout(timeout_after, join_primary).await.is_err() {
+            return Err(ServerError::ShutdownTimeout);
+        }
+
+        while let Ok(mut cohort) = self.next.try_recv() {
+            let join_rollover = join_connections(false, &mut cohort);
+            if timeout(timeout_after, join_rollover).await.is_err() {
+                return Err(ServerError::ShutdownTimeout);
+            }
+        }
+
+        // Keep recycler live until rollover cohorts are joined.
+        let _recycler = recycler;
+
+        Ok(())
     }
 }
 
 impl JoinContext {
     fn new(timeout_after: Duration, started_at: StartedAt, recycler: Sender) -> Self {
         Self {
-            is_cooperative: true,
-            timeout_after,
-            started_at,
-            recycler,
-        }
-    }
-
-    fn shutdown(timeout_after: Duration, recycler: Sender) -> Self {
-        let started_at = StartedAt::new();
-
-        Self {
-            is_cooperative: false,
             timeout_after,
             started_at,
             recycler,
@@ -197,9 +216,7 @@ impl StartedAt {
     {
         coop::unconstrained(async move {
             let now = self.value.get_or_init(|| async { Instant::now() }).await;
-            let deadline = *now + duration;
-
-            tokio::time::timeout_at(deadline, future)
+            timeout_at(*now + duration, future)
         })
     }
 }

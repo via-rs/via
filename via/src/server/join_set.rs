@@ -76,6 +76,8 @@ async fn join_cohort(mut cohort: Cohort, context: JoinContext) {
         } else {
             cohort.is_dirty = true;
         }
+    } else {
+        cohort.is_dirty = false;
     }
 
     if let Err(error) = context.recycler.try_send(cohort) {
@@ -168,7 +170,9 @@ impl JoinSet {
             let join_context = JoinContext::new(Duration::from_secs(10), started_at, sender);
 
             // Spawn a detached task `join_cohort` task.
-            task::spawn(join_cohort(next_cohort, join_context));
+            task::spawn(async move {
+                join_cohort(next_cohort, join_context).await;
+            });
         }
     }
 

@@ -22,6 +22,10 @@ use super::tls::{Alpn, NegotiateAlpn};
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 use super::tcp::TcpStream;
 
+/// Mirrors the `BOX_FUTURE_THRESHOLD` used internally by `tokio::spawn`.
+#[cfg(debug_assertions)]
+const BOX_FUTURE_THRESHOLD: usize = 2048;
+
 macro_rules! serve_unless_cancelled {
     ($cancellation:ident, $connection:ident) => {
         tokio::select! {
@@ -141,7 +145,6 @@ where
             // deadlines with a query to the systems monotonic clock.
             let started_at = StartedAt::new();
 
-            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             // native-tls task size: 1992
             // rustls task size: 1800
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
@@ -170,6 +173,23 @@ where
                 let io = IoWithPermit::new(TcpStream::new(stream), permit);
                 serve_http1_connection(io, service, cancellation).await
             };
+
+            #[cfg(debug_assertions)]
+            assert!(
+                std::mem::size_of_val(&future) + 16 < BOX_FUTURE_THRESHOLD,
+                //                               ^^ size of 2 borrows
+                //
+                // The number of args passed to `connections.spawn` other
+                // than `future` is used to determine the amount of padding
+                // provided on the left-hand side of this assertion.
+                //
+                // We don't want this value to exceed `BOX_FUTURE_THRESHOLD`
+                // in tokio. The call to `connections.spawn` may or may not
+                // get inlined. The correctness of this implementation does
+                // not depend on it.
+                "the size of the spawn argument list must not exceed: {}",
+                BOX_FUTURE_THRESHOLD,
+            );
 
             // Spawn a task to serve the connection.
             connections.spawn(&started_at, &recycler, future);

@@ -1,13 +1,14 @@
 use std::sync::Arc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{OnceCell, mpsc};
-use tokio::task::{self, JoinError, coop};
+use tokio::task::{self, coop};
 use tokio::time::error::Elapsed;
 use tokio::time::{Duration, Instant, timeout, timeout_at};
 
+use super::DEFAULT_SHUTDOWN_TIMEOUT;
 use crate::error::ServerError;
 
-const COHORT_SIZE: usize = u8::MAX as usize;
+const COHORT_SIZE: usize = 499;
 
 pub type Sender = mpsc::Sender<Cohort>;
 pub type TaskResult = std::result::Result<(), ServerError>;
@@ -27,26 +28,10 @@ pub struct StartedAt {
     value: Arc<OnceCell<Instant>>,
 }
 
-struct JoinContext {
-    timeout_after: Duration,
-    started_at: StartedAt,
-    recycler: Sender,
-}
-
 async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
     while let Some(result) = cohort.join_next().await {
-        #[cfg(not(debug_assertions))]
-        drop(result);
-
-        #[cfg(debug_assertions)]
-        match result {
-            Ok(Ok(_)) => {}
-            Err(error) => {
-                log!(error(cohort = 1), "(connection) -> {}", &error);
-            }
-            Ok(Err(error)) => {
-                log!(error(cohort = 1), "(service) -> {}", &error);
-            }
+        if let Err(error) = result {
+            log!(error(cohort = 1), "(connection) -> {}", &error);
         }
 
         if is_cooperative {
@@ -55,30 +40,31 @@ async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
     }
 }
 
-async fn join_cohort(mut cohort: Cohort, context: JoinContext) {
+async fn join_cohort(started_at: StartedAt, recycler: Sender, mut cohort: Cohort) {
     log!(info(cohort = 0), "joining {} connections.", cohort.size());
 
-    let future = context
-        .started_at
-        .timeout_in(context.timeout_after, join_connections(true, &mut cohort));
+    let future = started_at.timeout_in(
+        DEFAULT_SHUTDOWN_TIMEOUT,
+        join_connections(true, &mut cohort),
+    );
 
     if future.await.is_err() {
         if cohort.is_dirty {
-            if cohort.size() == 1 {
-                cohort.tasks.abort_all();
-            } else {
-                cohort.tasks.detach_all();
-            }
-
-            cohort.is_dirty = false;
+            // Tasks that survive more than one cohort generation are detached.
+            //
+            // This allows locality to drift by not retaining references to
+            // persistent connections or join handles to persistent connection
+            // tasks.
+            //
+            // Something that we would do for connections that use a web socket
+            // if we were able to tell ahead of time in `accept`.
+            cohort.detach_all();
         } else {
             cohort.is_dirty = true;
         }
-    } else {
-        cohort.is_dirty = false;
     }
 
-    if let Err(error) = context.recycler.try_send(cohort) {
+    if let Err(error) = recycler.try_send(cohort) {
         let mut cohort = error.into_inner();
 
         // Placeholder for tracing...
@@ -92,7 +78,7 @@ async fn join_cohort(mut cohort: Cohort, context: JoinContext) {
                 cohort.size()
             );
 
-            cohort.tasks.detach_all();
+            cohort.detach_all();
         }
     }
 }
@@ -113,8 +99,26 @@ impl Cohort {
         self.tasks.spawn(task);
     }
 
-    fn join_next(&mut self) -> impl Future<Output = Option<Result<TaskResult, JoinError>>> {
-        self.tasks.join_next()
+    async fn join_next(&mut self) -> Option<TaskResult> {
+        let joined = self.tasks.join_next().await;
+        let joined = joined.and_then(|result| match result {
+            Ok(result) => Some(result),
+            Err(error) => {
+                log!(info(cohort = 1), "(task) -> {}", &error);
+                None
+            }
+        });
+
+        if joined.is_none() {
+            self.is_dirty = false;
+        }
+
+        joined
+    }
+
+    fn detach_all(&mut self) {
+        self.tasks.detach_all();
+        self.is_dirty = false;
     }
 }
 
@@ -126,17 +130,13 @@ impl JoinSet {
             next,
         };
 
-        if tx.try_send(Cohort::new()).is_err() {
-            unreachable!();
-        }
-
         (tx, join_set)
     }
 
     pub(super) fn spawn(
         &mut self,
         started_at: &StartedAt,
-        sender: &Sender,
+        recycler: &Sender,
         task: impl Future<Output = TaskResult> + Send + 'static,
     ) {
         // Spawn the task in the current cohort. Dynamic allocations may occur.
@@ -144,8 +144,8 @@ impl JoinSet {
 
         // If the current cohort exceeds `COHORT_SIZE`, start join it.
         if self.current.size() > COHORT_SIZE {
-            // Clone `sender` to make `TryRecvError::Disconnected` unreachable.
-            let sender = sender.clone();
+            // Clone `recycler` to make `TryRecvError::Disconnected` unreachable.
+            let recycler = recycler.clone();
 
             // Clone `started_at` so it can move into the `join_cohort` task.
             let started_at = started_at.clone();
@@ -164,12 +164,9 @@ impl JoinSet {
             // Swap the current cohort with the next cohort.
             std::mem::swap(&mut self.current, &mut next_cohort);
 
-            // Group the dependencies of the `join_cohort` task in a struct.
-            let join_context = JoinContext::new(Duration::from_secs(10), started_at, sender);
-
             // Spawn a detached task `join_cohort` task.
-            task::spawn(async move {
-                join_cohort(next_cohort, join_context).await;
+            task::spawn(async {
+                join_cohort(started_at, recycler, next_cohort).await;
             });
         }
     }
@@ -192,16 +189,6 @@ impl JoinSet {
         let _recycler = recycler;
 
         Ok(())
-    }
-}
-
-impl JoinContext {
-    fn new(timeout_after: Duration, started_at: StartedAt, recycler: Sender) -> Self {
-        Self {
-            timeout_after,
-            started_at,
-            recycler,
-        }
     }
 }
 

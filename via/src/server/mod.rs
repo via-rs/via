@@ -50,6 +50,9 @@ pub(crate) type IoStream = io::IoWithPermit<tokio::net::TcpStream>;
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
 const RUNTIME_FD_BUDGET: usize = 10;
 
+const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Serve an app over HTTP.
 ///
 pub struct Server<App> {
@@ -380,11 +383,11 @@ impl ServerConfig {
     }
 
     pub fn shutdown_timeout(&self) -> Duration {
-        self.shutdown_timeout.min(Duration::from_secs(30))
+        self.shutdown_timeout.min(MAX_SHUTDOWN_TIMEOUT)
     }
 
     pub fn http1_header_read_timeout(&self) -> Duration {
-        self.http1_header_read_timeout.min(Duration::from_secs(30))
+        self.http1_header_read_timeout.min(MAX_SHUTDOWN_TIMEOUT)
     }
 }
 
@@ -410,8 +413,8 @@ impl Default for ServerConfig {
             max_buf_size: 16384, // 16 KB
             max_connections: DEFAULT_MAX_CONNECTIONS - RUNTIME_FD_BUDGET,
             max_request_size: 104_857_600, // 100 MB
-            shutdown_timeout: Duration::from_secs(10),
-            http1_header_read_timeout: Duration::from_secs(10),
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            http1_header_read_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
 
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             http2_max_concurrent_streams: Some(64),

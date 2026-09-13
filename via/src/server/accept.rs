@@ -176,8 +176,8 @@ where
 
             #[cfg(debug_assertions)]
             assert!(
-                std::mem::size_of_val(&future) + 16 < BOX_FUTURE_THRESHOLD,
-                //                               ^^ size of 2 borrows
+                std::mem::size_of_val(&future) + 24 < BOX_FUTURE_THRESHOLD,
+                //                               ^^ size of 3 borrows
                 //
                 // The number of args passed to `connections.spawn` other
                 // than `future` is used to determine the amount of padding

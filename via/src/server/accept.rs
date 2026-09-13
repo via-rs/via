@@ -152,7 +152,6 @@ where
                 async move {
                     let tls = started_at
                         .timeout_in(service.config().tls_handshake_timeout(), handshake)
-                        .await
                         .await??;
 
                     if *tls.preferred_alpn() == Alpn::HTTP_2 {
@@ -195,7 +194,7 @@ async fn serve_http1_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
     cancellation: Cancellation,
-) -> join_set::Result
+) -> join_set::TaskResult
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -225,7 +224,7 @@ async fn serve_http2_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
     cancellation: Cancellation,
-) -> join_set::Result
+) -> join_set::TaskResult
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,

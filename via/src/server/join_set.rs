@@ -2,20 +2,19 @@ use std::sync::Arc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{OnceCell, mpsc};
 use tokio::task::{self, JoinError, coop};
-use tokio::time::{Duration, Instant, Timeout, timeout, timeout_at};
+use tokio::time::error::Elapsed;
+use tokio::time::{Duration, Instant, timeout, timeout_at};
 
 use crate::error::ServerError;
 
 const COHORT_SIZE: usize = u8::MAX as usize;
 
-type JoinResult = std::result::Result<Result, JoinError>;
-
-pub type Result = std::result::Result<(), ServerError>;
 pub type Sender = mpsc::Sender<Cohort>;
+pub type TaskResult = std::result::Result<(), ServerError>;
 
 pub struct Cohort {
     is_dirty: bool,
-    tasks: tokio::task::JoinSet<Result>,
+    tasks: tokio::task::JoinSet<TaskResult>,
 }
 
 pub struct JoinSet {
@@ -61,8 +60,7 @@ async fn join_cohort(mut cohort: Cohort, context: JoinContext) {
 
     let future = context
         .started_at
-        .timeout_in(context.timeout_after, join_connections(true, &mut cohort))
-        .await;
+        .timeout_in(context.timeout_after, join_connections(true, &mut cohort));
 
     if future.await.is_err() {
         if cohort.is_dirty {
@@ -111,11 +109,11 @@ impl Cohort {
         self.tasks.len()
     }
 
-    fn spawn(&mut self, task: impl Future<Output = Result> + Send + 'static) {
+    fn spawn(&mut self, task: impl Future<Output = TaskResult> + Send + 'static) {
         self.tasks.spawn(task);
     }
 
-    fn join_next(&mut self) -> impl Future<Output = Option<JoinResult>> {
+    fn join_next(&mut self) -> impl Future<Output = Option<Result<TaskResult, JoinError>>> {
         self.tasks.join_next()
     }
 }
@@ -139,7 +137,7 @@ impl JoinSet {
         &mut self,
         started_at: &StartedAt,
         sender: &Sender,
-        task: impl Future<Output = Result> + Send + 'static,
+        task: impl Future<Output = TaskResult> + Send + 'static,
     ) {
         // Spawn the task in the current cohort. Dynamic allocations may occur.
         self.current.spawn(task);
@@ -176,7 +174,7 @@ impl JoinSet {
         }
     }
 
-    pub(super) async fn join(mut self, timeout_after: Duration, recycler: Sender) -> Result {
+    pub(super) async fn join(mut self, timeout_after: Duration, recycler: Sender) -> TaskResult {
         let join_primary = join_connections(false, &mut self.current);
 
         if timeout(timeout_after, join_primary).await.is_err() {
@@ -214,13 +212,17 @@ impl StartedAt {
         }
     }
 
-    pub fn timeout_in<F>(self, duration: Duration, future: F) -> impl Future<Output = Timeout<F>>
+    pub fn timeout_in<F>(
+        self,
+        duration: Duration,
+        future: F,
+    ) -> impl Future<Output = Result<F::Output, Elapsed>>
     where
         F: Future + Send,
     {
         coop::unconstrained(async move {
             let now = self.value.get_or_init(|| async { Instant::now() }).await;
-            timeout_at(*now + duration, future)
+            timeout_at(*now + duration, future).await
         })
     }
 }

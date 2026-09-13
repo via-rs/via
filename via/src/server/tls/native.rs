@@ -65,11 +65,11 @@ impl NativeTlsStream {
 
 impl AsyncRead for NativeTlsStream {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &mut ReadBuf,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_read(cx, buf)
+        self.project().poll_read(cx, buf)
     }
 }
 

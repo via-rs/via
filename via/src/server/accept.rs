@@ -5,14 +5,13 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
-use tokio::time::timeout;
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use hyper_util::rt::TokioExecutor;
 
 use super::cancel::Cancellation;
 use super::io::IoWithPermit;
-use super::join_set::{self, JoinSet};
+use super::join_set::{self, JoinSet, StartedAt};
 use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
 use crate::error::ServerError;
@@ -138,21 +137,31 @@ where
         // We could instead, await the semaphore permit at the start of the
         // loop but that would create a kernel backlog.
         if let Ok(permit) = semaphore.clone().try_acquire_owned() {
-            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-            let handshake = acceptor.accept(stream);
+            // A lazily-evaluated shared timer entry used to calculate timeout
+            // deadlines with a query to the systems monotonic clock.
+            let started_at = StartedAt::new();
 
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             // native-tls task size: 1992
             // rustls task size: 1800
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-            let future = async move {
-                let tls = timeout(service.config().tls_handshake_timeout(), handshake).await??;
+            let future = {
+                let handshake = acceptor.accept(stream);
+                let started_at = started_at.clone();
 
-                if *tls.preferred_alpn() == Alpn::HTTP_2 {
-                    let io = IoWithPermit::new(tls, permit);
-                    serve_http2_connection(io, service, cancellation).await
-                } else {
-                    let io = IoWithPermit::new(tls, permit);
-                    serve_http1_connection(io, service, cancellation).await
+                async move {
+                    let tls = started_at
+                        .timeout_in(service.config().tls_handshake_timeout(), handshake)
+                        .await
+                        .await??;
+
+                    if *tls.preferred_alpn() == Alpn::HTTP_2 {
+                        let io = IoWithPermit::new(tls, permit);
+                        serve_http2_connection(io, service, cancellation).await
+                    } else {
+                        let io = IoWithPermit::new(tls, permit);
+                        serve_http1_connection(io, service, cancellation).await
+                    }
                 }
             };
 
@@ -164,21 +173,16 @@ where
             };
 
             // Spawn a task to serve the connection.
-            connections.spawn(&recycler, future);
+            connections.spawn(&started_at, &recycler, future);
         }
     };
 
     // Join the connections in the current cohort within the shutdown timeout.
-    let graceful_shutdown = timeout(
-        service.config().shutdown_timeout(),
-        connections.join(recycler),
-    );
+    connections
+        .join(service.config().shutdown_timeout(), recycler)
+        .await;
 
-    if graceful_shutdown.await.is_ok() {
-        exit_code
-    } else {
-        ExitCode::FAILURE
-    }
+    exit_code
 }
 
 async fn serve_http1_connection<App, Io>(

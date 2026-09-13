@@ -212,17 +212,11 @@ impl StartedAt {
         }
     }
 
-    pub fn timeout_in<F>(
-        self,
-        duration: Duration,
-        future: F,
-    ) -> impl Future<Output = Result<F::Output, Elapsed>>
+    pub async fn timeout_in<F>(self, duration: Duration, future: F) -> Result<F::Output, Elapsed>
     where
         F: Future + Send,
     {
-        coop::unconstrained(async move {
-            let now = self.value.get_or_init(|| async { Instant::now() }).await;
-            timeout_at(*now + duration, future).await
-        })
+        let get_or_init = self.value.get_or_init(|| async { Instant::now() });
+        timeout_at(*coop::unconstrained(get_or_init).await + duration, future).await
     }
 }

@@ -6,10 +6,12 @@ use crate::error::ServerError;
 
 const COHORT_SIZE: usize = 999;
 
-type TaskResult = std::result::Result<(), ServerError>;
+type JoinResult = std::result::Result<Result, JoinError>;
+
+pub type Result = std::result::Result<(), ServerError>;
 pub type Sender = mpsc::Sender<Cohort>;
 
-pub struct Cohort(tokio::task::JoinSet<TaskResult>);
+pub struct Cohort(tokio::task::JoinSet<Result>);
 
 pub struct JoinSet {
     current: Cohort,
@@ -54,11 +56,11 @@ impl Cohort {
         self.0.len()
     }
 
-    fn spawn(&mut self, task: impl Future<Output = TaskResult> + Send + 'static) {
+    fn spawn(&mut self, task: impl Future<Output = Result> + Send + 'static) {
         self.0.spawn(task);
     }
 
-    fn join_next(&mut self) -> impl Future<Output = Option<Result<TaskResult, JoinError>>> {
+    fn join_next(&mut self) -> impl Future<Output = Option<JoinResult>> {
         self.0.join_next()
     }
 }
@@ -77,7 +79,7 @@ impl JoinSet {
     pub(super) fn spawn(
         &mut self,
         sender: &Sender,
-        task: impl Future<Output = TaskResult> + Send + 'static,
+        task: impl Future<Output = Result> + Send + 'static,
     ) {
         // Spawn the task in the current cohort. Dynamic allocations may occur.
         self.current.spawn(task);

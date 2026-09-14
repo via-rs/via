@@ -12,7 +12,7 @@ use hyper_util::rt::TokioExecutor;
 
 use super::cancel::Cancellation;
 use super::io::IoWithPermit;
-use super::join_set::{self, JoinSet, StartedAt};
+use super::join_set::{self, JoinSet};
 use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
 use crate::error::ServerError;
@@ -125,14 +125,6 @@ where
             }
         };
 
-        // A shared timer entry requires allocation for `Arc` and we want to
-        // avoid an unconditional allocation associated with every connection.
-        #[cfg_attr(
-            not(any(feature = "native-tls", feature = "rustls-23")),
-            allow(unused_mut)
-        )]
-        let mut timer_entry = None;
-
         // Acquire a permit and proceed with serving the connection.
         //
         // The maximum number of permits is 1 away from EMFILE on linux so we
@@ -142,25 +134,22 @@ where
         // We could instead, await the semaphore permit at the start of the
         // loop but that would create a kernel backlog.
         if let Ok(permit) = semaphore.clone().try_acquire_owned() {
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+            let handshake = acceptor.accept(stream);
+
             let service = service.clone();
             let cancellation = cancellation.clone();
 
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-            connections.spawn({
-                let handshake = acceptor.accept(stream);
-                let started_at = StartedAt::new();
-                timer_entry = Some(started_at.clone());
+            connections.spawn(async move {
+                let timeout_duration = service.config().tls_handshake_timeout();
+                let stream = timeout(*timeout_duration, handshake).await??;
+                let io = IoWithPermit::new(stream, permit);
 
-                async move {
-                    let timeout_duration = service.config().tls_handshake_timeout();
-                    let handshake = started_at.timeout(*timeout_duration, handshake);
-                    let io = IoWithPermit::new(handshake.await??, permit);
-
-                    if io.preferred_alpn() == Alpn::HTTP_2 {
-                        serve_http2_connection(io, service, cancellation).await
-                    } else {
-                        serve_http1_connection(io, service, cancellation).await
-                    }
+                if io.preferred_alpn() == Alpn::HTTP_2 {
+                    serve_http2_connection(io, service, cancellation).await
+                } else {
+                    serve_http1_connection(io, service, cancellation).await
                 }
             });
 
@@ -172,17 +161,10 @@ where
         }
 
         if connections.size() >= join_set::COHORT_SIZE {
-            // A lazily-evaluated shared timer entry used to determine an
-            // absolute deadline for the tls handshake and `join_cohort` task.
-            //
-            // The syscall to query the monotonic system time happens once in a
-            // worker and is reused for both deadlines.
-            let started_at = timer_entry.unwrap_or_else(StartedAt::new);
-
             // A channel used to recycle cohorts in the `JoinSet`.
             let recycler = recycler.clone();
 
-            connections.rotate(started_at, recycler);
+            connections.rotate(recycler);
         }
     };
 

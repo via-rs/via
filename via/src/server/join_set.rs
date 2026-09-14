@@ -1,7 +1,6 @@
-use std::sync::Arc;
-use tokio::sync::{OnceCell, mpsc};
+use tokio::sync::mpsc;
 use tokio::task::{self, coop};
-use tokio::time::{Duration, Instant, error::Elapsed, timeout_at};
+use tokio::time::timeout;
 
 use super::DEFAULT_SHUTDOWN_TIMEOUT;
 use crate::error::ServerError;
@@ -30,11 +29,6 @@ pub struct JoinSet {
     next: mpsc::Receiver<Cohort>,
 }
 
-#[derive(Clone)]
-pub struct StartedAt {
-    value: Arc<OnceCell<Instant>>,
-}
-
 async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
     while let Some(result) = cohort.join_next().await {
         if let Err(ref error) = result {
@@ -47,10 +41,10 @@ async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
     }
 }
 
-async fn join_cohort(started_at: StartedAt, recycler: Sender, mut cohort: Cohort) {
+async fn join_cohort(recycler: Sender, mut cohort: Cohort) {
     log!(info(cohort = 0), "joining {} connections.", cohort.size());
 
-    let future = started_at.timeout(
+    let future = timeout(
         DEFAULT_SHUTDOWN_TIMEOUT,
         join_connections(true, &mut cohort),
     );
@@ -169,7 +163,7 @@ impl JoinSet {
         self.current.spawn(connection);
     }
 
-    pub(super) fn rotate(&mut self, started_at: StartedAt, recycler: Sender) {
+    pub(super) fn rotate(&mut self, recycler: Sender) {
         // Recycle an cohort or create a new one.
         // This dissociates load from the allocation in `Cohort::new()`.
         let mut next = self.next.try_recv().unwrap_or_else(|_| Cohort::new());
@@ -178,7 +172,7 @@ impl JoinSet {
         std::mem::swap(&mut self.current, &mut next);
 
         // Spawn a detached task `join_cohort` task.
-        task::spawn(join_cohort(started_at, recycler, next));
+        task::spawn(join_cohort(recycler, next));
     }
 
     #[inline]
@@ -191,21 +185,5 @@ impl JoinSet {
         while let Ok(mut cohort) = self.next.try_recv() {
             join_connections(false, &mut cohort).await;
         }
-    }
-}
-
-impl StartedAt {
-    pub fn new() -> Self {
-        Self {
-            value: Arc::new(OnceCell::new()),
-        }
-    }
-
-    pub async fn timeout<F>(self, duration: Duration, future: F) -> Result<F::Output, Elapsed>
-    where
-        F: Future + Send,
-    {
-        let get_or_init = self.value.get_or_init(|| async { Instant::now() });
-        timeout_at(*coop::unconstrained(get_or_init).await + duration, future).await
     }
 }

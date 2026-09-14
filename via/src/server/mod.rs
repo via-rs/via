@@ -45,7 +45,7 @@ pub(crate) type IoStream = io::IoWithPermit<tls::RustlsStream>;
     any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
     not(any(feature = "native-tls", feature = "rustls-23"))
 ))]
-pub(crate) type IoStream = io::IoWithPermit<tokio::net::TcpStream>;
+pub(crate) type IoStream = io::IoWithPermit<tcp::TcpStream>;
 
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
 const RUNTIME_FD_BUDGET: usize = 10;

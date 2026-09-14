@@ -76,7 +76,7 @@ where
 
     // Start accepting incoming connections.
     let exit_code = loop {
-        let (tcp, _) = tokio::select! {
+        let (stream, _) = tokio::select! {
             // A new TCP stream was accepted from the listener.
             result = listener.accept() => {
                 match result {
@@ -163,7 +163,7 @@ where
         // loop but that would create a kernel backlog.
         if let Ok(permit) = semaphore.clone().try_acquire_owned() {
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-            let handshake = acceptor.accept(tcp);
+            let handshake = acceptor.accept(stream);
             let service = service.clone();
 
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
@@ -181,7 +181,7 @@ where
 
             #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
             connections.spawn(async {
-                let io = IoWithPermit::new(TcpStream::new(tcp), permit);
+                let io = IoWithPermit::new(TcpStream::new(stream), permit);
                 serve_http1_connection(io, service, cancellation).await
             });
         }

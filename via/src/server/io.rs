@@ -46,6 +46,13 @@ impl<T> IoWithPermit<T> {
     }
 }
 
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+impl<T: super::tls::NegotiateAlpn> IoWithPermit<T> {
+    pub(super) fn preferred_alpn(&self) -> super::tls::Alpn {
+        self.io.inner().preferred_alpn()
+    }
+}
+
 // Explicitly impl Drop to make a supply-chain risk a build-time error.
 //
 // Rationale:

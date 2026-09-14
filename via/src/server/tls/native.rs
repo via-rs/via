@@ -7,14 +7,11 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_native_tls::{TlsAcceptor, TlsStream};
 
-use crate::server::tls::NegotiateAlpn;
-
-use super::{Acceptor, Alpn};
+use super::{Acceptor, Alpn, NegotiateAlpn};
 
 pub struct NativeTlsAcceptor(Arc<TlsAcceptor>);
 
 pub struct NativeTlsStream {
-    alpn: Alpn,
     stream: TlsStream<TcpStream>,
 }
 
@@ -41,13 +38,7 @@ impl Acceptor for NativeTlsAcceptor {
 
         async move {
             let stream = acceptor.accept(io).await?;
-            let inner = stream.get_ref();
-            let alpn = match inner.negotiated_alpn()? {
-                Some(value) if value == b"h2" => Alpn::HTTP_2,
-                _ => Alpn::HTTP_11,
-            };
-
-            Ok(NativeTlsStream { alpn, stream })
+            Ok(NativeTlsStream { stream })
         }
     }
 }
@@ -87,7 +78,7 @@ impl AsyncWrite for NativeTlsStream {
     }
 
     fn is_write_vectored(&self) -> bool {
-        self.stream.is_write_vectored()
+        false // native-tls does not currently support vectored writes.
     }
 
     fn poll_write_vectored(
@@ -100,7 +91,14 @@ impl AsyncWrite for NativeTlsStream {
 }
 
 impl NegotiateAlpn for NativeTlsStream {
-    fn preferred_alpn(&self) -> &Alpn {
-        &self.alpn
+    fn preferred_alpn(&self) -> Alpn {
+        match self.stream.get_ref().negotiated_alpn() {
+            Ok(Some(ref alpn)) if alpn == b"h2" => Alpn::HTTP_2,
+            Ok(Some(_) | None) => Alpn::HTTP_11,
+            Err(_) => {
+                std::hint::cold_path();
+                Alpn::HTTP_11
+            }
+        }
     }
 }

@@ -124,34 +124,13 @@ where
             }
         };
 
-        // A lazily-evaluated shared timer entry used to determine an absolute
-        // deadline for the tls handshake or `join_cohort` task.
-        //
-        // The syscall to query the monotonic system time happens once in a
-        // worker and is reused for both deadlines.
-        let started_at = StartedAt::new();
-
-        // If the current cohort exceeds `COHORT_SIZE`, rotate the join set.
-        if connections.size() >= join_set::COHORT_SIZE {
-            // Clone the deps that move into the detached `join_cohort` task.
-            let recycler = recycler.clone();
-            let started_at = started_at.clone();
-
-            // Rotate the join set. The allocations of the container can be
-            // recycled so long as the rotated join set does not fill within
-            // the `join_cohort` task deadline.
-            connections.rotate(started_at, recycler);
-        }
-
-        // Clone the cancellation token before acquiring a permit.
-        //
-        // The risk of atomic contention is similar but slightly higher to that
-        // of the semaphore.
-        //
-        // Cloning it ahead of time increases the probability of the subsequent
-        // atomics having an inverted phase-aligned alignment decreasing atomic
-        // contention in accept.
-        let cancellation = cancellation.clone();
+        // A shared timer entry requires allocation for `Arc` and we want to
+        // avoid an unconditional allocation associated with every connection.
+        #[cfg_attr(
+            not(any(feature = "native-tls", feature = "rustls-23")),
+            allow(unused_mut)
+        )]
+        let mut timer_entry = None;
 
         // Acquire a permit and proceed with serving the connection.
         //
@@ -162,20 +141,25 @@ where
         // We could instead, await the semaphore permit at the start of the
         // loop but that would create a kernel backlog.
         if let Ok(permit) = semaphore.clone().try_acquire_owned() {
-            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-            let handshake = acceptor.accept(stream);
             let service = service.clone();
+            let cancellation = cancellation.clone();
 
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-            connections.spawn(async move {
-                let timeout_duration = service.config().tls_handshake_timeout();
-                let handshake = started_at.timeout(*timeout_duration, handshake);
-                let io = IoWithPermit::new(handshake.await??, permit);
+            connections.spawn({
+                let handshake = acceptor.accept(stream);
+                let started_at = StartedAt::new();
+                timer_entry = Some(started_at.clone());
 
-                if io.preferred_alpn() == Alpn::HTTP_2 {
-                    serve_http2_connection(io, service, cancellation).await
-                } else {
-                    serve_http1_connection(io, service, cancellation).await
+                async move {
+                    let timeout_duration = service.config().tls_handshake_timeout();
+                    let handshake = started_at.timeout(*timeout_duration, handshake);
+                    let io = IoWithPermit::new(handshake.await??, permit);
+
+                    if io.preferred_alpn() == Alpn::HTTP_2 {
+                        serve_http2_connection(io, service, cancellation).await
+                    } else {
+                        serve_http1_connection(io, service, cancellation).await
+                    }
                 }
             });
 
@@ -184,6 +168,20 @@ where
                 let io = IoWithPermit::new(TcpStream::new(stream), permit);
                 serve_http1_connection(io, service, cancellation).await
             });
+        }
+
+        if connections.size() >= join_set::COHORT_SIZE {
+            // A lazily-evaluated shared timer entry used to determine an
+            // absolute deadline for the tls handshake and `join_cohort` task.
+            //
+            // The syscall to query the monotonic system time happens once in a
+            // worker and is reused for both deadlines.
+            let started_at = timer_entry.unwrap_or_else(StartedAt::new);
+
+            // A channel used to recycle cohorts in the `JoinSet`.
+            let recycler = recycler.clone();
+
+            connections.rotate(started_at, recycler);
         }
     };
 

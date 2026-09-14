@@ -164,7 +164,7 @@ impl JoinSet {
     }
 
     pub(super) fn rotate(&mut self, recycler: Sender) {
-        // Recycle an cohort or create a new one.
+        // Recycle a cohort or create a new one.
         // This dissociates load from the allocation in `Cohort::new()`.
         let mut next = self.next.try_recv().unwrap_or_else(|_| Cohort::new());
 

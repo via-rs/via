@@ -78,8 +78,12 @@ where
 {
     type Output = Result<(), Error>;
 
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        self.run.as_mut().poll(context)
+    fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        // Reification occurs as a result of projecting the `Pin<Box<Await>>`
+        // stored in `self.run`.
+        this.run.as_mut().poll(context)
     }
 }
 

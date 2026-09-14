@@ -1,65 +1,141 @@
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TryRecvError;
-use tokio::task::{self, JoinError, coop};
+use tokio::task::{self, coop};
+use tokio::time::timeout;
 
+use super::DEFAULT_SHUTDOWN_TIMEOUT;
 use crate::error::ServerError;
 
-const COHORT_SIZE: usize = 999;
+#[cfg(all(debug_assertions, any(feature = "native-tls", feature = "rustls-23")))]
+const MAX_TASK_SIZE: usize = 2048;
 
-type TaskResult = std::result::Result<(), ServerError>;
+#[cfg(all(
+    debug_assertions,
+    not(any(feature = "native-tls", feature = "rustls-23"))
+))]
+const MAX_TASK_SIZE: usize = 1024;
+
+pub const COHORT_SIZE: usize = 512;
+
 pub type Sender = mpsc::Sender<Cohort>;
+pub type TaskResult = std::result::Result<(), ServerError>;
 
-pub struct Cohort(tokio::task::JoinSet<TaskResult>);
+pub struct Cohort {
+    is_dirty: bool,
+    tasks: tokio::task::JoinSet<TaskResult>,
+}
 
 pub struct JoinSet {
     current: Cohort,
     next: mpsc::Receiver<Cohort>,
 }
 
-async fn join_cohort(immediate: bool, tx: Sender, mut cohort: Cohort) {
-    log!(info(cohort = 0), "joining {} connections.", cohort.size());
-
+async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
     while let Some(result) = cohort.join_next().await {
-        #[cfg(not(debug_assertions))]
-        drop(result);
-
-        #[cfg(debug_assertions)]
-        match result {
-            Ok(Ok(_)) => {}
-            Err(error) => {
-                log!(error(cohort = 1), "(connection) -> {}", &error);
-            }
-            Ok(Err(error)) => {
-                log!(error(cohort = 1), "(service) -> {}", &error);
-            }
+        if let Err(ref error) = result {
+            log!(error(cohort = 0), "{}", error);
         }
 
-        if !immediate {
+        if is_cooperative {
             coop::consume_budget().await;
         }
     }
+}
 
-    if tx.try_send(cohort).is_err() {
+async fn join_cohort(recycler: Sender, mut cohort: Cohort) {
+    log!(info(cohort = 0), "joining {} connections.", cohort.size());
+
+    let future = timeout(
+        DEFAULT_SHUTDOWN_TIMEOUT,
+        join_connections(true, &mut cohort),
+    );
+
+    if future.await.is_err() {
+        if cohort.is_dirty {
+            // Tasks that survive more than one cohort generation are detached.
+            //
+            // This allows locality to drift by not retaining references to
+            // persistent connections or join handles to persistent connection
+            // tasks.
+            //
+            // Something that we would do for connections that use a web socket
+            // if we were able to tell ahead of time in `accept`.
+            cohort.detach_all();
+        } else {
+            cohort.is_dirty = true;
+        }
+    }
+
+    if let Err(error) = recycler.try_send(cohort) {
+        let mut cohort = error.into_inner();
+
         // Placeholder for tracing...
-        log!(error(cohort = 2), "cohort cannot be recycled.");
+        log!(error(cohort = 1), "cohort cannot be recycled.");
+
+        // If the cohort contains connections that could not be joined, detach.
+        if cohort.is_dirty {
+            log!(
+                error(cohort = 2),
+                "detaching {} connections.",
+                cohort.size()
+            );
+
+            cohort.detach_all();
+        }
     }
 }
 
 impl Cohort {
     fn new() -> Self {
-        Self(Default::default())
+        Self {
+            is_dirty: false,
+            tasks: Default::default(),
+        }
     }
 
     fn size(&self) -> usize {
-        self.0.len()
+        self.tasks.len()
     }
 
-    fn spawn(&mut self, task: impl Future<Output = TaskResult> + Send + 'static) {
-        self.0.spawn(task);
+    fn spawn<F>(&mut self, connection: F)
+    where
+        F: Future<Output = TaskResult> + Send + 'static,
+    {
+        log!(
+            info(cohort = 0),
+            "spawn connection task (size = {}).",
+            std::mem::size_of_val(&connection)
+        );
+
+        // Connections are polled inline. The task dependencies are allocated
+        // on the heap.
+        //
+        // This keeps the cost of joining a connection relatively low while
+        // allowing each component to benefit from CPU cache locality when a
+        // boxed stream or sink is in the hot path of the state machine.
+        #[cfg(debug_assertions)]
+        assert!(
+            std::mem::size_of_val(&connection) < MAX_TASK_SIZE,
+            "connection task size limit of {} exceeded.",
+            MAX_TASK_SIZE,
+        );
+
+        self.tasks.spawn(connection);
     }
 
-    fn join_next(&mut self) -> impl Future<Output = Option<Result<TaskResult, JoinError>>> {
-        self.0.join_next()
+    async fn join_next(&mut self) -> Option<TaskResult> {
+        match self.tasks.join_next().await {
+            Some(Ok(result)) => Some(result),
+            Some(Err(error)) => Some(Err(ServerError::Join(error))),
+            None => {
+                self.is_dirty = false;
+                None
+            }
+        }
+    }
+
+    fn detach_all(&mut self) {
+        self.tasks.detach_all();
+        self.is_dirty = false;
     }
 }
 
@@ -71,43 +147,43 @@ impl JoinSet {
             next,
         };
 
+        // Seed the next cohort to avoid a load-based allocator signal.
+        if tx.try_send(Cohort::new()).is_err() {
+            unreachable!();
+        }
+
         (tx, join_set)
     }
 
-    pub(super) fn spawn(
-        &mut self,
-        sender: &Sender,
-        task: impl Future<Output = TaskResult> + Send + 'static,
-    ) {
+    pub(super) fn spawn<F>(&mut self, connection: F)
+    where
+        F: Future<Output = TaskResult> + Send + 'static,
+    {
         // Spawn the task in the current cohort. Dynamic allocations may occur.
-        self.current.spawn(task);
-
-        // If the current cohort exceeds `COHORT_SIZE`, start join it.
-        if self.current.size() > COHORT_SIZE {
-            // Clone sender first, it makes `TryRecvError::Disconnected` truly
-            // unreachable.
-            let sender = sender.clone();
-
-            // Recycle an cohort or create a new one.
-            // This dissociates load from the allocation in `Cohort::new()`.
-            let mut next = match self.next.try_recv() {
-                // Ideally we always have a cohort ready.
-                Ok(cohort) => cohort,
-                // There isn't a cohort available to recycle.
-                Err(TryRecvError::Empty) => Cohort::new(),
-                // Sender is an owned stack variable. This is unreachable.
-                Err(TryRecvError::Disconnected) => unreachable!(),
-            };
-
-            // Swap the current cohort with the next cohort.
-            std::mem::swap(&mut self.current, &mut next);
-
-            // Spawn a detached task `join_cohort` task.
-            task::spawn(join_cohort(false, sender, next));
-        }
+        self.current.spawn(connection);
     }
 
-    pub(super) fn join(self, sender: Sender) -> impl Future {
-        join_cohort(true, sender, self.current)
+    pub(super) fn rotate(&mut self, recycler: Sender) {
+        // Recycle a cohort or create a new one.
+        // This dissociates load from the allocation in `Cohort::new()`.
+        let mut next = self.next.try_recv().unwrap_or_else(|_| Cohort::new());
+
+        // Swap the current cohort with the next cohort.
+        std::mem::swap(&mut self.current, &mut next);
+
+        // Spawn a detached task `join_cohort`.
+        task::spawn(join_cohort(recycler, next));
+    }
+
+    #[inline]
+    pub(super) fn size(&self) -> usize {
+        self.current.size()
+    }
+
+    pub(super) async fn join(mut self) {
+        join_connections(false, &mut self.current).await;
+        while let Ok(mut cohort) = self.next.try_recv() {
+            join_connections(false, &mut cohort).await;
+        }
     }
 }

@@ -12,16 +12,16 @@ use hyper_util::rt::TokioExecutor;
 
 use super::cancel::Cancellation;
 use super::io::IoWithPermit;
-use super::join_set::JoinSet;
+use super::join_set::{self, JoinSet};
 use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
 use crate::error::ServerError;
 
-#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-use super::tls::{Alpn, NegotiateAlpn};
-
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 use super::tcp::TcpStream;
+
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+use super::tls::Alpn;
 
 macro_rules! serve_unless_cancelled {
     ($cancellation:ident, $connection:ident) => {
@@ -77,47 +77,48 @@ where
 
     // Start accepting incoming connections.
     let exit_code = loop {
-        let (io, _) = tokio::select! {
+        let (stream, _) = tokio::select! {
             // A new TCP stream was accepted from the listener.
-            result = listener.accept() => match result {
-                Ok(stream) => stream,
-                Err(error) => {
-                    // Print the error message to stderr in debug builds.
-                    log!(error(accept = 0), "{}", error);
+            result = listener.accept() => {
+                match result {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        // Print the error message to stderr in debug builds.
+                        log!(error(accept = 0), "{}", error);
 
-                    // Exit with a corresponding error exit code or continue
-                    // on EMFILE for POSIX systems.
-                    break cfg_select! {
-                        unix => match error.raw_os_error() {
-                            // ENOMEM or ENFILE
-                            //
-                            // Immutably replacing the node is preferred when
-                            // the process exits with any of these codes.
-                            Some(code @ (12 | 23)) => ExitCode::from(code as u8),
+                        // Break with the corresponding `ExitCode`.
+                        break cfg_select! {
+                            unix => match error.raw_os_error() {
+                                // ENOMEM or ENFILE
+                                //
+                                // Immutably replacing the node is preferred when
+                                // the process exits with any of these codes.
+                                Some(code @ (12 | 23)) => ExitCode::from(code as u8),
 
-                            // EMFILE
-                            //
-                            // This should never happen.
-                            Some(24) => ExitCode::from(24),
+                                // EMFILE
+                                //
+                                // This should never happen.
+                                Some(24) => ExitCode::from(24),
 
-                            // All other codes are an opaque error.
+                                // All other codes are an opaque error.
+                                //
+                                // Follow the instructions provided for non-POSIX
+                                // systems.
+                                _ => ExitCode::FAILURE,
+                            },
+
+                            // Use an opaque exit code for non-POSIX platforms.
                             //
-                            // Follow the instructions provided for non-POSIX
-                            // systems.
+                            // Either restart the process or immutably replace
+                            // the node.
+                            //
+                            // When possible, prefer containerized immutable
+                            // deployments.
                             _ => ExitCode::FAILURE,
-                        },
-
-                        // Use an opaque exit code for non-POSIX platforms.
-                        //
-                        // Either restart the process or immutably replace
-                        // the node.
-                        //
-                        // When possible, prefer containerized immutable
-                        // deployments.
-                        _ => ExitCode::FAILURE,
-                    };
+                        };
+                    }
                 }
-            },
+            }
             // A graceful shutdown signal was sent to the process.
             _ = cancellation.wait() => {
                 break ExitCode::SUCCESS;
@@ -132,65 +133,61 @@ where
         //
         // We could instead, await the semaphore permit at the start of the
         // loop but that would create a kernel backlog.
-        let Ok(permit) = semaphore.clone().try_acquire_owned() else {
-            continue;
-        };
+        if let Ok(permit) = semaphore.clone().try_acquire_owned() {
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+            let handshake = acceptor.accept(stream);
 
-        let service = service.clone();
-        let cancellation = cancellation.clone();
+            let service = service.clone();
+            let cancellation = cancellation.clone();
 
-        // Spawn a task to serve the connection.
-        #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-        connections.spawn(&recycler, {
-            let handshake = acceptor.accept(io);
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+            connections.spawn(async move {
+                let timeout_duration = service.config().tls_handshake_timeout();
+                let stream = timeout(*timeout_duration, handshake).await??;
+                let io = IoWithPermit::new(stream, permit);
 
-            // native-tls task size: 1952
-            // rustls task size: 1752
-            async move {
-                let io = timeout(service.config().tls_handshake_timeout(), handshake).await??;
-
-                if *io.preferred_alpn() == Alpn::HTTP_2 {
-                    let io = IoWithPermit::new(io, permit);
-                    let serve = serve_http2_connection(io, service, cancellation);
-
-                    serve.await
+                if io.preferred_alpn() == Alpn::HTTP_2 {
+                    serve_http2_connection(io, service, cancellation).await
                 } else {
-                    let io = IoWithPermit::new(io, permit);
-                    let serve = serve_http1_connection(io, service, cancellation);
-
-                    serve.await
+                    serve_http1_connection(io, service, cancellation).await
                 }
-            }
-        });
+            });
 
-        // task size: 880
-        #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
-        connections.spawn(&recycler, async move {
-            let io = IoWithPermit::new(TcpStream::new(io), permit);
-            let serve = serve_http1_connection(io, service, cancellation);
+            #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+            connections.spawn(async {
+                let io = IoWithPermit::new(TcpStream::new(stream), permit);
+                serve_http1_connection(io, service, cancellation).await
+            });
+        }
 
-            serve.await
-        });
+        if connections.size() >= join_set::COHORT_SIZE {
+            // A channel used to recycle cohorts in the `JoinSet`.
+            let recycler = recycler.clone();
+
+            connections.rotate(recycler);
+        }
     };
 
-    // Join the connections in the current cohort within the shutdown timeout.
-    let graceful_shutdown = timeout(
-        service.config().shutdown_timeout(),
-        connections.join(recycler),
-    );
+    if exit_code == ExitCode::SUCCESS {
+        // Join all of the transient connections in the join set before shutdown.
+        let shutdown = timeout(service.config().shutdown_timeout(), connections.join());
 
-    if graceful_shutdown.await.is_ok() {
-        exit_code
+        if shutdown.await.is_ok() {
+            exit_code
+        } else {
+            ExitCode::FAILURE
+        }
     } else {
-        ExitCode::FAILURE
+        exit_code
     }
 }
 
+#[inline]
 async fn serve_http1_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
     cancellation: Cancellation,
-) -> Result<(), ServerError>
+) -> join_set::TaskResult
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -215,12 +212,13 @@ where
     Ok(())
 }
 
+#[inline]
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 async fn serve_http2_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
     cancellation: Cancellation,
-) -> Result<(), ServerError>
+) -> join_set::TaskResult
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,

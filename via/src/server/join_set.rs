@@ -109,7 +109,7 @@ impl Cohort {
     {
         log!(
             info(cohort = 0),
-            "spawn connection task. size = {}.",
+            "spawn connection task (size = {}).",
             std::mem::size_of_val(&connection)
         );
 

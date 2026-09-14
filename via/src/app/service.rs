@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 
 use super::Via;
 use crate::request::{Envelope, Request, RequestBody};
-use crate::response::{Response, ResponseBody};
+use crate::response::ResponseBody;
 use crate::server::ServerConfig;
 use crate::{BoxFuture, Next, err};
 
@@ -26,7 +26,9 @@ type ServiceRequest = http::Request<TestBody>;
 #[cfg(not(feature = "test-util"))]
 type ServiceRequest = http::Request<Incoming>;
 
-pub struct FutureResponse(BoxFuture);
+pub struct FutureResponse {
+    future: BoxFuture,
+}
 
 pub struct ServiceAdapter<App> {
     service: Arc<ViaService<App>>,
@@ -39,23 +41,40 @@ struct ViaService<App> {
 
 impl FutureResponse {
     fn max_path_len_exceeded() -> Self {
-        Self(Box::pin(async {
+        let future = Box::pin(async {
             Err(err!(
                 414,
                 "path exceeds the maximum allowed length of 8 kb."
             ))
-        }))
+        });
+
+        Self { future }
     }
 }
 
 impl Future for FutureResponse {
     type Output = Result<http::Response<ResponseBody>, Infallible>;
 
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        self.0
-            .as_mut()
-            .poll(context)
-            .map(|result| Ok(result.unwrap_or_else(Response::from).into()))
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        // Get the mutable reference contained in `Pin<&mut Self>`. If we were
+        // to rely on the blanket DerefMut impl for `Unpin` types, we would
+        // perform reification twice unnecessarily. Reification is the
+        // responsibility of the owner of the allocation.
+        let this = self.get_mut();
+
+        // Calling `as_mut` on a `BoxFuture` reifies the borrow and it is a
+        // prerequisite when polling a `Pin<Box<_>>` from a `Pin<&mut _>`.
+        let future = this.future.as_mut();
+
+        if let Poll::Ready(result) = future.poll(context) {
+            // If an error originates in a service, convert it to a response.
+            let response = result.unwrap_or_else(|error| error.into());
+
+            // Unwrap the `http::Response` from the `via::Response`.
+            Poll::Ready(Ok(response.into()))
+        } else {
+            Poll::Pending
+        }
     }
 }
 
@@ -160,6 +179,8 @@ impl<App> Service<ServiceRequest> for ViaService<App> {
         };
 
         // Call the middleware stack to get a response.
-        FutureResponse(Next::new(deque).call(request))
+        FutureResponse {
+            future: Next::new(deque).call(request),
+        }
     }
 }

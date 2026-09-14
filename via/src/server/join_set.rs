@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::{OnceCell, mpsc};
 use tokio::task::{self, coop};
-use tokio::time::{Duration, Instant, error::Elapsed, timeout, timeout_at};
+use tokio::time::{Duration, Instant, error::Elapsed, timeout_at};
 
 use super::DEFAULT_SHUTDOWN_TIMEOUT;
 use crate::error::ServerError;
@@ -186,24 +186,11 @@ impl JoinSet {
         self.current.size()
     }
 
-    pub(super) async fn join(mut self, timeout_after: Duration, recycler: Sender) -> TaskResult {
-        let join_primary = join_connections(false, &mut self.current);
-
-        if timeout(timeout_after, join_primary).await.is_err() {
-            return Err(ServerError::ShutdownTimeout);
-        }
-
+    pub(super) async fn join(mut self) {
+        join_connections(false, &mut self.current).await;
         while let Ok(mut cohort) = self.next.try_recv() {
-            let join_rollover = join_connections(false, &mut cohort);
-            if timeout(timeout_after, join_rollover).await.is_err() {
-                return Err(ServerError::ShutdownTimeout);
-            }
+            join_connections(false, &mut cohort).await;
         }
-
-        // Keep recycler live until rollover cohorts are joined.
-        let _recycler = recycler;
-
-        Ok(())
     }
 }
 

@@ -15,7 +15,6 @@ pub(crate) enum ServerError {
     Http(hyper::Error),
     Other(BoxError),
     Join(JoinError),
-    ShutdownTimeout,
 }
 
 impl Error for HandshakeTimeoutError {}
@@ -35,7 +34,6 @@ impl Display for ServerError {
             Self::Http(error) => Display::fmt(error, f),
             Self::Other(error) => Display::fmt(&**error, f),
             Self::Join(error) => Display::fmt(error, f),
-            Self::ShutdownTimeout => write!(f, "shutdown timeout expired"),
         }
     }
 }
@@ -46,7 +44,6 @@ impl Error for ServerError {
             Self::Http(error) => Some(error),
             Self::Join(error) => Some(error),
             Self::Other(error) => error.source(),
-            Self::ShutdownTimeout => None,
         }
     }
 }

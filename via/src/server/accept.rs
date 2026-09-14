@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
+use tokio::time::timeout;
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use hyper_util::rt::TokioExecutor;
@@ -186,10 +187,10 @@ where
     };
 
     if exit_code == ExitCode::SUCCESS {
-        // Join the connections in the current cohort within the shutdown timeout.
-        let graceful_shutdown = connections.join(service.config().shutdown_timeout(), recycler);
+        // Join all of the transient connections in the join set before shutdown.
+        let shutdown = timeout(service.config().shutdown_timeout(), connections.join());
 
-        if graceful_shutdown.await.is_ok() {
+        if shutdown.await.is_ok() {
             exit_code
         } else {
             ExitCode::FAILURE

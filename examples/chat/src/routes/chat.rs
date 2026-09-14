@@ -187,14 +187,17 @@ fn deserialize_client_event(message: &Message) -> via::Result<ClientEvent> {
     Ok(serde_json::from_str(text)?)
 }
 
-fn serialize_lag_notification(length: u64) -> ws::Result<String> {
+fn serialize_lag_notification(length: u64) -> ws::Result<Message> {
     #[derive(Serialize)]
     #[serde(content = "data", rename_all = "lowercase", tag = "type")]
     enum LagNotification {
         Lag { length: u64 },
     }
 
-    serde_json::to_string(&LagNotification::Lag { length }).or_continue()
+    let notification = LagNotification::Lag { length };
+    let json_string = serde_json::to_string(&notification).or_continue()?;
+
+    Ok(Message::text(json_string))
 }
 
 #[cfg(all(debug_assertions, feature = "tokio-tungstenite"))]

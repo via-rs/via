@@ -78,7 +78,7 @@ impl AsyncWrite for NativeTlsStream {
     }
 
     fn is_write_vectored(&self) -> bool {
-        self.stream.is_write_vectored()
+        false // native-tls does not currently support vectored writes.
     }
 
     fn poll_write_vectored(

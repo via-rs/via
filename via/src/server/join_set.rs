@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{OnceCell, mpsc};
 use tokio::task::{self, coop};
 use tokio::time::error::Elapsed;
@@ -152,14 +151,7 @@ impl JoinSet {
 
             // Recycle an cohort or create a new one.
             // This dissociates load from the allocation in `Cohort::new()`.
-            let mut next_cohort = match self.next.try_recv() {
-                // Ideally we always have a cohort ready.
-                Ok(cohort) => cohort,
-                // There isn't a cohort available to recycle.
-                Err(TryRecvError::Empty) => Cohort::new(),
-                // Sender is an owned stack variable. This is unreachable.
-                Err(TryRecvError::Disconnected) => unreachable!(),
-            };
+            let mut next_cohort = self.next.try_recv().unwrap_or_else(|_| Cohort::new());
 
             // Swap the current cohort with the next cohort.
             std::mem::swap(&mut self.current, &mut next_cohort);

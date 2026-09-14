@@ -153,6 +153,11 @@ impl JoinSet {
             next,
         };
 
+        // Seed the next cohort to avoid a load-based allocator signal.
+        if tx.try_send(Cohort::new()).is_err() {
+            unreachable!();
+        }
+
         (tx, join_set)
     }
 

@@ -266,9 +266,10 @@ where
         self,
         address: impl ToSocketAddrs,
         identity: native_tls::Identity,
+        alpn_protocols: &[impl AsRef<str>],
     ) -> Result<ExitCode, Error> {
         let future = accept(
-            NativeTlsAcceptor::new(identity),
+            NativeTlsAcceptor::new(identity, alpn_protocols),
             TcpListener::bind(address).await?,
             ServiceAdapter::new(self.config, self.app),
         );

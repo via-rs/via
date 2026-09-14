@@ -76,7 +76,7 @@ zeroize = "1"
 
 [dependencies.native-tls]
 version = "0.2"
-features = ["alpn"]
+features = ["alpn", "alpn-accept"]
 optional = true
 
 [dependencies.tokio-native-tls]

@@ -80,6 +80,6 @@ async fn main() -> Result<ExitCode, Error> {
     let tls_config = load_pkcs12(&example_dir)?;
 
     Server::new(router, ())
-        .listen_native_tls(("127.0.0.1", 8080), tls_config)
+        .listen_native_tls(("127.0.0.1", 8080), tls_config, &["h2", "http/1.1"])
         .await
 }

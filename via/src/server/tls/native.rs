@@ -16,10 +16,11 @@ pub struct NativeTlsStream {
 }
 
 impl NativeTlsAcceptor {
-    pub fn new(identity: Identity) -> Self {
+    pub fn new(identity: Identity, alpn_protocols: &[impl AsRef<str>]) -> Self {
         Self(Arc::new(TlsAcceptor::from(
             native_tls::TlsAcceptor::builder(identity)
                 .min_protocol_version(Some(Protocol::Tlsv12))
+                .accept_alpn(alpn_protocols)
                 .build()
                 .expect("tls config is invalid or missing"),
         )))

@@ -178,9 +178,7 @@ impl JoinSet {
         std::mem::swap(&mut self.current, &mut next);
 
         // Spawn a detached task `join_cohort` task.
-        task::spawn(async {
-            join_cohort(started_at, recycler, next).await;
-        });
+        task::spawn(join_cohort(started_at, recycler, next));
     }
 
     #[inline]

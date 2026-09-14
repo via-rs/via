@@ -50,7 +50,7 @@ pub trait Acceptor {
     allow(dead_code)
 )]
 pub trait NegotiateAlpn {
-    fn preferred_alpn(&self) -> &Alpn;
+    fn preferred_alpn(&self) -> Alpn;
 }
 
 #[derive(Eq, PartialEq)]
@@ -72,7 +72,7 @@ impl Acceptor for TcpAcceptor {
 }
 
 impl NegotiateAlpn for TcpStream {
-    fn preferred_alpn(&self) -> &Alpn {
+    fn preferred_alpn(&self) -> Alpn {
         unreachable!()
     }
 }

@@ -6,6 +6,9 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::OwnedSemaphorePermit;
 
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+use super::tls::{Alpn, NegotiateAlpn};
+
 pub(crate) struct IoWithPermit<T> {
     io: WithHyperIo<T>,
     _permit: OwnedSemaphorePermit,
@@ -43,6 +46,13 @@ impl<T> IoWithPermit<T> {
         //
         // This is a trust boundary.
         unsafe { self.map_unchecked_mut(|this| &mut this.io) }
+    }
+}
+
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+impl<T: NegotiateAlpn> IoWithPermit<T> {
+    pub(super) fn preferred_alpn(&self) -> Alpn {
+        self.io.inner().preferred_alpn()
     }
 }
 

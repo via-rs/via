@@ -17,14 +17,10 @@ use crate::app::ServiceAdapter;
 use crate::error::ServerError;
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-use super::tls::{Alpn, NegotiateAlpn};
+use super::tls::Alpn;
 
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 use super::tcp::TcpStream;
-
-/// Mirrors the `BOX_FUTURE_THRESHOLD` used internally by `tokio::spawn`.
-#[cfg(debug_assertions)]
-const BOX_FUTURE_THRESHOLD: usize = 2048;
 
 macro_rules! serve_unless_cancelled {
     ($cancellation:ident, $connection:ident) => {
@@ -80,9 +76,7 @@ where
 
     // Start accepting incoming connections.
     let exit_code = loop {
-        let service = service.clone();
-
-        let (stream, _) = tokio::select! {
+        let (tcp, _) = tokio::select! {
             // A new TCP stream was accepted from the listener.
             result = listener.accept() => {
                 match result {
@@ -130,6 +124,33 @@ where
             }
         };
 
+        // A lazily-evaluated shared timer entry used to determine an absolute
+        // deadline for the tls handshake or `join_cohort` task.
+        //
+        // The syscall to query the monotonic system time happens once in a
+        // worker and is reused for both deadlines.
+        let started_at = StartedAt::new();
+
+        // If the current cohort exceeds `COHORT_SIZE`, rotate the join set.
+        if connections.size() > join_set::COHORT_SIZE {
+            // Clone the deps that move into the detached `join_cohort` task.
+            let recycler = recycler.clone();
+            let started_at = started_at.clone();
+
+            // Rotate the join set. The allocations of the container can be
+            // recycled so long as the rotated join set does not fill within
+            // the `join_cohort` task deadline.
+            connections.rotate(started_at, recycler);
+        }
+
+        // Clone the cancellation token before acquiring a permit.
+        //
+        // The risk of atomic contention is similar but slightly higher to that
+        // of the semaphore.
+        //
+        // Cloning it ahead of time increases the probability of the subsequent
+        // atomics having an inverted phase-aligned alignment decreasing atomic
+        // contention in accept.
         let cancellation = cancellation.clone();
 
         // Acquire a permit and proceed with serving the connection.
@@ -141,58 +162,31 @@ where
         // We could instead, await the semaphore permit at the start of the
         // loop but that would create a kernel backlog.
         if let Ok(permit) = semaphore.clone().try_acquire_owned() {
-            // A lazily-evaluated shared timer entry used to calculate timeout
-            // deadlines with a query to the systems monotonic clock.
-            let started_at = StartedAt::new();
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+            let handshake = acceptor.accept(tcp);
+            let service = service.clone();
 
-            // native-tls task size: 1992
+            // native-tls task size: 2016
             // rustls task size: 1800
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-            let future = {
-                let handshake = acceptor.accept(stream);
-                let started_at = started_at.clone();
+            connections.spawn(async move {
+                let timeout_duration = service.config().tls_handshake_timeout();
+                let handshake = started_at.timeout(*timeout_duration, handshake);
+                let io = IoWithPermit::new(handshake.await??, permit);
 
-                async move {
-                    let tls = started_at
-                        .timeout_in(service.config().tls_handshake_timeout(), handshake)
-                        .await??;
-
-                    if *tls.preferred_alpn() == Alpn::HTTP_2 {
-                        let io = IoWithPermit::new(tls, permit);
-                        serve_http2_connection(io, service, cancellation).await
-                    } else {
-                        let io = IoWithPermit::new(tls, permit);
-                        serve_http1_connection(io, service, cancellation).await
-                    }
+                if io.preferred_alpn() == Alpn::HTTP_2 {
+                    serve_http2_connection(io, service, cancellation).await
+                } else {
+                    serve_http1_connection(io, service, cancellation).await
                 }
-            };
+            });
 
-            // task size: 880
+            // tcp task size: 888
             #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
-            let future = async {
-                let io = IoWithPermit::new(TcpStream::new(stream), permit);
+            connections.spawn(async {
+                let io = IoWithPermit::new(TcpStream::new(tcp), permit);
                 serve_http1_connection(io, service, cancellation).await
-            };
-
-            #[cfg(debug_assertions)]
-            assert!(
-                std::mem::size_of_val(&future) + 24 < BOX_FUTURE_THRESHOLD,
-                //                               ^^ size of 3 borrows
-                //
-                // The number of args passed to `connections.spawn` other
-                // than `future` is used to determine the amount of padding
-                // provided on the left-hand side of this assertion.
-                //
-                // We don't want this value to exceed `BOX_FUTURE_THRESHOLD`
-                // in tokio. The call to `connections.spawn` may or may not
-                // get inlined. The correctness of this implementation does
-                // not depend on it.
-                "the size of the spawn argument list must not exceed: {}",
-                BOX_FUTURE_THRESHOLD,
-            );
-
-            // Spawn a task to serve the connection.
-            connections.spawn(&started_at, &recycler, future);
+            });
         }
     };
 
@@ -210,6 +204,7 @@ where
     }
 }
 
+#[inline]
 async fn serve_http1_connection<App, Io>(
     io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
@@ -239,6 +234,7 @@ where
     Ok(())
 }
 
+#[inline]
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 async fn serve_http2_connection<App, Io>(
     io: IoWithPermit<Io>,

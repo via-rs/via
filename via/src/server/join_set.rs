@@ -7,7 +7,16 @@ use tokio::time::{Duration, Instant, timeout, timeout_at};
 use super::DEFAULT_SHUTDOWN_TIMEOUT;
 use crate::error::ServerError;
 
-const COHORT_SIZE: usize = 499;
+#[cfg(all(debug_assertions, any(feature = "native-tls", feature = "rustls-23")))]
+const MAX_TASK_SIZE: usize = 2048;
+
+#[cfg(all(
+    debug_assertions,
+    not(any(feature = "native-tls", feature = "rustls-23"))
+))]
+const MAX_TASK_SIZE: usize = 1024;
+
+pub const COHORT_SIZE: usize = 499;
 
 pub type Sender = mpsc::Sender<Cohort>;
 pub type TaskResult = std::result::Result<(), ServerError>;
@@ -42,7 +51,7 @@ async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
 async fn join_cohort(started_at: StartedAt, recycler: Sender, mut cohort: Cohort) {
     log!(info(cohort = 0), "joining {} connections.", cohort.size());
 
-    let future = started_at.timeout_in(
+    let future = started_at.timeout(
         DEFAULT_SHUTDOWN_TIMEOUT,
         join_connections(true, &mut cohort),
     );
@@ -94,8 +103,24 @@ impl Cohort {
         self.tasks.len()
     }
 
-    fn spawn(&mut self, task: impl Future<Output = TaskResult> + Send + 'static) {
-        self.tasks.spawn(task);
+    fn spawn<F>(&mut self, connection: F)
+    where
+        F: Future<Output = TaskResult> + Send + 'static,
+    {
+        // Connections are polled inline. The task dependencies are allocated
+        // on the heap.
+        //
+        // This keeps the cost of joining a connection relatively low while
+        // allowing each component to benefit from CPU cache locality when a
+        // boxed stream or sink is in the hot path of the state machine.
+        #[cfg(debug_assertions)]
+        assert!(
+            std::mem::size_of_val(&connection) < MAX_TASK_SIZE,
+            "connection task size limit of {} exceeded.",
+            MAX_TASK_SIZE,
+        );
+
+        self.tasks.spawn(connection);
     }
 
     async fn join_next(&mut self) -> Option<TaskResult> {
@@ -132,35 +157,31 @@ impl JoinSet {
         (tx, join_set)
     }
 
-    pub(super) fn spawn(
-        &mut self,
-        started_at: &StartedAt,
-        recycler: &Sender,
-        task: impl Future<Output = TaskResult> + Send + 'static,
-    ) {
+    pub(super) fn spawn<F>(&mut self, connection: F)
+    where
+        F: Future<Output = TaskResult> + Send + 'static,
+    {
         // Spawn the task in the current cohort. Dynamic allocations may occur.
-        self.current.spawn(task);
+        self.current.spawn(connection);
+    }
 
-        // If the current cohort exceeds `COHORT_SIZE`, start join it.
-        if self.current.size() > COHORT_SIZE {
-            // Clone `recycler` to make `TryRecvError::Disconnected` unreachable.
-            let recycler = recycler.clone();
+    pub(super) fn rotate(&mut self, started_at: StartedAt, recycler: Sender) {
+        // Recycle an cohort or create a new one.
+        // This dissociates load from the allocation in `Cohort::new()`.
+        let mut next = self.next.try_recv().unwrap_or_else(|_| Cohort::new());
 
-            // Clone `started_at` so it can move into the `join_cohort` task.
-            let started_at = started_at.clone();
+        // Swap the current cohort with the next cohort.
+        std::mem::swap(&mut self.current, &mut next);
 
-            // Recycle an cohort or create a new one.
-            // This dissociates load from the allocation in `Cohort::new()`.
-            let mut next_cohort = self.next.try_recv().unwrap_or_else(|_| Cohort::new());
+        // Spawn a detached task `join_cohort` task.
+        task::spawn(async {
+            join_cohort(started_at, recycler, next).await;
+        });
+    }
 
-            // Swap the current cohort with the next cohort.
-            std::mem::swap(&mut self.current, &mut next_cohort);
-
-            // Spawn a detached task `join_cohort` task.
-            task::spawn(async {
-                join_cohort(started_at, recycler, next_cohort).await;
-            });
-        }
+    #[inline]
+    pub(super) fn size(&self) -> usize {
+        self.current.size()
     }
 
     pub(super) async fn join(mut self, timeout_after: Duration, recycler: Sender) -> TaskResult {
@@ -191,7 +212,7 @@ impl StartedAt {
         }
     }
 
-    pub async fn timeout_in<F>(self, duration: Duration, future: F) -> Result<F::Output, Elapsed>
+    pub async fn timeout<F>(self, duration: Duration, future: F) -> Result<F::Output, Elapsed>
     where
         F: Future + Send,
     {

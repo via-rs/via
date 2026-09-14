@@ -14,7 +14,6 @@ use super::{Acceptor, Alpn};
 pub struct NativeTlsAcceptor(Arc<TlsAcceptor>);
 
 pub struct NativeTlsStream {
-    alpn: Alpn,
     stream: TlsStream<TcpStream>,
 }
 
@@ -41,13 +40,7 @@ impl Acceptor for NativeTlsAcceptor {
 
         async move {
             let stream = acceptor.accept(io).await?;
-            let inner = stream.get_ref();
-            let alpn = match inner.negotiated_alpn()? {
-                Some(value) if value == b"h2" => Alpn::HTTP_2,
-                _ => Alpn::HTTP_11,
-            };
-
-            Ok(NativeTlsStream { alpn, stream })
+            Ok(NativeTlsStream { stream })
         }
     }
 }
@@ -100,7 +93,13 @@ impl AsyncWrite for NativeTlsStream {
 }
 
 impl NegotiateAlpn for NativeTlsStream {
-    fn preferred_alpn(&self) -> &Alpn {
-        &self.alpn
+    fn preferred_alpn(&self) -> Alpn {
+        if let Ok(option) = self.stream.get_ref().negotiated_alpn()
+            && option.is_some_and(|alpn| alpn == b"h2")
+        {
+            Alpn::HTTP_2
+        } else {
+            Alpn::HTTP_11
+        }
     }
 }

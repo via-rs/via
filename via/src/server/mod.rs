@@ -401,8 +401,9 @@ impl ServerConfig {
         self.http2_max_send_buf_size
     }
 
-    pub fn tls_handshake_timeout(&self) -> Duration {
-        self.tls_handshake_timeout
+    #[inline]
+    pub fn tls_handshake_timeout(&self) -> &Duration {
+        &self.tls_handshake_timeout
     }
 }
 

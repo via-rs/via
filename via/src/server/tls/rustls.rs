@@ -3,7 +3,7 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, ready};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::server::{Accept, TlsAcceptor, TlsStream};
@@ -14,8 +14,7 @@ pub struct RustlsAcceptor(TlsAcceptor);
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct RustlsStream {
-    alpn: Alpn,
-    tls: Pin<Box<MaybeTlsStream>>,
+    stream: Pin<Box<MaybeTlsStream>>,
 }
 
 enum ReadyState {
@@ -45,13 +44,13 @@ impl Acceptor for RustlsAcceptor {
         let acceptor = self.0.clone();
 
         async move {
-            let mut tls = Box::pin(MaybeTlsStream {
+            let mut stream = Box::pin(MaybeTlsStream {
                 state: ReadyState::Handshake(acceptor.accept(io)),
             });
 
-            let alpn = (&mut tls).await?;
+            stream.as_mut().await?;
 
-            Ok(RustlsStream { alpn, tls })
+            Ok(RustlsStream { stream })
         }
     }
 }
@@ -65,11 +64,24 @@ impl MaybeTlsStream {
         let this = self.get_mut();
 
         if let ReadyState::Stream(stream) = &mut this.state {
-            let stream = Pin::new(stream);
-            f(stream)
+            f(Pin::new(stream))
         } else {
             Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
         }
+    }
+}
+
+impl NegotiateAlpn for MaybeTlsStream {
+    #[inline]
+    fn preferred_alpn(&self) -> Alpn {
+        if let ReadyState::Stream(stream) = &self.state {
+            let (_, connection) = stream.get_ref();
+            if connection.alpn_protocol().is_some_and(|alpn| alpn == b"h2") {
+                return Alpn::HTTP_2;
+            }
+        }
+
+        Alpn::HTTP_11
     }
 }
 
@@ -110,25 +122,23 @@ impl AsyncWrite for MaybeTlsStream {
 }
 
 impl Future for MaybeTlsStream {
-    type Output = io::Result<Alpn>;
+    type Output = io::Result<()>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let ReadyState::Handshake(accept) = &mut this.state else {
-            return Poll::Ready(Err(io::ErrorKind::AlreadyExists.into()));
-        };
 
-        Pin::new(accept).poll(cx).map_ok(|stream| {
-            let (_, conn) = stream.get_ref();
-            let alpn = match conn.alpn_protocol() {
-                Some(value) if value == b"h2" => Alpn::HTTP_2,
-                _ => Alpn::HTTP_11,
-            };
+        match &mut this.state {
+            ReadyState::Handshake(accept) => {
+                let stream = ready!(Pin::new(accept).poll(context))?;
+                this.state = ReadyState::Stream(stream);
 
-            this.state = ReadyState::Stream(stream);
-
-            alpn
-        })
+                Poll::Ready(Ok(()))
+            }
+            ReadyState::Stream(_) => {
+                let error = io::ErrorKind::AlreadyExists.into();
+                Poll::Ready(Err(error))
+            }
+        }
     }
 }
 
@@ -136,7 +146,7 @@ impl RustlsStream {
     #[inline(always)]
     fn project(self: Pin<&mut Self>) -> Pin<&mut MaybeTlsStream> {
         let this = self.get_mut();
-        this.tls.as_mut()
+        this.stream.as_mut()
     }
 }
 
@@ -164,7 +174,7 @@ impl AsyncWrite for RustlsStream {
     }
 
     fn is_write_vectored(&self) -> bool {
-        self.tls.is_write_vectored()
+        self.stream.is_write_vectored()
     }
 
     fn poll_write_vectored(
@@ -177,7 +187,7 @@ impl AsyncWrite for RustlsStream {
 }
 
 impl NegotiateAlpn for RustlsStream {
-    fn preferred_alpn(&self) -> &Alpn {
-        &self.alpn
+    fn preferred_alpn(&self) -> Alpn {
+        self.stream.preferred_alpn()
     }
 }

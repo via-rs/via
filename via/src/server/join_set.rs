@@ -107,6 +107,12 @@ impl Cohort {
     where
         F: Future<Output = TaskResult> + Send + 'static,
     {
+        log!(
+            info(cohort = 0),
+            "spawn connection task. size = {}.",
+            std::mem::size_of_val(&connection)
+        );
+
         // Connections are polled inline. The task dependencies are allocated
         // on the heap.
         //

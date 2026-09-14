@@ -16,11 +16,11 @@ use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
 use crate::error::ServerError;
 
-#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-use super::tls::Alpn;
-
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 use super::tcp::TcpStream;
+
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+use super::tls::Alpn;
 
 macro_rules! serve_unless_cancelled {
     ($cancellation:ident, $connection:ident) => {
@@ -166,8 +166,6 @@ where
             let handshake = acceptor.accept(tcp);
             let service = service.clone();
 
-            // native-tls task size: 2016
-            // rustls task size: 1800
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             connections.spawn(async move {
                 let timeout_duration = service.config().tls_handshake_timeout();

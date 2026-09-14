@@ -7,9 +7,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_native_tls::{TlsAcceptor, TlsStream};
 
-use crate::server::tls::NegotiateAlpn;
-
-use super::{Acceptor, Alpn};
+use super::{Acceptor, Alpn, NegotiateAlpn};
 
 pub struct NativeTlsAcceptor(Arc<TlsAcceptor>);
 
@@ -58,11 +56,11 @@ impl NativeTlsStream {
 
 impl AsyncRead for NativeTlsStream {
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &mut ReadBuf,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_read(cx, buf)
+        self.project().poll_read(cx, buf)
     }
 }
 
@@ -94,12 +92,13 @@ impl AsyncWrite for NativeTlsStream {
 
 impl NegotiateAlpn for NativeTlsStream {
     fn preferred_alpn(&self) -> Alpn {
-        if let Ok(option) = self.stream.get_ref().negotiated_alpn()
-            && option.is_some_and(|alpn| alpn == b"h2")
-        {
-            Alpn::HTTP_2
-        } else {
-            Alpn::HTTP_11
+        match self.stream.get_ref().negotiated_alpn() {
+            Ok(Some(ref alpn)) if alpn == b"h2" => Alpn::HTTP_2,
+            Ok(Some(_) | None) => Alpn::HTTP_11,
+            Err(_) => {
+                std::hint::cold_path();
+                Alpn::HTTP_11
+            }
         }
     }
 }

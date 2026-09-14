@@ -72,7 +72,6 @@ impl MaybeTlsStream {
 }
 
 impl NegotiateAlpn for MaybeTlsStream {
-    #[inline]
     fn preferred_alpn(&self) -> Alpn {
         if let ReadyState::Stream(stream) = &self.state {
             let (_, connection) = stream.get_ref();

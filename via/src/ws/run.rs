@@ -182,9 +182,6 @@ impl Future for Facade {
         let mut i = 0;
 
         loop {
-            // Assume that we'll touch the stream on each iteration.
-            let stream = this.stream.as_pin_mut();
-
             match &mut this.state {
                 IoState::Receive => {
                     log!(info(ws = i), "state = receive");
@@ -193,7 +190,7 @@ impl Future for Facade {
                     // Confirm that the listener can receive the next message.
                     if this.rendezvous.has_capacity()? {
                         // Attempt to pull the next message out of the stream.
-                        match stream.poll_next(cx) {
+                        match this.stream.as_pin_mut().poll_next(cx) {
                             Poll::Ready(Some(Ok(next))) => {
                                 // If send fails, the channel is disconnected.
                                 this.rendezvous.try_send(next)?;
@@ -238,7 +235,7 @@ impl Future for Facade {
                     log!(info(ws = i), "state = send");
                     indent!(i);
 
-                    match stream.poll_ready(cx) {
+                    match this.stream.as_pin_mut().poll_ready(cx) {
                         Poll::Ready(Ok(_)) => {
                             this.stream.as_pin_mut().start_send(item).map_err(rescue)?;
                             log!(info(ws = i), "outbound message accepted by i/o.");
@@ -259,7 +256,7 @@ impl Future for Facade {
                     log!(info(ws = i), "state = flush");
                     indent!(i);
 
-                    match stream.poll_flush(cx) {
+                    match this.stream.as_pin_mut().poll_flush(cx) {
                         Poll::Pending => {
                             log!(info(ws = i), "waiting for flush to complete.");
                         }

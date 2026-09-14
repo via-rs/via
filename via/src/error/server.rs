@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io;
+use tokio::task::JoinError;
 use tokio::time::error::Elapsed;
 
 use super::BoxError;
@@ -13,6 +14,7 @@ struct HandshakeTimeoutError;
 pub(crate) enum ServerError {
     Http(hyper::Error),
     Other(BoxError),
+    Join(JoinError),
     ShutdownTimeout,
 }
 
@@ -32,6 +34,7 @@ impl Display for ServerError {
         match self {
             Self::Http(error) => Display::fmt(error, f),
             Self::Other(error) => Display::fmt(&**error, f),
+            Self::Join(error) => Display::fmt(error, f),
             Self::ShutdownTimeout => write!(f, "shutdown timeout expired"),
         }
     }
@@ -40,8 +43,9 @@ impl Display for ServerError {
 impl Error for ServerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Http(error) => error.source(),
-            Self::Other(error) => Error::source(&**error),
+            Self::Http(error) => Some(error),
+            Self::Join(error) => Some(error),
+            Self::Other(error) => error.source(),
             Self::ShutdownTimeout => None,
         }
     }

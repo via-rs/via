@@ -132,7 +132,7 @@ where
         let started_at = StartedAt::new();
 
         // If the current cohort exceeds `COHORT_SIZE`, rotate the join set.
-        if connections.size() > join_set::COHORT_SIZE {
+        if connections.size() >= join_set::COHORT_SIZE {
             // Clone the deps that move into the detached `join_cohort` task.
             let recycler = recycler.clone();
             let started_at = started_at.clone();

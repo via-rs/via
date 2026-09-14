@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::{OnceCell, mpsc};
 use tokio::task::{self, coop};
-use tokio::time::error::Elapsed;
-use tokio::time::{Duration, Instant, timeout, timeout_at};
+use tokio::time::{Duration, Instant, error::Elapsed, timeout, timeout_at};
 
 use super::DEFAULT_SHUTDOWN_TIMEOUT;
 use crate::error::ServerError;
@@ -16,7 +15,7 @@ const MAX_TASK_SIZE: usize = 2048;
 ))]
 const MAX_TASK_SIZE: usize = 1024;
 
-pub const COHORT_SIZE: usize = 499;
+pub const COHORT_SIZE: usize = 512;
 
 pub type Sender = mpsc::Sender<Cohort>;
 pub type TaskResult = std::result::Result<(), ServerError>;
@@ -38,8 +37,8 @@ pub struct StartedAt {
 
 async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
     while let Some(result) = cohort.join_next().await {
-        if let Err(error) = result {
-            log!(error(cohort = 1), "(connection) -> {}", &error);
+        if let Err(ref error) = result {
+            log!(error(cohort = 0), "{}", error);
         }
 
         if is_cooperative {
@@ -130,20 +129,14 @@ impl Cohort {
     }
 
     async fn join_next(&mut self) -> Option<TaskResult> {
-        let joined = self.tasks.join_next().await;
-        let joined = joined.and_then(|result| match result {
-            Ok(result) => Some(result),
-            Err(error) => {
-                log!(info(cohort = 1), "(task) -> {}", &error);
+        match self.tasks.join_next().await {
+            Some(Ok(result)) => Some(result),
+            Some(Err(error)) => Some(Err(ServerError::Join(error))),
+            None => {
+                self.is_dirty = false;
                 None
             }
-        });
-
-        if joined.is_none() {
-            self.is_dirty = false;
         }
-
-        joined
     }
 
     fn detach_all(&mut self) {

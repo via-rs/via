@@ -25,14 +25,16 @@ pub use rustls::RustlsAcceptor;
 pub use rustls::RustlsStream;
 
 use http::Version;
-use std::convert::Infallible;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
+use tokio::sync::OwnedSemaphorePermit;
 
 use crate::error::ServerError;
+use crate::server::io::IoWithPermit;
 
-pub trait Acceptor {
-    type Error: Into<ServerError>;
+type Result<T> = std::result::Result<IoWithPermit<T>, ServerError>;
+
+pub(super) trait Acceptor {
     type Stream: AsyncRead + AsyncWrite + NegotiateAlpn;
 
     #[cfg_attr(
@@ -41,8 +43,9 @@ pub trait Acceptor {
     )]
     fn accept(
         &self,
-        io: TcpStream,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send + 'static;
+        stream: TcpStream,
+        permit: OwnedSemaphorePermit,
+    ) -> impl Future<Output = Result<Self::Stream>> + Send + 'static;
 }
 
 #[cfg_attr(
@@ -59,14 +62,14 @@ pub struct Alpn(Version);
 pub struct TcpAcceptor;
 
 impl Acceptor for TcpAcceptor {
-    type Error = Infallible;
     type Stream = TcpStream;
 
     #[allow(clippy::manual_async_fn)]
     fn accept(
         &self,
         _: TcpStream,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send + 'static {
+        _: OwnedSemaphorePermit,
+    ) -> impl Future<Output = Result<Self::Stream>> + Send + 'static {
         async { unreachable!() }
     }
 }

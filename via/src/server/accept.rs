@@ -15,7 +15,6 @@ use super::io::IoWithPermit;
 use super::join_set::{self, JoinSet};
 use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
-use crate::error::ServerError;
 
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 use super::tcp::TcpStream;
@@ -45,7 +44,6 @@ pub(super) async fn accept<App, TlsAcceptor>(
 ) -> ExitCode
 where
     App: Send + Sync + 'static,
-    ServerError: From<TlsAcceptor::Error>,
     TlsAcceptor: Acceptor,
     TlsAcceptor::Stream: Send + Unpin + 'static,
 {
@@ -135,16 +133,14 @@ where
         // loop but that would create a kernel backlog.
         if let Ok(permit) = semaphore.clone().try_acquire_owned() {
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-            let handshake = acceptor.accept(stream);
+            let handshake = acceptor.accept(stream, permit);
 
-            let service = service.clone();
             let cancellation = cancellation.clone();
+            let service = service.clone();
 
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             connections.spawn(async move {
-                let timeout_duration = service.config().tls_handshake_timeout();
-                let stream = timeout(*timeout_duration, handshake).await??;
-                let io = IoWithPermit::new(stream, permit);
+                let io = timeout(service.config().tls_handshake_timeout(), handshake).await??;
 
                 if io.preferred_alpn() == Alpn::HTTP_2 {
                     serve_http2_connection(io, service, cancellation).await
@@ -154,9 +150,13 @@ where
             });
 
             #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
-            connections.spawn(async {
-                let io = IoWithPermit::new(TcpStream::new(stream), permit);
-                serve_http1_connection(io, service, cancellation).await
+            connections.spawn({
+                let stream = TcpStream::new(stream);
+
+                async {
+                    let io = IoWithPermit::new(stream, permit);
+                    serve_http1_connection(io, service, cancellation).await
+                }
             });
         }
 

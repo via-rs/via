@@ -403,8 +403,8 @@ impl ServerConfig {
     }
 
     #[inline]
-    pub fn tls_handshake_timeout(&self) -> &Duration {
-        &self.tls_handshake_timeout
+    pub fn tls_handshake_timeout(&self) -> Duration {
+        self.tls_handshake_timeout
     }
 }
 

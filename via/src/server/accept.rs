@@ -142,8 +142,7 @@ where
 
             #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             connections.spawn(async move {
-                let timeout_duration = service.config().tls_handshake_timeout();
-                let stream = timeout(*timeout_duration, handshake).await??;
+                let stream = timeout(service.config().tls_handshake_timeout(), handshake).await??;
                 let io = IoWithPermit::new(stream, permit);
 
                 if io.preferred_alpn() == Alpn::HTTP_2 {

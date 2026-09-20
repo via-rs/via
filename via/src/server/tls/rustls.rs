@@ -6,9 +6,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio_rustls::server::{Accept, TlsAcceptor, TlsStream};
 
 use super::{Acceptor, Alpn, NegotiateAlpn};
+use crate::server::io::IoWithPermit;
 
 pub struct RustlsAcceptor(TlsAcceptor);
 
@@ -39,18 +41,20 @@ impl Acceptor for RustlsAcceptor {
 
     fn accept(
         &self,
-        io: TcpStream,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send + 'static {
+        permit: OwnedSemaphorePermit,
+        stream: TcpStream,
+    ) -> impl Future<Output = Result<IoWithPermit<Self::Stream>, Self::Error>> + Send + 'static
+    {
         let acceptor = self.0.clone();
 
         async move {
             let mut stream = Box::pin(MaybeTlsStream {
-                state: ReadyState::Handshake(acceptor.accept(io)),
+                state: ReadyState::Handshake(acceptor.accept(stream)),
             });
 
             stream.as_mut().await?;
 
-            Ok(RustlsStream { stream })
+            Ok(IoWithPermit::new(RustlsStream { stream }, permit))
         }
     }
 }

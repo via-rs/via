@@ -5,9 +5,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio_native_tls::{TlsAcceptor, TlsStream};
 
 use super::{Acceptor, Alpn, NegotiateAlpn};
+use crate::server::io::IoWithPermit;
 
 pub struct NativeTlsAcceptor(Arc<TlsAcceptor>);
 
@@ -33,13 +35,15 @@ impl Acceptor for NativeTlsAcceptor {
 
     fn accept(
         &self,
-        io: TcpStream,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send + 'static {
+        permit: OwnedSemaphorePermit,
+        stream: TcpStream,
+    ) -> impl Future<Output = Result<IoWithPermit<Self::Stream>, Self::Error>> + Send + 'static
+    {
         let acceptor = Arc::clone(&self.0);
 
         async move {
-            let stream = acceptor.accept(io).await?;
-            Ok(NativeTlsStream { stream })
+            let stream = acceptor.accept(stream).await?;
+            Ok(IoWithPermit::new(NativeTlsStream { stream }, permit))
         }
     }
 }

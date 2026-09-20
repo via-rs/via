@@ -1,27 +1,17 @@
 use tokio::sync::mpsc;
-use tokio::task::{self, coop};
+use tokio::task::{self, JoinError, coop};
 use tokio::time::timeout;
 
 use super::DEFAULT_SHUTDOWN_TIMEOUT;
-use crate::error::ServerError;
-
-#[cfg(all(debug_assertions, any(feature = "native-tls", feature = "rustls-23")))]
-const MAX_TASK_SIZE: usize = 2048;
-
-#[cfg(all(
-    debug_assertions,
-    not(any(feature = "native-tls", feature = "rustls-23"))
-))]
-const MAX_TASK_SIZE: usize = 1024;
 
 pub const COHORT_SIZE: usize = 512;
 
 pub type Sender = mpsc::Sender<Cohort>;
-pub type TaskResult = std::result::Result<(), ServerError>;
+pub type TaskResult = std::result::Result<(), JoinError>;
 
 pub struct Cohort {
     is_dirty: bool,
-    tasks: tokio::task::JoinSet<TaskResult>,
+    tasks: tokio::task::JoinSet<()>,
 }
 
 pub struct JoinSet {
@@ -39,6 +29,8 @@ async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
             coop::consume_budget().await;
         }
     }
+
+    cohort.is_dirty = false;
 }
 
 async fn join_cohort(recycler: Sender, mut cohort: Cohort) {
@@ -98,39 +90,20 @@ impl Cohort {
 
     fn spawn<F>(&mut self, connection: F)
     where
-        F: Future<Output = TaskResult> + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
-        log!(
-            info(cohort = 0),
-            "spawn connection task (size = {}).",
-            std::mem::size_of_val(&connection)
-        );
-
-        // Connections are polled inline. The task dependencies are allocated
-        // on the heap.
-        //
-        // This keeps the cost of joining a connection relatively low while
-        // allowing each component to benefit from CPU cache locality when a
-        // boxed stream or sink is in the hot path of the state machine.
         #[cfg(debug_assertions)]
-        assert!(
-            std::mem::size_of_val(&connection) < MAX_TASK_SIZE,
-            "connection task size limit of {} exceeded.",
-            MAX_TASK_SIZE,
-        );
+        crate::util::once!(|| {
+            let size = std::mem::size_of_val(&connection);
+            println!("connection task size = {}", size);
+        });
 
         self.tasks.spawn(connection);
     }
 
-    async fn join_next(&mut self) -> Option<TaskResult> {
-        match self.tasks.join_next().await {
-            Some(Ok(result)) => Some(result),
-            Some(Err(error)) => Some(Err(ServerError::Join(error))),
-            None => {
-                self.is_dirty = false;
-                None
-            }
-        }
+    #[inline]
+    fn join_next(&mut self) -> impl Future<Output = Option<TaskResult>> {
+        self.tasks.join_next()
     }
 
     fn detach_all(&mut self) {
@@ -157,7 +130,7 @@ impl JoinSet {
 
     pub(super) fn spawn<F>(&mut self, connection: F)
     where
-        F: Future<Output = TaskResult> + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
         // Spawn the task in the current cohort. Dynamic allocations may occur.
         self.current.spawn(connection);
@@ -180,7 +153,7 @@ impl JoinSet {
         self.current.size()
     }
 
-    pub(super) async fn join(mut self) {
+    pub(super) async fn join_all(mut self) {
         join_connections(false, &mut self.current).await;
         while let Ok(mut cohort) = self.next.try_recv() {
             join_connections(false, &mut cohort).await;

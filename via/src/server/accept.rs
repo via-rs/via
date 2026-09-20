@@ -15,33 +15,13 @@ use super::io::IoWithPermit;
 use super::join_set::{self, JoinSet};
 use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
+use crate::server::cancel::AbortToken;
 
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 use super::tcp::TcpStream;
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use super::tls::Alpn;
-
-macro_rules! serve_unless_cancelled {
-    ($connection:ident, $cancellation:ident) => {{
-        let result = tokio::select! {
-            // The connection future is ready.
-            result = &mut $connection => result,
-            // A graceful shutdown signal was sent to the process.
-            _ = $cancellation.wait() => {
-                let mut $connection = Pin::new(&mut $connection);
-                $connection.as_mut().graceful_shutdown();
-                $connection.await
-            }
-        };
-
-        if let Err(ref error) = result {
-            #[cfg(not(debug_assertions))]
-            let _ = error; // Placeholder for tracing...
-            log!(info(service = 0), "{}", &error);
-        }
-    }};
-}
 
 pub(super) async fn accept<App, Tls>(
     acceptor: Tls,
@@ -105,11 +85,7 @@ where
 
         // Either accept the next connection from the TCP listener or receive a
         // shutdown signal.
-        //
-        // The listener is always polled before the shutdown signal.
         tokio::select! {
-            biased; // Poll `listener.accept()` before `cancellation.wait()`.
-
             // TCP stream accepted.
             result = listener.accept() => match result {
                 Ok((stream, _)) => {
@@ -128,13 +104,13 @@ where
                         let future = acceptor.accept(permit, stream);
 
                         let service = service.clone();
-                        let cancellation = cancellation.clone();
+                        let abort_token = cancellation.abort_token();
 
                         #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-                        connections.spawn(serve_tls::<_, Tls>(future, service, cancellation));
+                        connections.spawn(serve_tls::<_, Tls>(future, service, abort_token));
 
                         #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
-                        connections.spawn(serve_tcp(stream, permit, service, cancellation));
+                        connections.spawn(serve_tcp(stream, permit, service, abort_token));
 
                         if connections.size() >= join_set::COHORT_SIZE {
                             let recycler = recycler.clone();
@@ -198,12 +174,12 @@ where
 async fn serve_http_11<App, Io>(
     stream: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-    cancellation: Cancellation,
+    abort_token: AbortToken,
 ) where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let mut connection = http1::Builder::new()
+    let connection = http1::Builder::new()
         .allow_multiple_spaces_in_request_line_delimiters(false)
         .auto_date_header(true)
         .half_close(false)
@@ -218,19 +194,19 @@ async fn serve_http_11<App, Io>(
         .serve_connection(stream, service)
         .with_upgrades();
 
-    serve_unless_cancelled!(connection, cancellation);
+    abort_token.run_until_cancelled(connection).await
 }
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 async fn serve_http_2<App, Io>(
     stream: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-    cancellation: Cancellation,
+    abort_token: AbortToken,
 ) where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let mut connection = http2::Builder::new(TokioExecutor::new())
+    let connection = http2::Builder::new(TokioExecutor::new())
         .adaptive_window(false)
         .auto_date_header(true)
         .max_header_list_size(16384) // 16 KB
@@ -242,14 +218,14 @@ async fn serve_http_2<App, Io>(
         .timer(TokioTimer::new())
         .serve_connection(stream, service);
 
-    serve_unless_cancelled!(connection, cancellation);
+    abort_token.run_until_cancelled(connection).await
 }
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 async fn serve_tls<App, Tls>(
     future: impl Future<Output = Result<IoWithPermit<Tls::Stream>, Tls::Error>> + Send + 'static,
     service: ServiceAdapter<App>,
-    cancellation: Cancellation,
+    abort_token: AbortToken,
 ) where
     App: Send + Sync + 'static,
     Tls: Acceptor,
@@ -259,9 +235,9 @@ async fn serve_tls<App, Tls>(
     match timeout(service.config().tls_handshake_timeout(), future).await {
         Ok(Ok(stream)) => {
             if stream.preferred_alpn() == Alpn::HTTP_2 {
-                serve_http_2(stream, service, cancellation).await;
+                serve_http_2(stream, service, abort_token).await;
             } else {
-                serve_http_11(stream, service, cancellation).await;
+                serve_http_11(stream, service, abort_token).await;
             }
         }
         Ok(Err(error)) => {
@@ -281,10 +257,10 @@ async fn serve_tcp<App>(
     stream: tokio::net::TcpStream,
     permit: tokio::sync::OwnedSemaphorePermit,
     service: ServiceAdapter<App>,
-    cancellation: Cancellation,
+    abort_token: AbortToken,
 ) where
     App: Send + Sync + 'static,
 {
     let stream = IoWithPermit::new(TcpStream::new(stream), permit);
-    serve_http_11(stream, service, cancellation).await;
+    serve_http_11(stream, service, abort_token).await;
 }

@@ -1,24 +1,72 @@
+use hyper::server::conn::*;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::Notify;
+use std::task::{Context, Poll, ready};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::{Notify, futures::OwnedNotified};
+
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+use hyper_util::rt::TokioExecutor;
+
+use super::io::IoWithPermit;
+use crate::app::ServiceAdapter;
+
+pub trait GracefulShutdown {
+    fn graceful_shutdown(self: Pin<&mut Self>);
+}
 
 #[derive(Clone)]
-pub struct Cancellation(Arc<Inner>);
+pub struct Cancellation {
+    token: FlatToken,
+}
 
-struct Inner {
-    cancelled: AtomicBool,
-    notify: Notify,
+pub(super) struct AbortToken {
+    notify: Arc<Notify>,
+}
+
+pub(super) struct RunUntilCancelled<F> {
+    abort: bool,
+    future: F,
+    notified: OwnedNotified,
+}
+
+pub(super) struct RunUntilCancelledProject<'a, F> {
+    abort: &'a mut bool,
+    future: Pin<&'a mut F>,
+    notified: Pin<&'a mut OwnedNotified>,
+}
+
+#[derive(Clone)]
+struct FlatToken {
+    notify: Arc<Notify>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl AbortToken {
+    pub(super) fn run_until_cancelled<F>(self, future: F) -> RunUntilCancelled<F>
+    where
+        F: Future<Output = Result<(), hyper::Error>> + GracefulShutdown + Send + 'static,
+    {
+        let notified = self.notify.notified_owned();
+
+        RunUntilCancelled {
+            abort: false,
+            future,
+            notified,
+        }
+    }
 }
 
 impl Cancellation {
     pub fn new() -> Self {
-        let token = Arc::new(Inner {
-            cancelled: AtomicBool::new(false),
-            notify: Notify::new(),
-        });
+        let token = FlatToken {
+            notify: Arc::new(Notify::new()),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
 
         tokio::spawn({
-            let token = Arc::clone(&token);
+            let token = token.clone();
             let ctrl_c = Box::pin(async {
                 if tokio::signal::ctrl_c().await.is_err() {
                     eprintln!("unable to register the 'ctrl-c' signal.");
@@ -27,20 +75,102 @@ impl Cancellation {
 
             async move {
                 ctrl_c.await;
-
-                let token = &*token;
-
-                token.cancelled.store(true, Ordering::SeqCst);
-                token.notify.notify_waiters();
+                token.cancel();
             }
         });
 
-        Self(token)
+        Self { token }
+    }
+
+    pub fn abort_token(&self) -> AbortToken {
+        AbortToken {
+            notify: Arc::clone(&self.token.notify),
+        }
     }
 
     pub async fn wait(&self) {
-        if !self.0.cancelled.load(Ordering::SeqCst) {
-            self.0.notify.notified().await;
+        let future = self.token.notified();
+
+        if !self.token.cancelled() {
+            future.await;
         }
+    }
+}
+
+impl FlatToken {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        self.notify.notify_waiters();
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+
+    async fn notified(&self) {
+        self.notify.notified().await
+    }
+}
+
+impl<App, Io> GracefulShutdown
+    for http1::UpgradeableConnection<IoWithPermit<Io>, ServiceAdapter<App>>
+where
+    App: Send + Sync + 'static,
+    Io: AsyncRead + AsyncWrite + Unpin,
+{
+    #[inline]
+    fn graceful_shutdown(self: Pin<&mut Self>) {
+        http1::UpgradeableConnection::graceful_shutdown(self);
+    }
+}
+
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+impl<App, Io> GracefulShutdown
+    for http2::Connection<IoWithPermit<Io>, ServiceAdapter<App>, TokioExecutor>
+where
+    App: Send + Sync + 'static,
+    Io: AsyncRead + AsyncWrite + Unpin,
+{
+    #[inline]
+    fn graceful_shutdown(self: Pin<&mut Self>) {
+        http2::Connection::graceful_shutdown(self);
+    }
+}
+
+impl<F: Unpin> RunUntilCancelled<F> {
+    #[inline]
+    fn project(self: Pin<&mut Self>) -> RunUntilCancelledProject<'_, F> {
+        let this = unsafe { self.get_unchecked_mut() };
+        let abort = &mut this.abort;
+        let future = Pin::new(&mut this.future);
+        let notified = unsafe { Pin::new_unchecked(&mut this.notified) };
+
+        RunUntilCancelledProject {
+            abort,
+            future,
+            notified,
+        }
+    }
+}
+
+impl<F> Future for RunUntilCancelled<F>
+where
+    F: Future<Output = Result<(), hyper::Error>> + GracefulShutdown + Send + Unpin + 'static,
+{
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        let mut this = self.project();
+
+        if !*this.abort && this.notified.poll(context).is_ready() {
+            this.future.as_mut().graceful_shutdown();
+            *this.abort = true;
+        }
+
+        if let Err(ref error) = ready!(this.future.poll(context)) {
+            log!(info(service = 0), "{}", error);
+        }
+
+        Poll::Ready(())
     }
 }

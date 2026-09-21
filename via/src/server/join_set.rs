@@ -48,12 +48,21 @@ async fn join_cohort(recycler: Sender, mut cohort: Cohort) {
         cohort.tasks.detach_all();
         cohort.is_dirty = false;
     } else {
+        log!(info(cohort = 1), "{} connections remain", cohort.size());
         cohort.is_dirty = true;
     }
 
-    if recycler.try_send(cohort).is_err() {
+    if let Err(error) = recycler.try_send(cohort) {
+        let mut cohort = error.into_inner();
+
         // Placeholder for tracing...
-        log!(warn(cohort = 1), "load is outpacing connection lifetime");
+        log!(
+            warn(cohort = 1),
+            "consider lowering max_connections to 65535. detaching {} connections.",
+            cohort.size()
+        );
+
+        cohort.tasks.detach_all();
     }
 }
 

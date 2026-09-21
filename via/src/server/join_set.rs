@@ -29,25 +29,26 @@ async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
             coop::consume_budget().await;
         }
     }
-
-    cohort.is_dirty = false;
 }
 
 async fn join_cohort(recycler: Sender, mut cohort: Cohort) {
     log!(info(cohort = 0), "joining {} connections", cohort.size());
 
-    cohort.is_dirty = true;
     let future = timeout(
         DEFAULT_SHUTDOWN_TIMEOUT,
         join_connections(true, &mut cohort),
     );
 
     // Tasks that survive more than one cohort generation are detached.
-    if future.await.is_err() && cohort.is_dirty {
+    if future.await.is_ok() {
+        log!(info(cohort = 1), "cohort drained successfully");
+        cohort.is_dirty = false;
+    } else if cohort.is_dirty {
         log!(info(cohort = 1), "detaching {} connections", cohort.size());
-        cohort.detach_all();
+        cohort.tasks.detach_all();
+        cohort.is_dirty = false;
     } else {
-        log!(info(cohort = 1), "{} connections remain", cohort.size());
+        cohort.is_dirty = true;
     }
 
     if recycler.try_send(cohort).is_err() {
@@ -87,11 +88,6 @@ impl Cohort {
     #[inline]
     fn join_next(&mut self) -> impl Future<Output = Option<TaskResult>> {
         self.tasks.join_next()
-    }
-
-    fn detach_all(&mut self) {
-        self.tasks.detach_all();
-        self.is_dirty = false;
     }
 }
 

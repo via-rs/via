@@ -52,17 +52,8 @@ async fn join_cohort(recycler: Sender, mut cohort: Cohort) {
         cohort.is_dirty = true;
     }
 
-    if let Err(error) = recycler.try_send(cohort) {
-        let mut cohort = error.into_inner();
-
-        // Placeholder for tracing...
-        log!(
-            warn(cohort = 1),
-            "consider lowering max_connections to 65535. detaching {} connections.",
-            cohort.size()
-        );
-
-        cohort.tasks.detach_all();
+    if recycler.try_send(cohort).is_err() {
+        log!(warn(cohort = 1), "cohort cannot be recycled");
     }
 }
 
@@ -102,16 +93,11 @@ impl Cohort {
 
 impl JoinSet {
     pub(super) fn new() -> (Sender, Self) {
-        let (tx, next) = mpsc::channel(128);
+        let (tx, next) = mpsc::channel(16);
         let join_set = Self {
             current: Cohort::new(),
             next,
         };
-
-        // Seed the next cohort to avoid a load-based allocator signal.
-        if tx.try_send(Cohort::new()).is_err() {
-            unreachable!();
-        }
 
         (tx, join_set)
     }

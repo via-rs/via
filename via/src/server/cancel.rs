@@ -25,6 +25,7 @@ pub(super) struct AbortToken {
     notify: Arc<Notify>,
 }
 
+#[must_use = "futures do nothing unless you `.await` or poll them"]
 pub(super) struct RunUntilCancelled<F> {
     abort: bool,
     future: F,

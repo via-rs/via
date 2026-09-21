@@ -14,7 +14,6 @@ use crate::server::io::IoWithPermit;
 
 pub struct RustlsAcceptor(TlsAcceptor);
 
-#[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct RustlsStream {
     stream: Pin<Box<MaybeTlsStream>>,
 }

@@ -10,12 +10,12 @@ use tokio::time::timeout;
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use hyper_util::rt::TokioExecutor;
 
-use super::cancel::Cancellation;
+use super::cancel::CancellationToken;
 use super::io::IoWithPermit;
 use super::join_set::{self, JoinSet};
 use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
-use crate::server::cancel::AbortToken;
+use crate::server::cancel::NotifyAbort;
 
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 use super::tcp::TcpStream;
@@ -55,7 +55,7 @@ where
     let (recycler, mut connections) = JoinSet::new();
 
     // Notify connection tasks when a shutdown signal is received by the process.
-    let cancellation = Cancellation::new();
+    let cancellation_token = CancellationToken::new();
 
     // Provides a "soft" upper-bound on concurrency.
     //
@@ -104,13 +104,13 @@ where
                         let future = acceptor.accept(permit, stream);
 
                         let service = service.clone();
-                        let abort_token = cancellation.abort_token();
+                        let notify_abort = cancellation_token.notify_abort();
 
                         #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-                        connections.spawn(serve_tls::<_, Tls>(future, service, abort_token));
+                        connections.spawn(serve_tls::<_, Tls>(future, service, notify_abort));
 
                         #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
-                        connections.spawn(serve_tcp(stream, permit, service, abort_token));
+                        connections.spawn(serve_tcp(stream, permit, service, notify_abort));
 
                         if connections.size() >= join_set::COHORT_SIZE {
                             let recycler = recycler.clone();
@@ -155,7 +155,7 @@ where
             },
 
             // Shutdown request received.
-            _ = cancellation.wait() => {
+            _ = cancellation_token.wait() => {
                 let graceful_shutdown = timeout(
                     service.config().shutdown_timeout(),
                     connections.join_all(),
@@ -174,7 +174,7 @@ where
 async fn serve_http_11<App, Io>(
     stream: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-    abort_token: AbortToken,
+    notify_abort: NotifyAbort,
 ) where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -194,14 +194,14 @@ async fn serve_http_11<App, Io>(
         .serve_connection(stream, service)
         .with_upgrades();
 
-    abort_token.run_until_cancelled(connection).await
+    notify_abort.run_until_cancelled(connection).await
 }
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 async fn serve_http_2<App, Io>(
     stream: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-    abort_token: AbortToken,
+    notify_abort: NotifyAbort,
 ) where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
@@ -218,14 +218,14 @@ async fn serve_http_2<App, Io>(
         .timer(TokioTimer::new())
         .serve_connection(stream, service);
 
-    abort_token.run_until_cancelled(connection).await
+    notify_abort.run_until_cancelled(connection).await
 }
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 async fn serve_tls<App, Tls>(
     future: impl Future<Output = Result<IoWithPermit<Tls::Stream>, Tls::Error>> + Send + 'static,
     service: ServiceAdapter<App>,
-    abort_token: AbortToken,
+    notify_abort: NotifyAbort,
 ) where
     App: Send + Sync + 'static,
     Tls: Acceptor,
@@ -235,9 +235,9 @@ async fn serve_tls<App, Tls>(
     match timeout(service.config().tls_handshake_timeout(), future).await {
         Ok(Ok(stream)) => {
             if stream.preferred_alpn() == Alpn::HTTP_2 {
-                serve_http_2(stream, service, abort_token).await;
+                serve_http_2(stream, service, notify_abort).await;
             } else {
-                serve_http_11(stream, service, abort_token).await;
+                serve_http_11(stream, service, notify_abort).await;
             }
         }
         Ok(Err(error)) => {
@@ -257,10 +257,10 @@ async fn serve_tcp<App>(
     stream: tokio::net::TcpStream,
     permit: tokio::sync::OwnedSemaphorePermit,
     service: ServiceAdapter<App>,
-    abort_token: AbortToken,
+    notify_abort: NotifyAbort,
 ) where
     App: Send + Sync + 'static,
 {
     let stream = IoWithPermit::new(TcpStream::new(stream), permit);
-    serve_http_11(stream, service, abort_token).await;
+    serve_http_11(stream, service, notify_abort).await;
 }

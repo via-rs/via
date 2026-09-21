@@ -17,11 +17,11 @@ pub trait GracefulShutdown {
 }
 
 #[derive(Clone)]
-pub struct Cancellation {
-    token: FlatToken,
+pub struct CancellationToken {
+    token: NotifyOnce,
 }
 
-pub(super) struct AbortToken {
+pub(super) struct NotifyAbort {
     notify: Arc<Notify>,
 }
 
@@ -39,12 +39,51 @@ pub(super) struct RunUntilCancelledProject<'a, F> {
 }
 
 #[derive(Clone)]
-struct FlatToken {
+struct NotifyOnce {
+    notified: Arc<AtomicBool>,
     notify: Arc<Notify>,
-    cancelled: Arc<AtomicBool>,
 }
 
-impl AbortToken {
+impl CancellationToken {
+    pub fn new() -> Self {
+        let token = NotifyOnce {
+            notified: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        };
+
+        tokio::spawn({
+            let token = token.clone();
+            let ctrl_c = Box::pin(async {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    eprintln!("unable to register the 'ctrl-c' signal.");
+                }
+            });
+
+            async move {
+                ctrl_c.await;
+                token.notify();
+            }
+        });
+
+        Self { token }
+    }
+
+    pub fn notify_abort(&self) -> NotifyAbort {
+        NotifyAbort {
+            notify: Arc::clone(&self.token.notify),
+        }
+    }
+
+    pub async fn wait(&self) {
+        let future = self.token.wait();
+
+        if !self.token.notified() {
+            future.await;
+        }
+    }
+}
+
+impl NotifyAbort {
     pub(super) fn run_until_cancelled<F>(self, future: F) -> RunUntilCancelled<F>
     where
         F: Future<Output = Result<(), hyper::Error>> + GracefulShutdown + Send + 'static,
@@ -59,56 +98,17 @@ impl AbortToken {
     }
 }
 
-impl Cancellation {
-    pub fn new() -> Self {
-        let token = FlatToken {
-            notify: Arc::new(Notify::new()),
-            cancelled: Arc::new(AtomicBool::new(false)),
-        };
-
-        tokio::spawn({
-            let token = token.clone();
-            let ctrl_c = Box::pin(async {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    eprintln!("unable to register the 'ctrl-c' signal.");
-                }
-            });
-
-            async move {
-                ctrl_c.await;
-                token.cancel();
-            }
-        });
-
-        Self { token }
+impl NotifyOnce {
+    fn notified(&self) -> bool {
+        self.notified.load(Ordering::Relaxed)
     }
 
-    pub fn abort_token(&self) -> AbortToken {
-        AbortToken {
-            notify: Arc::clone(&self.token.notify),
-        }
-    }
-
-    pub async fn wait(&self) {
-        let future = self.token.notified();
-
-        if !self.token.cancelled() {
-            future.await;
-        }
-    }
-}
-
-impl FlatToken {
-    fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Relaxed);
+    fn notify(&self) {
+        self.notified.store(true, Ordering::Relaxed);
         self.notify.notify_waiters();
     }
 
-    fn cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
-    }
-
-    async fn notified(&self) {
+    async fn wait(&self) {
         self.notify.notified().await
     }
 }

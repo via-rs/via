@@ -78,7 +78,7 @@ impl CancellationToken {
 }
 
 impl NotifyCancellation {
-    pub(super) fn run_until_cancelled<F>(self, future: F) -> RunUntilCancelled<F>
+    pub(super) fn observe<F>(self, future: F) -> RunUntilCancelled<F>
     where
         F: Future<Output = Result<(), hyper::Error>> + GracefulShutdown + Send + 'static,
     {
@@ -144,7 +144,7 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(_)) => Poll::Ready(()),
             Poll::Ready(Err(error)) => {
-                log!(info(service = 0), "{}", error);
+                log!(error(service = 0), "{}", error);
                 Poll::Ready(())
             }
         }

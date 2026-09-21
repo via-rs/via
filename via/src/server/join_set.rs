@@ -21,8 +21,8 @@ pub struct JoinSet {
 
 async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
     while let Some(result) = cohort.join_next().await {
-        if let Err(ref error) = result {
-            log!(error(cohort = 0), "{}", error);
+        if let Err(error) = result {
+            log!(error(connection = 0), "{}", &error);
         }
 
         if is_cooperative {
@@ -34,45 +34,25 @@ async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
 }
 
 async fn join_cohort(recycler: Sender, mut cohort: Cohort) {
-    log!(info(cohort = 0), "joining {} connections.", cohort.size());
+    log!(info(cohort = 0), "joining {} connections", cohort.size());
 
+    cohort.is_dirty = true;
     let future = timeout(
         DEFAULT_SHUTDOWN_TIMEOUT,
         join_connections(true, &mut cohort),
     );
 
-    if future.await.is_err() {
-        if cohort.is_dirty {
-            // Tasks that survive more than one cohort generation are detached.
-            //
-            // This allows locality to drift by not retaining references to
-            // persistent connections or join handles to persistent connection
-            // tasks.
-            //
-            // Something that we would do for connections that use a web socket
-            // if we were able to tell ahead of time in `accept`.
-            cohort.detach_all();
-        } else {
-            cohort.is_dirty = true;
-        }
+    // Tasks that survive more than one cohort generation are detached.
+    if future.await.is_err() && cohort.is_dirty {
+        log!(info(cohort = 1), "detaching {} connections", cohort.size());
+        cohort.detach_all();
+    } else {
+        log!(info(cohort = 1), "{} connections remain", cohort.size());
     }
 
-    if let Err(error) = recycler.try_send(cohort) {
-        let mut cohort = error.into_inner();
-
+    if recycler.try_send(cohort).is_err() {
         // Placeholder for tracing...
-        log!(error(cohort = 1), "cohort cannot be recycled.");
-
-        // If the cohort contains connections that could not be joined, detach.
-        if cohort.is_dirty {
-            log!(
-                error(cohort = 2),
-                "detaching {} connections.",
-                cohort.size()
-            );
-
-            cohort.detach_all();
-        }
+        log!(warn(cohort = 1), "load is outpacing connection lifetime");
     }
 }
 
@@ -94,8 +74,11 @@ impl Cohort {
     {
         #[cfg(debug_assertions)]
         crate::util::once!(|| {
-            let size = std::mem::size_of_val(&connection);
-            println!("connection task size = {}", size);
+            log!(
+                info(cohort = 0),
+                "connection task size = {}",
+                std::mem::size_of_val(&connection)
+            );
         });
 
         self.tasks.spawn(connection);
@@ -114,7 +97,7 @@ impl Cohort {
 
 impl JoinSet {
     pub(super) fn new() -> (Sender, Self) {
-        let (tx, next) = mpsc::channel(1);
+        let (tx, next) = mpsc::channel(128);
         let join_set = Self {
             current: Cohort::new(),
             next,

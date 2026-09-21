@@ -10,12 +10,11 @@ use tokio::time::timeout;
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 use hyper_util::rt::TokioExecutor;
 
-use super::cancel::CancellationToken;
+use super::cancel::{CancellationToken, NotifyCancellation};
 use super::io::IoWithPermit;
 use super::join_set::{self, JoinSet};
 use super::tls::Acceptor;
 use crate::app::ServiceAdapter;
-use crate::server::cancel::NotifyCancellation;
 
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 use super::tcp::TcpStream;
@@ -103,6 +102,11 @@ where
                         #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
                         let future = acceptor.accept(permit, stream);
 
+                        #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+                        let future = async {
+                            IoWithPermit::new(TcpStream::new(stream), permit)
+                        };
+
                         let service = service.clone();
                         let cancellation = cancellation_token.notify_cancellation();
 
@@ -110,7 +114,7 @@ where
                         connections.spawn(serve_tls::<_, Tls>(future, service, cancellation));
 
                         #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
-                        connections.spawn(serve_tcp(stream, permit, service, cancellation));
+                        connections.spawn(serve_tcp(future, service, cancellation));
 
                         if connections.size() >= join_set::COHORT_SIZE {
                             let recycler = recycler.clone();
@@ -171,15 +175,15 @@ where
     }
 }
 
-async fn serve_http_11<App, Io>(
+fn http_11_conn<App, Io>(
     stream: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-    cancellation: NotifyCancellation,
-) where
+) -> http1::UpgradeableConnection<IoWithPermit<Io>, ServiceAdapter<App>>
+where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let connection = http1::Builder::new()
+    http1::Builder::new()
         .allow_multiple_spaces_in_request_line_delimiters(false)
         .auto_date_header(true)
         .half_close(false)
@@ -192,21 +196,19 @@ async fn serve_http_11<App, Io>(
         .timer(TokioTimer::new())
         .title_case_headers(false)
         .serve_connection(stream, service)
-        .with_upgrades();
-
-    cancellation.run_until_cancelled(connection).await
+        .with_upgrades()
 }
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-async fn serve_http_2<App, Io>(
+fn http_2_conn<App, Io>(
     stream: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-    cancellation: NotifyCancellation,
-) where
+) -> http2::Connection<IoWithPermit<Io>, ServiceAdapter<App>, TokioExecutor>
+where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let connection = http2::Builder::new(TokioExecutor::new())
+    http2::Builder::new(TokioExecutor::new())
         .adaptive_window(false)
         .auto_date_header(true)
         .max_header_list_size(16384) // 16 KB
@@ -216,9 +218,7 @@ async fn serve_http_2<App, Io>(
         .max_concurrent_streams(service.config().http2_max_concurrent_streams())
         .max_send_buf_size(service.config().http2_max_send_buf_size())
         .timer(TokioTimer::new())
-        .serve_connection(stream, service);
-
-    cancellation.run_until_cancelled(connection).await
+        .serve_connection(stream, service)
 }
 
 #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
@@ -235,9 +235,9 @@ async fn serve_tls<App, Tls>(
     match timeout(service.config().tls_handshake_timeout(), future).await {
         Ok(Ok(stream)) => {
             if stream.preferred_alpn() == Alpn::HTTP_2 {
-                serve_http_2(stream, service, cancellation).await;
+                cancellation.observe(http_2_conn(stream, service)).await;
             } else {
-                serve_http_11(stream, service, cancellation).await;
+                cancellation.observe(http_11_conn(stream, service)).await;
             }
         }
         Ok(Err(error)) => {
@@ -254,13 +254,12 @@ async fn serve_tls<App, Tls>(
 
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 async fn serve_tcp<App>(
-    stream: tokio::net::TcpStream,
-    permit: tokio::sync::OwnedSemaphorePermit,
+    future: impl Future<Output = IoWithPermit<TcpStream>> + Send + 'static,
     service: ServiceAdapter<App>,
     cancellation: NotifyCancellation,
 ) where
     App: Send + Sync + 'static,
 {
-    let stream = IoWithPermit::new(TcpStream::new(stream), permit);
-    serve_http_11(stream, service, cancellation).await;
+    let stream = tokio::task::coop::unconstrained(future).await;
+    cancellation.observe(http_11_conn(stream, service)).await;
 }

@@ -1,4 +1,5 @@
 use tokio::sync::mpsc;
+use tokio::task::coop::unconstrained;
 use tokio::task::{self, JoinError, coop};
 use tokio::time::timeout;
 
@@ -19,25 +20,10 @@ pub struct JoinSet {
     next: mpsc::Receiver<Cohort>,
 }
 
-async fn join_connections(is_cooperative: bool, cohort: &mut Cohort) {
-    while let Some(result) = cohort.join_next().await {
-        if let Err(error) = result {
-            log!(error(connection = 0), "{}", &error);
-        }
-
-        if is_cooperative {
-            coop::consume_budget().await;
-        }
-    }
-}
-
 async fn join_cohort(recycler: Sender, mut cohort: Cohort) {
     log!(info(cohort = 0), "joining {} connections", cohort.size());
 
-    let future = timeout(
-        DEFAULT_SHUTDOWN_TIMEOUT,
-        join_connections(true, &mut cohort),
-    );
+    let future = timeout(DEFAULT_SHUTDOWN_TIMEOUT, cohort.join_all());
 
     // Tasks that survive more than one cohort generation are detached.
     if future.await.is_ok() {
@@ -89,6 +75,16 @@ impl Cohort {
     fn join_next(&mut self) -> impl Future<Output = Option<TaskResult>> {
         self.tasks.join_next()
     }
+
+    async fn join_all(&mut self) {
+        while let Some(result) = self.join_next().await {
+            if let Err(error) = result {
+                log!(error(connection = 0), "{}", &error);
+            }
+
+            coop::consume_budget().await;
+        }
+    }
 }
 
 impl JoinSet {
@@ -127,10 +123,13 @@ impl JoinSet {
         self.current.size()
     }
 
-    pub(super) async fn join_all(mut self) {
-        join_connections(false, &mut self.current).await;
-        while let Ok(mut cohort) = self.next.try_recv() {
-            join_connections(false, &mut cohort).await;
+    pub(super) async fn join_all(self) {
+        let mut next = Some(self.current);
+        let mut rx = self.next;
+
+        while let Some(mut cohort) = next {
+            next = rx.try_recv().ok();
+            unconstrained(cohort.join_all()).await;
         }
     }
 }

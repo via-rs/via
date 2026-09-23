@@ -1,11 +1,10 @@
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::coop::unconstrained;
 use tokio::task::{self, JoinError, coop};
 use tokio::time::timeout;
 
-use super::DEFAULT_SHUTDOWN_TIMEOUT;
-
-pub const COHORT_SIZE: usize = 512;
+const JOIN_DEADLINE: Duration = super::MAX_SHUTDOWN_TIMEOUT;
 
 pub type Sender = mpsc::Sender<Cohort>;
 pub type TaskResult = std::result::Result<(), JoinError>;
@@ -23,10 +22,8 @@ pub struct JoinSet {
 async fn join_cohort(recycler: Sender, mut cohort: Cohort) {
     log!(info(cohort = 0), "joining {} connections", cohort.size());
 
-    let future = timeout(DEFAULT_SHUTDOWN_TIMEOUT, cohort.join_all());
-
     // Tasks that survive more than one cohort generation are detached.
-    if future.await.is_ok() {
+    if timeout(JOIN_DEADLINE, cohort.join_all()).await.is_ok() {
         log!(info(cohort = 1), "cohort drained successfully");
         cohort.is_dirty = false;
     } else if cohort.is_dirty {
@@ -88,8 +85,8 @@ impl Cohort {
 }
 
 impl JoinSet {
-    pub(super) fn new() -> (Sender, Self) {
-        let (tx, next) = mpsc::channel(16);
+    pub(super) fn new(capacity: usize) -> (Sender, Self) {
+        let (tx, next) = mpsc::channel(capacity);
         let join_set = Self {
             current: Cohort::new(),
             next,
@@ -108,8 +105,11 @@ impl JoinSet {
 
     pub(super) fn rotate(&mut self, recycler: Sender) {
         // Recycle a cohort or create a new one.
-        // This dissociates load from the allocation in `Cohort::new()`.
-        let mut next = self.next.try_recv().unwrap_or_else(|_| Cohort::new());
+        // This decorrelates load from the allocation in `Cohort::new()`.
+        let mut next = self.next.try_recv().unwrap_or_else(|_| {
+            log!(info(cohort = 0), "allocation required for rotation");
+            Cohort::new()
+        });
 
         // Swap the current cohort with the next cohort.
         std::mem::swap(&mut self.current, &mut next);

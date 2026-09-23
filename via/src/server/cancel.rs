@@ -1,13 +1,11 @@
 use hyper::server::conn::*;
+use hyper_util::rt::TokioExecutor;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Notify, futures::OwnedNotified};
-
-#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
-use hyper_util::rt::TokioExecutor;
 
 use super::io::IoWithPermit;
 use crate::app::ServiceAdapter;
@@ -16,6 +14,17 @@ pub(super) trait GracefulShutdown {
     fn graceful_shutdown(self: Pin<&mut Self>);
 }
 
+/// A flat version of the `CancellationToken` from `tokio-util`.
+//
+// Via's router structure is tree-like and the JoinSet is a linked-list that
+// resembles a tree when rotated.
+//
+// A third tree in the framework machinery starts to meaningfully widen the
+// attack surface by holding multiple references originating from the main
+// thread on which the accept fn receives incoming connections.
+//
+// Websockets are designed to tolerate abnormal closure where a TCP connection
+// that sends request without a response is an error.
 #[derive(Clone)]
 pub(super) struct CancellationToken {
     token: NotifyOnce,
@@ -163,7 +172,6 @@ where
     }
 }
 
-#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
 impl<App, Io> GracefulShutdown
     for http2::Connection<IoWithPermit<Io>, ServiceAdapter<App>, TokioExecutor>
 where

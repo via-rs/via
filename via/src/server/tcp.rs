@@ -1,10 +1,44 @@
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::OwnedSemaphorePermit;
+
+use crate::server::io::IoWithPermit;
+use crate::server::tls::{Acceptor, Alpn, NegotiateAlpn};
+
+pub struct TcpAcceptor {
+    _timeout: Duration,
+}
 
 pub struct TcpStream {
     io: Pin<Box<tokio::net::TcpStream>>,
+}
+
+impl TcpAcceptor {
+    pub(super) fn new(_timeout: Duration) -> Self {
+        Self { _timeout }
+    }
+}
+
+impl Acceptor for TcpAcceptor {
+    type Stream = TcpStream;
+
+    fn accept(
+        &self,
+        stream: tokio::net::TcpStream,
+        permit: OwnedSemaphorePermit,
+    ) -> impl Future<Output = io::Result<IoWithPermit<Self::Stream>>> + Send + 'static {
+        async move { Ok(IoWithPermit::new(TcpStream::new(stream), permit)) }
+    }
+}
+
+impl NegotiateAlpn for TcpStream {
+    #[inline]
+    fn preferred_alpn(&self) -> Alpn {
+        Alpn::HTTP_11
+    }
 }
 
 impl TcpStream {

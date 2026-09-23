@@ -21,8 +21,5 @@ async fn main() -> via::Result<ExitCode> {
     });
 
     // Start listening at http://localhost:8080/ for incoming requests.
-    Server::new(router, ())
-        .max_connections(8192 * 2)
-        .listen(("127.0.0.1", 8080))
-        .await
+    Server::new(router, ()).listen(("127.0.0.1", 8080)).await
 }

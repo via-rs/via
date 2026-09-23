@@ -4,18 +4,27 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::OwnedSemaphorePermit;
+use tokio::time::timeout;
 use tokio_rustls::server::{Accept, TlsAcceptor, TlsStream};
 
 use super::{Acceptor, Alpn, NegotiateAlpn};
 use crate::server::io::IoWithPermit;
 
-pub struct RustlsAcceptor(TlsAcceptor);
+pub struct RustlsAcceptor {
+    acceptor: Arc<AcceptorImpl>,
+}
 
 pub struct RustlsStream {
     stream: Pin<Box<MaybeTlsStream>>,
+}
+
+struct AcceptorImpl {
+    rustls: TlsAcceptor,
+    timeout: Duration,
 }
 
 enum ReadyState {
@@ -29,31 +38,36 @@ struct MaybeTlsStream {
 }
 
 impl RustlsAcceptor {
-    pub fn new(rustls_config: ServerConfig) -> Self {
-        Self(TlsAcceptor::from(Arc::new(rustls_config)))
+    pub fn new(timeout: Duration, rustls_config: ServerConfig) -> Self {
+        Self {
+            acceptor: Arc::new(AcceptorImpl {
+                rustls: TlsAcceptor::from(Arc::new(rustls_config)),
+                timeout,
+            }),
+        }
     }
 }
 
 impl Acceptor for RustlsAcceptor {
-    type Error = io::Error;
     type Stream = RustlsStream;
 
     fn accept(
         &self,
-        permit: OwnedSemaphorePermit,
         stream: TcpStream,
-    ) -> impl Future<Output = Result<IoWithPermit<Self::Stream>, Self::Error>> + Send + 'static
-    {
-        let acceptor = self.0.clone();
+        permit: OwnedSemaphorePermit,
+    ) -> impl Future<Output = io::Result<IoWithPermit<Self::Stream>>> + Send + 'static {
+        let acceptor = Arc::clone(&self.acceptor);
 
         async move {
             let mut stream = Box::pin(MaybeTlsStream {
-                state: ReadyState::Handshake(acceptor.accept(stream)),
+                state: ReadyState::Handshake(acceptor.rustls.accept(stream)),
             });
 
-            stream.as_mut().await?;
-
-            Ok(IoWithPermit::new(RustlsStream { stream }, permit))
+            match timeout(acceptor.timeout, stream.as_mut()).await {
+                Ok(Ok(_)) => Ok(IoWithPermit::new(RustlsStream { stream }, permit)),
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
+            }
         }
     }
 }

@@ -87,6 +87,7 @@ impl<App> ServiceAdapter<App> {
         }
     }
 
+    #[inline]
     pub(crate) fn config(&self) -> &ServerConfig {
         &self.service.config
     }

@@ -33,6 +33,10 @@ use util::session::{self, auth_required, authenticate};
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 use crate::app::MAX_EVENT_SIZE;
 
+const COHORT_SIZE: usize = 512;
+const MAX_CONNECTIONS: usize = 8192;
+const MAX_NUM_COHORTS: usize = MAX_CONNECTIONS.div_ceil(COHORT_SIZE);
+
 type Request = via::Request<Unicorn>;
 type Next = via::Next<Unicorn>;
 
@@ -46,7 +50,9 @@ async fn main() -> via::Result<ExitCode> {
 
     // Start listening at http://localhost:8080 for incoming requests.
     Server::new(router, unicorn)
+        .max_connections(MAX_CONNECTIONS)
         .reserve_file_descriptors(margin)
+        .max_num_cohorts(MAX_NUM_COHORTS)
         .listen(("127.0.0.1", 8080))
         .await
 }

@@ -86,17 +86,16 @@ where
                     // being queued by the OS.
                     if let Ok(permit) = semaphore.clone().try_acquire_owned() {
                         let handshake = protocol.accept(stream, permit);
+                        let rotate_at = service.config().cohort_size();
 
-                        connections.spawn({
-                            let service = service.clone();
-                            let waiter = cancellation_token.notify_cancellation();
+                        connections.spawn(handle_conn(
+                            handshake,
+                            service.clone(),
+                            cancellation_token.notify_cancellation(),
+                        ));
 
-                            handle_conn(handshake, service, waiter)
-                        });
-
-                        if connections.size() >= service.config().cohort_size() {
-                            let recycler = recycler.clone();
-                            connections.rotate(recycler);
+                        if connections.size() >= rotate_at {
+                            connections.rotate(recycler.clone());
                         }
                     }
                 }
@@ -163,11 +162,12 @@ async fn handle_conn<App, Io, F>(
     F: Future<Output = io::Result<IoWithPermit<Io>>> + Send + 'static,
 {
     match handshake.await {
-        Ok(stream) if stream.preferred_alpn() == Alpn::HTTP_2 => {
-            waiter.observe(http_2_conn(stream, service)).await;
-        }
         Ok(stream) => {
-            waiter.observe(http_11_conn(stream, service)).await;
+            if stream.preferred_alpn() == Alpn::HTTP_2 {
+                waiter.observe(http_2_conn(stream, service)).await;
+            } else {
+                waiter.observe(http_11_conn(stream, service)).await;
+            }
         }
         Err(error) => {
             log!(error(tls = 0), "{}", &error);

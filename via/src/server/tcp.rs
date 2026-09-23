@@ -25,6 +25,7 @@ impl TcpAcceptor {
 impl Acceptor for TcpAcceptor {
     type Stream = TcpStream;
 
+    #[allow(clippy::manual_async_fn)]
     fn accept(
         &self,
         stream: tokio::net::TcpStream,

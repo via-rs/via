@@ -191,13 +191,13 @@ where
                         *status = PollStatus::Closing;
                     }
                 }
-                ref mut status @ PollStatus::Proceed => {
+                PollStatus::Proceed => {
                     // Safety: A pin projection.
                     let notify = unsafe { Pin::new_unchecked(&mut this.notify) };
 
                     if notify.poll(context).is_ready() {
                         Pin::new(&mut this.future).graceful_shutdown();
-                        *status = PollStatus::Closing;
+                        this.status = PollStatus::Closing;
                     }
 
                     return this.poll_future(context);

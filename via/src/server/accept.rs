@@ -15,15 +15,15 @@ use super::tls::{Acceptor, Alpn};
 use crate::app::ServiceAdapter;
 use crate::server::tls::NegotiateAlpn;
 
-pub(super) async fn accept<App, Proto>(
+pub(super) async fn accept<App, Protocol>(
     service: ServiceAdapter<App>,
-    protocol: Proto,
+    protocol: Protocol,
     listener: TcpListener,
 ) -> ExitCode
 where
     App: Send + Sync + 'static,
-    Proto: Acceptor,
-    Proto::Stream: Send + Unpin + 'static,
+    Protocol: Acceptor,
+    Protocol::Stream: Send + Unpin + 'static,
 {
     // Connection bookkeeping occurs in `JoinSet`. Connections that survive
     // more than a single cohort generation "detach" (i.e websockets).

@@ -3,43 +3,64 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::time::timeout;
 use tokio_native_tls::{TlsAcceptor, TlsStream};
 
 use super::{Acceptor, Alpn, NegotiateAlpn};
+use crate::server::io::IoWithPermit;
 
-pub struct NativeTlsAcceptor(Arc<TlsAcceptor>);
+pub struct NativeTlsAcceptor {
+    acceptor: Arc<AcceptorImpl>,
+}
 
 pub struct NativeTlsStream {
     stream: TlsStream<TcpStream>,
 }
 
+struct AcceptorImpl {
+    native_tls: TlsAcceptor,
+    timeout: Duration,
+}
+
 impl NativeTlsAcceptor {
-    pub fn new(identity: Identity, alpn_protocols: &[impl AsRef<str>]) -> Self {
-        Self(Arc::new(TlsAcceptor::from(
+    pub fn new(identity: Identity, timeout: Duration, alpn_protocols: &[impl AsRef<str>]) -> Self {
+        let native_tls = TlsAcceptor::from(
             native_tls::TlsAcceptor::builder(identity)
                 .min_protocol_version(Some(Protocol::Tlsv12))
                 .accept_alpn(alpn_protocols)
                 .build()
                 .expect("tls config is invalid or missing"),
-        )))
+        );
+
+        Self {
+            acceptor: Arc::new(AcceptorImpl {
+                native_tls,
+                timeout,
+            }),
+        }
     }
 }
 
 impl Acceptor for NativeTlsAcceptor {
     type Stream = NativeTlsStream;
-    type Error = native_tls::Error;
 
     fn accept(
         &self,
-        io: TcpStream,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send + 'static {
-        let acceptor = Arc::clone(&self.0);
+        stream: TcpStream,
+        permit: OwnedSemaphorePermit,
+    ) -> impl Future<Output = io::Result<IoWithPermit<Self::Stream>>> + Send + 'static {
+        let acceptor = Arc::clone(&self.acceptor);
 
         async move {
-            let stream = acceptor.accept(io).await?;
-            Ok(NativeTlsStream { stream })
+            match timeout(acceptor.timeout, acceptor.native_tls.accept(stream)).await {
+                Ok(Ok(stream)) => Ok(IoWithPermit::new(NativeTlsStream { stream }, permit)),
+                Ok(Err(error)) => Err(io::Error::other(error)),
+                Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
+            }
         }
     }
 }

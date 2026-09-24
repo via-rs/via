@@ -75,7 +75,7 @@ where
         tokio::select! {
             // TCP stream accepted.
             result = listener.accept() => match result {
-                Ok(accepted) => {
+                Ok((stream, _)) => {
                     // Acquire a permit and proceed with serving the connection.
                     //
                     // The maximum number of permits is 1 away from EMFILE on
@@ -87,7 +87,7 @@ where
                     // of the loop but that would result in more connections
                     // being queued by the OS.
                     if let Ok(permit) = semaphore.try_acquire_owned() {
-                        let handshake = protocol.accept(accepted.0, permit);
+                        let handshake = protocol.accept(stream, permit);
                         let new_service = service.clone();
                         let cancellation = cancellation.clone();
 
@@ -97,6 +97,8 @@ where
                             let recycler = recycler.clone();
                             connections.rotate(recycler);
                         }
+                    } else if let Err(error) = stream.set_zero_linger() {
+                        log!(error(accept = 0), "{}", error);
                     }
                 }
                 Err(error) => {

@@ -8,7 +8,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-use super::cancel::{CancellationToken, NotifyCancellation};
+use super::cancel::CancellationToken;
 use super::io::IoWithPermit;
 use super::js::JoinSet;
 use super::tls::{Acceptor, Alpn};
@@ -43,7 +43,7 @@ where
     let (recycler, mut connections) = JoinSet::new(service.config().max_num_cohorts());
 
     // Notify connection tasks when a shutdown signal is received by the process.
-    let cancellation_token = CancellationToken::new();
+    let cancellation = CancellationToken::new();
 
     // Provides a "soft" upper-bound on concurrency.
     //
@@ -68,12 +68,14 @@ where
 
     // Start accepting incoming connections.
     loop {
+        let semaphore = semaphore.clone();
+
         // Either accept the next connection from the TCP listener or receive a
         // shutdown signal.
         tokio::select! {
             // TCP stream accepted.
             result = listener.accept() => match result {
-                Ok((stream, _)) => {
+                Ok(accepted) => {
                     // Acquire a permit and proceed with serving the connection.
                     //
                     // The maximum number of permits is 1 away from EMFILE on
@@ -84,18 +86,16 @@ where
                     // We could instead, await the semaphore permit at the start
                     // of the loop but that would result in more connections
                     // being queued by the OS.
-                    if let Ok(permit) = semaphore.clone().try_acquire_owned() {
-                        let handshake = protocol.accept(stream, permit);
-                        let rotate_at = service.config().cohort_size();
+                    if let Ok(permit) = semaphore.try_acquire_owned() {
+                        let handshake = protocol.accept(accepted.0, permit);
+                        let new_service = service.clone();
+                        let cancellation = cancellation.clone();
 
-                        connections.spawn(handle_conn(
-                            handshake,
-                            service.clone(),
-                            cancellation_token.notify_cancellation(),
-                        ));
+                        connections.spawn(handle_conn(handshake, new_service, cancellation));
 
-                        if connections.size() >= rotate_at {
-                            connections.rotate(recycler.clone());
+                        if connections.size() >= service.config().cohort_size() {
+                            let recycler = recycler.clone();
+                            connections.rotate(recycler);
                         }
                     }
                 }
@@ -136,17 +136,18 @@ where
             },
 
             // Shutdown request received.
-            _ = cancellation_token.wait() => {
-                let graceful_shutdown = timeout(
-                    service.config().shutdown_timeout(),
-                    connections.join_all(),
-                );
-
-                return if graceful_shutdown.await.is_ok() {
-                    ExitCode::SUCCESS
+            did_panic = cancellation.wait() => {
+                if did_panic {
+                    return ExitCode::FAILURE;
                 } else {
-                    ExitCode::FAILURE
-                };
+                    let duration = service.config().shutdown_timeout();
+
+                    if timeout(duration, connections.join_all()).await.is_ok() {
+                        return ExitCode::SUCCESS;
+                    } else {
+                        return ExitCode::FAILURE;
+                    }
+                }
             }
         };
     }
@@ -155,7 +156,7 @@ where
 async fn handle_conn<App, Io, F>(
     handshake: F,
     service: ServiceAdapter<App>,
-    waiter: NotifyCancellation,
+    waiter: CancellationToken,
 ) where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + NegotiateAlpn + Send + Unpin + 'static,

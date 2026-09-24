@@ -122,8 +122,10 @@ impl NotifyOnce {
     }
 
     fn notified_owned(self: Arc<Self>) -> OwnedNotified {
+        let token = self;
+
         // Arc's pointee remains at the same address if the Arc handle moves.
-        let notify: &Notify = &self.notify;
+        let notify: &Notify = &token.notify;
 
         // Safety:
         //
@@ -137,10 +139,7 @@ impl NotifyOnce {
         // A borrowed waiter with a 'static lifetime.
         let waiter = { ManuallyDrop::new(notify.notified()) };
 
-        OwnedNotified {
-            token: self,
-            waiter,
-        }
+        OwnedNotified { token, waiter }
     }
 }
 

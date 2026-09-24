@@ -1,6 +1,6 @@
 [package]
 name = "via-diesel"
-version = "0.1.0-beta.8"
+version = "0.1.0-beta.9"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -18,4 +18,4 @@ diesel-async = "0.9"
 diesel = "2"
 http = "1"
 serde = "1"
-via = { version = "=2.0.0-gm.66", path = "../via" }
+via = { version = "=2.0.0-gm.67", path = "../via" }

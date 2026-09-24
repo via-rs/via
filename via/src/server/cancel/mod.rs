@@ -183,9 +183,9 @@ where
     F: Future<Output = Result<(), hyper::Error>> + Unpin + 'static,
 {
     fn poll_future(&mut self, context: &mut Context) -> Poll<()> {
-        let future = Pin::new(&mut self.future);
-
-        match catch_unwind(AssertUnwindSafe(|| future.poll(context))) {
+        match catch_unwind(AssertUnwindSafe(|| {
+            Pin::new(&mut self.future).poll(context)
+        })) {
             Ok(Poll::Pending) => Poll::Pending,
             Ok(Poll::Ready(Ok(_))) => Poll::Ready(()),
             Ok(Poll::Ready(Err(error))) => {

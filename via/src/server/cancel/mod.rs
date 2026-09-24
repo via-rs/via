@@ -2,12 +2,14 @@ mod state;
 
 use hyper::server::conn::*;
 use hyper_util::rt::TokioExecutor;
+use std::mem::{self, ManuallyDrop};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Notify;
+use tokio::sync::futures::Notified;
 
 use super::io::IoWithPermit;
 use crate::app::ServiceAdapter;
@@ -48,20 +50,20 @@ enum PollStatus {
 }
 
 struct NotifyOnce {
-    notify: Arc<Notify>,
+    notify: Notify,
     state: CancellationState,
 }
 
 struct OwnedNotified {
     token: Arc<NotifyOnce>,
-    waiter: tokio::sync::futures::OwnedNotified,
+    waiter: ManuallyDrop<Notified<'static>>,
 }
 
 impl CancellationToken {
     pub(super) fn new() -> Self {
         let cancellation = Self {
             token: Arc::new(NotifyOnce {
-                notify: Arc::new(Notify::new()),
+                notify: Notify::new(),
                 state: CancellationState::new(),
             }),
         };
@@ -97,13 +99,12 @@ impl CancellationToken {
     where
         F: Future<Output = Result<(), hyper::Error>> + GracefulShutdown + Send + 'static,
     {
-        let token = self.token;
-        let waiter = token.notify.clone().notified_owned();
+        let notify = self.token.notified_owned();
 
         RunUntilCancelled {
             status: PollStatus::Waiting,
             future,
-            notify: OwnedNotified { token, waiter },
+            notify,
         }
     }
 }
@@ -118,6 +119,28 @@ impl NotifyOnce {
     fn notify(&self) {
         self.state.cancel();
         self.notify.notify_waiters();
+    }
+
+    fn notified_owned(self: Arc<Self>) -> OwnedNotified {
+        // Arc's pointee remains at the same address if the Arc handle moves.
+        let notify: &Notify = &self.notify;
+
+        // Safety:
+        //
+        // The `notify` field is retained and immutable for the waiter's
+        // entire lifetime.
+        //
+        // The `waiter` field is dropped before `notify`, and neither field
+        // is exposed for replacement or removal.
+        let notify = unsafe { mem::transmute::<&Notify, &'static Notify>(notify) };
+
+        // A borrowed waiter with a 'static lifetime.
+        let waiter = { ManuallyDrop::new(notify.notified()) };
+
+        OwnedNotified {
+            token: self,
+            waiter,
+        }
     }
 }
 
@@ -135,6 +158,13 @@ impl OwnedNotified {
     }
 }
 
+impl Drop for OwnedNotified {
+    fn drop(&mut self) {
+        // Safety: Manually drop `waiter` to guarantee the correct drop order.
+        unsafe { ManuallyDrop::drop(&mut self.waiter) };
+    }
+}
+
 impl Future for OwnedNotified {
     type Output = ();
 
@@ -143,7 +173,7 @@ impl Future for OwnedNotified {
         //
         // The `notify` field is never replaced or moved out of `self`. Also,
         // `self` is never replaced moved from the `RunUntilCancelled` future.
-        let waiter = unsafe { self.map_unchecked_mut(|this| &mut this.waiter) };
+        let waiter = unsafe { self.map_unchecked_mut(|this| &mut *this.waiter) };
 
         waiter.poll(context)
     }

@@ -1,6 +1,5 @@
 #[cfg(debug_assertions)]
 mod once;
-
 #[macro_use]
 mod sealed;
 mod uri_encoding;

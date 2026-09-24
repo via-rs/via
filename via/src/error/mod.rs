@@ -4,6 +4,7 @@
 mod catch;
 mod macros;
 mod result;
+mod server;
 
 pub mod rescue;
 
@@ -18,6 +19,7 @@ use std::io::{self, Error as IoError};
 
 pub use catch::{Catch, Propagate};
 pub use result::ResultExt;
+pub(crate) use server::ServerError;
 
 use crate::response::Response;
 use crate::router::MethodNotAllowed;

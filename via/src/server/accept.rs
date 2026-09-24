@@ -1,6 +1,5 @@
 use hyper::server::conn::*;
-use hyper_util::rt::{TokioExecutor, TokioTimer};
-use std::io;
+use hyper_util::rt::TokioTimer;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -8,51 +7,56 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-use super::cancel::{CancellationToken, NotifyCancellation};
-use super::io::IoWithPermit;
-use super::js::JoinSet;
-use super::tls::{Acceptor, Alpn};
-use crate::app::ServiceAdapter;
-use crate::server::tls::NegotiateAlpn;
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+use hyper_util::rt::TokioExecutor;
 
-pub(super) async fn accept<App, Proto>(
-    service: ServiceAdapter<App>,
-    protocol: Proto,
+use super::cancel::Cancellation;
+use super::io::IoWithPermit;
+use super::join_set::{self, JoinSet};
+use super::tls::Acceptor;
+use crate::app::ServiceAdapter;
+use crate::error::ServerError;
+
+#[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+use super::tcp::TcpStream;
+
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+use super::tls::Alpn;
+
+macro_rules! serve_unless_cancelled {
+    ($cancellation:ident, $connection:ident) => {
+        tokio::select! {
+            // The connection future is ready.
+            result = &mut $connection => result?,
+            // A graceful shutdown signal was sent to the process.
+            _ = $cancellation.wait() => {
+                let mut $connection = Pin::new(&mut $connection);
+                $connection.as_mut().graceful_shutdown();
+                $connection.await?;
+            }
+        }
+    };
+}
+
+pub(super) async fn accept<App, TlsAcceptor>(
+    acceptor: TlsAcceptor,
     listener: TcpListener,
+    service: ServiceAdapter<App>,
 ) -> ExitCode
 where
     App: Send + Sync + 'static,
-    Proto: Acceptor,
-    Proto::Stream: Send + Unpin + 'static,
+    ServerError: From<TlsAcceptor::Error>,
+    TlsAcceptor: Acceptor,
+    TlsAcceptor::Stream: Send + Unpin + 'static,
 {
-    // Connection bookkeeping occurs in `JoinSet`. Connections that survive
-    // more than a single cohort generation "detach" (i.e websockets).
-    //
-    // The `JoinSet` layout is recycled when possible. However, an entire cohort
-    // can detach if the server is experiencing an abnormally high-volume of
-    // concurrent connections.
-    //
-    // This allows the `JoinSet` to quarantine retired cohorts when necessary and
-    // temporally decouples an allocation from load.
-    //
-    // Users of Via that wish to retain the same pair of join set cohorts for the
-    // entire runtime of their program can determine the amount of time required
-    // to join enough connections to accommodate their users without detaching an
-    // entire cohort and use the metric to configure rate-limiting in the network
-    // tier (API gateway, reverse-proxy, load balancer, etc.).
-    let (recycler, mut connections) = JoinSet::new(service.config().max_num_cohorts());
+    #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+    drop(acceptor);
 
-    // Notify connection tasks when a shutdown signal is received by the process.
-    let cancellation_token = CancellationToken::new();
-
-    // Provides a "soft" upper-bound on concurrency.
+    // Keep one connection slot available for `accept()` itself.
     //
-    // When there no more permits available, the connection is reset. For this
-    // reason, we suggest having at least one other node in your Via cluster.
-    //
-    // Various HTTP-aware load balancers support retrying non-idempotent requests
-    // on RST. If configured properly, the resulting infrastructure intersects
-    // assurance with availability that resembles telcom.
+    // When all permitted connection slots are occupied, accept and immediately
+    // reset the next connection. This prevents kernel backlog queueing and allows
+    // an upstream load balancer to retry another node.
     let semaphore = {
         let max_connections = service.config().max_connections();
 
@@ -61,129 +65,134 @@ where
             return ExitCode::FAILURE;
         }
 
-        // Keep one connection slot available for `accept()` itself.
-        // When all permitted connection slots are occupied, RST.
         Arc::new(Semaphore::new(max_connections - 1))
     };
 
+    // Connections are spawned in a rotating `JoinSet`.
+    let (recycler, mut connections) = JoinSet::new();
+
+    // Notify the accept loop and connection tasks to initiate a graceful
+    // shutdown when a "ctrl-c" notification is sent to the process.
+    let cancellation = wait_for_ctrl_c();
+
     // Start accepting incoming connections.
-    loop {
-        // Either accept the next connection from the TCP listener or receive a
-        // shutdown signal.
-        tokio::select! {
-            // TCP stream accepted.
-            result = listener.accept() => match result {
-                Ok((stream, _)) => {
-                    // Acquire a permit and proceed with serving the connection.
-                    //
-                    // The maximum number of permits is 1 away from EMFILE on
-                    // linux so we acquire the permit afterwards to determine
-                    // if we should shed the load to mitigate the risk of an
-                    // EMFILE entirely.
-                    //
-                    // We could instead, await the semaphore permit at the start
-                    // of the loop but that would result in more connections
-                    // being queued by the OS.
-                    if let Ok(permit) = semaphore.clone().try_acquire_owned() {
-                        let handshake = protocol.accept(stream, permit);
-                        let rotate_at = service.config().cohort_size();
+    let exit_code = loop {
+        let (stream, _) = tokio::select! {
+            // A new TCP stream was accepted from the listener.
+            result = listener.accept() => {
+                match result {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        // Print the error message to stderr in debug builds.
+                        log!(error(accept = 0), "{}", error);
 
-                        connections.spawn(handle_conn(
-                            handshake,
-                            service.clone(),
-                            cancellation_token.notify_cancellation(),
-                        ));
+                        // Break with the corresponding `ExitCode`.
+                        break cfg_select! {
+                            unix => match error.raw_os_error() {
+                                // ENOMEM or ENFILE
+                                //
+                                // Immutably replacing the node is preferred when
+                                // the process exits with any of these codes.
+                                Some(code @ (12 | 23)) => ExitCode::from(code as u8),
 
-                        if connections.size() >= rotate_at {
-                            connections.rotate(recycler.clone());
-                        }
+                                // EMFILE
+                                //
+                                // This should never happen.
+                                Some(24) => ExitCode::from(24),
+
+                                // All other codes are an opaque error.
+                                //
+                                // Follow the instructions provided for non-POSIX
+                                // systems.
+                                _ => ExitCode::FAILURE,
+                            },
+
+                            // Use an opaque exit code for non-POSIX platforms.
+                            //
+                            // Either restart the process or immutably replace
+                            // the node.
+                            //
+                            // When possible, prefer containerized immutable
+                            // deployments.
+                            _ => ExitCode::FAILURE,
+                        };
                     }
                 }
-                Err(error) => {
-                    // Print the error message to stderr in debug builds.
-                    log!(error(accept = 0), "{}", error);
-
-                    return cfg_select! {
-                        unix => match error.raw_os_error() {
-                            // ENOMEM or ENFILE
-                            //
-                            // Immutably replacing the node is preferred when
-                            // the process exits with any of these codes.
-                            Some(code @ (12 | 23)) => ExitCode::from(code as u8),
-
-                            // EMFILE
-                            //
-                            // This should never happen.
-                            Some(24) => ExitCode::from(24),
-
-                            // All other codes are an opaque error.
-                            //
-                            // Follow the instructions provided for non-POSIX
-                            // systems.
-                            _ => ExitCode::FAILURE,
-                        },
-
-                        // Use an opaque exit code for non-POSIX platforms.
-                        //
-                        // Either restart the process or immutably replace
-                        // the node.
-                        //
-                        // When possible, prefer containerized immutable
-                        // deployments.
-                        _ => ExitCode::FAILURE,
-                    };
-                }
-            },
-
-            // Shutdown request received.
-            _ = cancellation_token.wait() => {
-                let graceful_shutdown = timeout(
-                    service.config().shutdown_timeout(),
-                    connections.join_all(),
-                );
-
-                return if graceful_shutdown.await.is_ok() {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::FAILURE
-                };
+            }
+            // A graceful shutdown signal was sent to the process.
+            _ = cancellation.wait() => {
+                break ExitCode::SUCCESS;
             }
         };
+
+        // Acquire a permit and proceed with serving the connection.
+        //
+        // The maximum number of permits is 1 away from EMFILE on linux so we
+        // acquire the permit afterwards to determine if we should shed the
+        // load to mitigate the risk of an EMFILE entirely.
+        //
+        // We could instead, await the semaphore permit at the start of the
+        // loop but that would create a kernel backlog.
+        if let Ok(permit) = semaphore.clone().try_acquire_owned() {
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+            let handshake = acceptor.accept(stream);
+
+            let service = service.clone();
+            let cancellation = cancellation.clone();
+
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+            connections.spawn(async move {
+                let timeout_duration = service.config().tls_handshake_timeout();
+                let stream = timeout(*timeout_duration, handshake).await??;
+                let io = IoWithPermit::new(stream, permit);
+
+                if io.preferred_alpn() == Alpn::HTTP_2 {
+                    serve_http2_connection(io, service, cancellation).await
+                } else {
+                    serve_http1_connection(io, service, cancellation).await
+                }
+            });
+
+            #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+            connections.spawn(async {
+                let io = IoWithPermit::new(TcpStream::new(stream), permit);
+                serve_http1_connection(io, service, cancellation).await
+            });
+        }
+
+        if connections.size() >= join_set::COHORT_SIZE {
+            // A channel used to recycle cohorts in the `JoinSet`.
+            let recycler = recycler.clone();
+
+            connections.rotate(recycler);
+        }
+    };
+
+    if exit_code == ExitCode::SUCCESS {
+        // Join all of the transient connections in the join set before shutdown.
+        let shutdown = timeout(service.config().shutdown_timeout(), connections.join());
+
+        if shutdown.await.is_ok() {
+            exit_code
+        } else {
+            ExitCode::FAILURE
+        }
+    } else {
+        exit_code
     }
 }
 
-async fn handle_conn<App, Io, F>(
-    handshake: F,
+#[inline]
+async fn serve_http1_connection<App, Io>(
+    io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-    waiter: NotifyCancellation,
-) where
-    App: Send + Sync + 'static,
-    Io: AsyncRead + AsyncWrite + NegotiateAlpn + Send + Unpin + 'static,
-    F: Future<Output = io::Result<IoWithPermit<Io>>> + Send + 'static,
-{
-    match handshake.await {
-        Ok(stream) => {
-            if stream.preferred_alpn() == Alpn::HTTP_2 {
-                waiter.observe(http_2_conn(stream, service)).await;
-            } else {
-                waiter.observe(http_11_conn(stream, service)).await;
-            }
-        }
-        Err(error) => {
-            log!(error(tls = 0), "{}", &error);
-        }
-    }
-}
-
-fn http_11_conn<Io, App>(
-    stream: IoWithPermit<Io>,
-    service: ServiceAdapter<App>,
-) -> http1::UpgradeableConnection<IoWithPermit<Io>, ServiceAdapter<App>>
+    cancellation: Cancellation,
+) -> join_set::TaskResult
 where
-    Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,
+    Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    http1::Builder::new()
+    let mut connection = http1::Builder::new()
         .allow_multiple_spaces_in_request_line_delimiters(false)
         .auto_date_header(true)
         .half_close(false)
@@ -195,19 +204,26 @@ where
         .header_read_timeout(Some(service.config().http1_header_read_timeout()))
         .timer(TokioTimer::new())
         .title_case_headers(false)
-        .serve_connection(stream, service)
-        .with_upgrades()
+        .serve_connection(io, service)
+        .with_upgrades();
+
+    serve_unless_cancelled!(cancellation, connection);
+
+    Ok(())
 }
 
-fn http_2_conn<Io, App>(
-    stream: IoWithPermit<Io>,
+#[inline]
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+async fn serve_http2_connection<App, Io>(
+    io: IoWithPermit<Io>,
     service: ServiceAdapter<App>,
-) -> http2::Connection<IoWithPermit<Io>, ServiceAdapter<App>, TokioExecutor>
+    cancellation: Cancellation,
+) -> join_set::TaskResult
 where
-    Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,
+    Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    http2::Builder::new(TokioExecutor::new())
+    let mut connection = http2::Builder::new(TokioExecutor::new())
         .adaptive_window(false)
         .auto_date_header(true)
         .max_header_list_size(16384) // 16 KB
@@ -217,5 +233,23 @@ where
         .max_concurrent_streams(service.config().http2_max_concurrent_streams())
         .max_send_buf_size(service.config().http2_max_send_buf_size())
         .timer(TokioTimer::new())
-        .serve_connection(stream, service)
+        .serve_connection(io, service);
+
+    serve_unless_cancelled!(cancellation, connection);
+
+    Ok(())
+}
+
+fn wait_for_ctrl_c() -> Cancellation {
+    let (cancellation, remote) = Cancellation::new();
+
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_err() {
+            eprintln!("unable to register the 'ctrl-c' signal.");
+        }
+
+        remote.cancel();
+    });
+
+    cancellation
 }

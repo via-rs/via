@@ -25,17 +25,14 @@ pub use rustls::RustlsAcceptor;
 pub use rustls::RustlsStream;
 
 use http::Version;
-use std::io;
+use std::convert::Infallible;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::sync::OwnedSemaphorePermit;
 
-use super::io::IoWithPermit;
+use crate::error::ServerError;
 
-#[derive(Eq, PartialEq)]
-pub(crate) struct Alpn(Version);
-
-pub(crate) trait Acceptor {
+pub trait Acceptor {
+    type Error: Into<ServerError>;
     type Stream: AsyncRead + AsyncWrite + NegotiateAlpn;
 
     #[cfg_attr(
@@ -44,16 +41,44 @@ pub(crate) trait Acceptor {
     )]
     fn accept(
         &self,
-        stream: TcpStream,
-        permit: OwnedSemaphorePermit,
-    ) -> impl Future<Output = io::Result<IoWithPermit<Self::Stream>>> + Send + 'static;
+        io: TcpStream,
+    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send + 'static;
 }
 
-pub(crate) trait NegotiateAlpn {
+#[cfg_attr(
+    not(any(feature = "native-tls", feature = "rustls-23")),
+    allow(dead_code)
+)]
+pub trait NegotiateAlpn {
     fn preferred_alpn(&self) -> Alpn;
 }
 
+#[derive(Eq, PartialEq)]
+pub struct Alpn(Version);
+
+pub struct TcpAcceptor;
+
+impl Acceptor for TcpAcceptor {
+    type Error = Infallible;
+    type Stream = TcpStream;
+
+    #[allow(clippy::manual_async_fn)]
+    fn accept(
+        &self,
+        _: TcpStream,
+    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send + 'static {
+        async { unreachable!() }
+    }
+}
+
+impl NegotiateAlpn for TcpStream {
+    fn preferred_alpn(&self) -> Alpn {
+        unreachable!()
+    }
+}
+
+#[allow(dead_code)]
 impl Alpn {
-    pub(crate) const HTTP_2: Self = Self(Version::HTTP_2);
-    pub(crate) const HTTP_11: Self = Self(Version::HTTP_11);
+    pub const HTTP_2: Self = Self(Version::HTTP_2);
+    pub const HTTP_11: Self = Self(Version::HTTP_11);
 }

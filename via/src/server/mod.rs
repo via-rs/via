@@ -4,11 +4,12 @@
 mod accept;
 mod cancel;
 mod io;
-mod js;
-mod tcp;
+mod join_set;
 mod tls;
 
-use std::num::NonZeroUsize;
+#[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+mod tcp;
+
 use std::process::ExitCode;
 use std::time::Duration;
 use tokio::net::{TcpListener, ToSocketAddrs};
@@ -16,9 +17,9 @@ use tokio::net::{TcpListener, ToSocketAddrs};
 use crate::app::{ServiceAdapter, Via};
 use crate::error::Error;
 use crate::router::Router;
-use crate::server::tcp::TcpAcceptor;
 
 use accept::accept;
+use tls::TcpAcceptor;
 
 #[cfg(feature = "native-tls")]
 use tls::NativeTlsAcceptor;
@@ -46,21 +47,11 @@ pub(crate) type IoStream = io::IoWithPermit<tls::RustlsStream>;
 ))]
 pub(crate) type IoStream = io::IoWithPermit<tcp::TcpStream>;
 
-const DEFAULT_MAX_BUF_SIZE: usize = 16384; // 16 KB
-
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
-const DEFAULT_COHORT_SIZE: CohortSize = CohortSize::new(512);
-const DEFAULT_NUM_COHORTS: usize = DEFAULT_MAX_CONNECTIONS.div_ceil(DEFAULT_COHORT_SIZE.get());
-
-const DEFAULT_MAX_REQUEST_SIZE: usize = 104_857_600; // 100 MB
-const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-const DEFAULT_HTTP2_MAX_SEND_BUF_SIZE: usize = 65536; // 64 KB
-
-const MAX_NUM_COHORTS: usize = 128;
-const MAX_CONNECTIONS: usize = u16::MAX as usize;
-const MAX_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
-
 const RUNTIME_FD_BUDGET: usize = 10;
+
+const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Serve an app over HTTP.
 ///
@@ -69,24 +60,23 @@ pub struct Server<App> {
     config: ServerConfig,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct CohortSize {
-    value: NonZeroUsize,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct ServerConfig {
+#[derive(Debug)]
+pub(crate) struct ServerConfig {
     keep_alive: bool,
-    cohort_size: CohortSize,
     max_buf_size: usize,
-    max_num_cohorts: usize,
     max_connections: usize,
     max_request_size: usize,
     shutdown_timeout: Duration,
     http1_header_read_timeout: Duration,
-    http2_max_concurrent_streams: Option<u32>,
-    http2_max_send_buf_size: usize,
+
+    #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
     tls_handshake_timeout: Duration,
+
+    #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+    http2_max_concurrent_streams: Option<u32>,
+
+    #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+    http2_max_send_buf_size: usize,
 }
 
 impl<App> Server<App>
@@ -116,22 +106,6 @@ where
         self
     }
 
-    /// Sets the maximum size of connections per join set cohort. Connections
-    /// are joined in groups of this size.
-    ///
-    /// Connections reclaim the stack space that they use as soon as the
-    /// connection `Future` is ready.
-    ///
-    /// Long-running tasks like websockets run as detached green threads.
-    /// Concurrency is limited via the lifetime of the I/O resource originally
-    /// acquired by a connection.
-    ///
-    /// **Default:** `512`
-    pub fn cohort_size(mut self, cohort_size: usize) -> Self {
-        self.config.cohort_size = CohortSize::new(cohort_size);
-        self
-    }
-
     /// Sets the maximum size of the HTTP/1.1 connection read buffer.
     ///
     /// This buffer is used when reading and parsing the HTTP request line and
@@ -142,24 +116,6 @@ where
     /// **Default:** `16 KB`
     pub fn max_buf_size(mut self, max_buf_size: usize) -> Self {
         self.config.max_buf_size = max_buf_size;
-        self
-    }
-
-    /// Sets the maximum size number of cohorts to keep in rotation.
-    ///
-    /// Connection cohorts are recycled in order to decorrelate allocating for
-    /// a chort from load.
-    ///
-    /// We encourage our users to allow for at least 1 dynamic allocation to
-    /// occur during saturation. Cohorts need not fully drain during rotation.
-    ///
-    /// This way&ndash;the connection lifetime becomes a source of entropy and
-    /// the extra dynamic allocation is rare, unpredictable way to stabilize a
-    /// tight loop.
-    ///
-    /// **Default:** `15`
-    pub fn max_num_cohorts(mut self, max_num_cohorts: usize) -> Self {
-        self.config.max_num_cohorts = max_num_cohorts;
         self
     }
 
@@ -277,14 +233,14 @@ where
     /// on your application's availability while preventing conflicts between the
     /// process supervisor of an individual node and the replacement and
     /// decommissioning logic of the cluster.
-    pub fn listen(self, addr: impl ToSocketAddrs) -> impl Future<Output = Result<ExitCode, Error>> {
-        let service = ServiceAdapter::new(self.config.clone(), self.app);
-        let protocol = TcpAcceptor::new(self.config.tls_handshake_timeout);
+    pub async fn listen(self, address: impl ToSocketAddrs) -> Result<ExitCode, Error> {
+        let future = accept(
+            TcpAcceptor,
+            TcpListener::bind(address).await?,
+            ServiceAdapter::new(self.config, self.app),
+        );
 
-        async {
-            let listener = TcpListener::bind(addr).await?;
-            Ok(accept(service, protocol, listener).await)
-        }
+        Ok(future.await)
     }
 
     /// Listens for incoming HTTPS connections using `native-tls` for TLS
@@ -306,22 +262,19 @@ where
     ///
     /// See [`Server::listen`] for details on exit code semantics.
     #[cfg(feature = "native-tls")]
-    pub fn listen_native_tls(
+    pub async fn listen_native_tls(
         self,
-        addr: impl ToSocketAddrs,
+        address: impl ToSocketAddrs,
         identity: native_tls::Identity,
         alpn_protocols: &[impl AsRef<str>],
-    ) -> impl Future<Output = Result<ExitCode, Error>> {
-        let service = ServiceAdapter::new(self.config.clone(), self.app);
-        let protocol = {
-            let timeout = self.config.tls_handshake_timeout;
-            NativeTlsAcceptor::new(identity, timeout, alpn_protocols)
-        };
+    ) -> Result<ExitCode, Error> {
+        let future = accept(
+            NativeTlsAcceptor::new(identity, alpn_protocols),
+            TcpListener::bind(address).await?,
+            ServiceAdapter::new(self.config, self.app),
+        );
 
-        async {
-            let listener = TcpListener::bind(addr).await?;
-            Ok(accept(service, protocol, listener).await)
-        }
+        Ok(future.await)
     }
 
     /// Listens for incoming HTTPS connections using `rustls` for TLS
@@ -346,18 +299,18 @@ where
     ///
     /// See [`Server::listen`] for details on exit code semantics.
     #[cfg(feature = "rustls-23")]
-    pub fn listen_rustls_23(
+    pub async fn listen_rustls_23(
         self,
-        addr: impl ToSocketAddrs,
-        config: rustls::ServerConfig,
-    ) -> impl Future<Output = Result<ExitCode, Error>> {
-        let service = ServiceAdapter::new(self.config.clone(), self.app);
-        let protocol = RustlsAcceptor::new(self.config.tls_handshake_timeout, config);
+        address: impl ToSocketAddrs,
+        rustls_config: rustls::ServerConfig,
+    ) -> Result<ExitCode, Error> {
+        let future = accept(
+            RustlsAcceptor::new(rustls_config),
+            TcpListener::bind(address).await?,
+            ServiceAdapter::new(self.config, self.app),
+        );
 
-        async {
-            let listener = TcpListener::bind(addr).await?;
-            Ok(accept(service, protocol, listener).await)
-        }
+        Ok(future.await)
     }
 }
 
@@ -414,61 +367,44 @@ impl<App> Server<App> {
 }
 
 impl ServerConfig {
-    pub(super) fn keep_alive(&self) -> bool {
+    pub fn keep_alive(&self) -> bool {
         self.keep_alive
     }
 
-    pub(super) fn max_buf_size(&self) -> usize {
+    pub fn max_buf_size(&self) -> usize {
         self.max_buf_size
     }
 
-    #[inline]
-    pub(super) fn cohort_size(&self) -> usize {
-        self.cohort_size.get()
+    pub fn max_connections(&self) -> usize {
+        self.max_connections
     }
 
-    pub(super) fn max_num_cohorts(&self) -> usize {
-        self.max_num_cohorts.min(MAX_NUM_COHORTS)
-    }
-
-    pub(super) fn max_connections(&self) -> usize {
-        self.max_connections.min(MAX_CONNECTIONS)
-    }
-
-    pub(super) fn max_request_size(&self) -> usize {
+    pub fn max_request_size(&self) -> usize {
         self.max_request_size
     }
 
-    pub(super) fn shutdown_timeout(&self) -> Duration {
+    pub fn shutdown_timeout(&self) -> Duration {
         self.shutdown_timeout.min(MAX_SHUTDOWN_TIMEOUT)
     }
 
-    pub(super) fn http1_header_read_timeout(&self) -> Duration {
+    pub fn http1_header_read_timeout(&self) -> Duration {
         self.http1_header_read_timeout.min(MAX_SHUTDOWN_TIMEOUT)
-    }
-
-    pub(super) fn http2_max_concurrent_streams(&self) -> Option<u32> {
-        self.http2_max_concurrent_streams
-    }
-
-    pub(super) fn http2_max_send_buf_size(&self) -> usize {
-        self.http2_max_send_buf_size
     }
 }
 
-impl CohortSize {
-    const fn new(value: usize) -> Self {
-        assert!(value > 0, "cohort_size must be > 0");
+#[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+impl ServerConfig {
+    pub fn http2_max_concurrent_streams(&self) -> Option<u32> {
+        self.http2_max_concurrent_streams
+    }
 
-        // Safety: The assertion above proves `value > 0`.
-        let value = unsafe { NonZeroUsize::new_unchecked(value) };
-
-        Self { value }
+    pub fn http2_max_send_buf_size(&self) -> usize {
+        self.http2_max_send_buf_size
     }
 
     #[inline]
-    const fn get(&self) -> usize {
-        self.value.get()
+    pub fn tls_handshake_timeout(&self) -> &Duration {
+        &self.tls_handshake_timeout
     }
 }
 
@@ -476,16 +412,20 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             keep_alive: true,
-            max_buf_size: DEFAULT_MAX_BUF_SIZE,
-            cohort_size: DEFAULT_COHORT_SIZE,
-            max_num_cohorts: DEFAULT_NUM_COHORTS,
+            max_buf_size: 16384, // 16 KB
             max_connections: DEFAULT_MAX_CONNECTIONS - RUNTIME_FD_BUDGET,
-            max_request_size: DEFAULT_MAX_REQUEST_SIZE,
+            max_request_size: 104_857_600, // 100 MB
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             http1_header_read_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
-            tls_handshake_timeout: Duration::from_secs(5),
+
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
             http2_max_concurrent_streams: Some(64),
-            http2_max_send_buf_size: DEFAULT_HTTP2_MAX_SEND_BUF_SIZE,
+
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+            http2_max_send_buf_size: 65536, // 64 KB
+
+            #[cfg(any(feature = "native-tls", feature = "rustls-23"))]
+            tls_handshake_timeout: Duration::from_secs(5),
         }
     }
 }

@@ -185,7 +185,7 @@ where
                 Ok(output) => output,
                 Err(_) => {
                     this.handle.notify_panic();
-                    Poll::Pending
+                    Poll::Ready(())
                 }
             }
         }

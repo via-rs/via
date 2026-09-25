@@ -13,6 +13,7 @@ use super::io::IoWithPermit;
 use super::js::JoinSet;
 use super::tls::{Acceptor, Alpn};
 use crate::app::ServiceAdapter;
+use crate::server::cancel::PanicHandle;
 use crate::server::tls::NegotiateAlpn;
 
 pub(super) async fn accept<App, Protocol>(
@@ -68,7 +69,7 @@ where
 
     // Start accepting incoming connections.
     loop {
-        let semaphore = semaphore.clone();
+        let waiter = cancellation.clone();
 
         // Either accept the next connection from the TCP listener or receive a
         // shutdown signal.
@@ -86,16 +87,18 @@ where
                     // We could instead, await the semaphore permit at the start
                     // of the loop but that would result in more connections
                     // being queued by the OS.
-                    if let Ok(permit) = semaphore.try_acquire_owned() {
+                    if let Ok(permit) = semaphore.clone().try_acquire_owned() {
                         let handshake = protocol.accept(stream, permit);
                         let new_service = service.clone();
-                        let cancellation = cancellation.clone();
+                        let panic_handle = cancellation.clone().into_panic_handle();
 
-                        connections.spawn(handle_conn(handshake, new_service, cancellation));
+                        connections.spawn(supervise_conn(
+                            handle_conn(handshake, new_service, waiter),
+                            panic_handle,
+                        ));
 
                         if connections.size() >= service.config().cohort_size() {
-                            let recycler = recycler.clone();
-                            connections.rotate(recycler);
+                            connections.rotate(recycler.clone());
                         }
                     } else if let Err(error) = stream.set_zero_linger() {
                         log!(error(accept = 0), "{}", error);
@@ -138,7 +141,7 @@ where
             },
 
             // Shutdown request received.
-            did_panic = cancellation.wait() => {
+            did_panic = waiter.wait() => {
                 if did_panic {
                     return ExitCode::FAILURE;
                 } else {
@@ -153,6 +156,42 @@ where
             }
         };
     }
+}
+
+fn supervise_conn<F>(future: F, handle: PanicHandle) -> impl Future<Output = ()> + Send + 'static
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    struct CatchUnwind<F> {
+        future: F,
+        handle: PanicHandle,
+    }
+
+    impl<F> Future for CatchUnwind<F>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+            let this = unsafe { self.get_unchecked_mut() };
+            let future = unsafe { Pin::new_unchecked(&mut this.future) };
+
+            match catch_unwind(AssertUnwindSafe(|| future.poll(context))) {
+                Ok(output) => output,
+                Err(_) => {
+                    this.handle.notify_panic();
+                    Poll::Ready(())
+                }
+            }
+        }
+    }
+
+    CatchUnwind { future, handle }
 }
 
 async fn handle_conn<App, Io, F>(

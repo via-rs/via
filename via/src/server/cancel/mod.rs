@@ -1,9 +1,9 @@
 mod state;
 
+use delegate::delegate;
 use hyper::server::conn::*;
 use hyper_util::rt::TokioExecutor;
 use std::mem::{self, ManuallyDrop};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -32,6 +32,10 @@ pub(super) trait GracefulShutdown {
 // that sends request without a response is an error.
 #[derive(Clone)]
 pub(super) struct CancellationToken {
+    token: Arc<NotifyOnce>,
+}
+
+pub(super) struct PanicHandle {
     token: Arc<NotifyOnce>,
 }
 
@@ -86,13 +90,17 @@ impl CancellationToken {
     }
 
     pub(super) async fn wait(&self) -> bool {
-        let waiter = self.token.notify.notified();
+        let waiter = self.token().notified();
 
-        if self.token.state.is_waiting() {
+        if self.token().is_waiting() {
             waiter.await;
         }
 
-        self.token.state.did_panic()
+        self.token().did_panic()
+    }
+
+    pub(super) fn into_panic_handle(self) -> PanicHandle {
+        PanicHandle { token: self.token }
     }
 
     pub(super) fn observe<F>(self, future: F) -> RunUntilCancelled<F>
@@ -113,12 +121,27 @@ impl CancellationToken {
     fn notify(&self) {
         self.token.notify();
     }
+
+    fn token(&self) -> &NotifyOnce {
+        &self.token
+    }
 }
 
 impl NotifyOnce {
+    delegate! {
+        to self.state {
+            fn did_panic(&self) -> bool;
+            fn is_waiting(&self) -> bool;
+        }
+    }
+
     fn notify(&self) {
         self.state.cancel();
         self.notify.notify_waiters();
+    }
+
+    fn notified(&self) -> impl Future {
+        self.notify.notified()
     }
 
     fn notified_owned(self: Arc<Self>) -> OwnedNotified {
@@ -144,16 +167,8 @@ impl NotifyOnce {
 }
 
 impl OwnedNotified {
-    #[inline]
-    fn is_waiting(&self) -> bool {
-        self.token.state.is_waiting()
-    }
-
-    fn panic(&self) {
-        let token = self.token.as_ref();
-
-        token.state.panic();
-        token.notify.notify_waiters();
+    fn token(&self) -> &NotifyOnce {
+        &self.token
     }
 }
 
@@ -178,25 +193,13 @@ impl Future for OwnedNotified {
     }
 }
 
-impl<F> RunUntilCancelled<F>
-where
-    F: Future<Output = Result<(), hyper::Error>> + Unpin + 'static,
-{
-    fn poll_future(&mut self, context: &mut Context) -> Poll<()> {
-        match catch_unwind(AssertUnwindSafe(|| {
-            Pin::new(&mut self.future).poll(context)
-        })) {
-            Ok(Poll::Pending) => Poll::Pending,
-            Ok(Poll::Ready(Ok(_))) => Poll::Ready(()),
-            Ok(Poll::Ready(Err(error))) => {
-                log!(error(service = 0), "{}", error);
-                Poll::Ready(())
-            }
-            Err(_) => {
-                self.notify.panic();
-                Poll::Ready(())
-            }
-        }
+impl PanicHandle {
+    #[inline(always)]
+    pub(super) fn notify_panic(&self) {
+        let token = &*self.token;
+
+        token.state.panic();
+        token.notify.notify_waiters();
     }
 }
 
@@ -207,13 +210,21 @@ where
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        #[cfg_attr(not(debug_assertions), allow(unused_variables))]
+        fn on_ready(result: Result<(), hyper::Error>) {
+            #[cfg(debug_assertions)]
+            if let Err(error) = result {
+                log!(error(service = 0), "{}", error);
+            }
+        }
+
         // Safety: Futures are never replaced or moved out of `self`.
         let this = unsafe { self.get_unchecked_mut() };
 
         loop {
             match this.status {
                 ref mut status @ PollStatus::Waiting => {
-                    if this.notify.is_waiting() {
+                    if this.notify.token().is_waiting() {
                         *status = PollStatus::Proceed;
                     } else {
                         Pin::new(&mut this.future).graceful_shutdown();
@@ -229,10 +240,10 @@ where
                         this.status = PollStatus::Closing;
                     }
 
-                    return this.poll_future(context);
+                    return Pin::new(&mut this.future).poll(context).map(on_ready);
                 }
                 PollStatus::Closing => {
-                    return this.poll_future(context);
+                    return Pin::new(&mut this.future).poll(context).map(on_ready);
                 }
             }
         }

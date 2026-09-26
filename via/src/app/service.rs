@@ -152,7 +152,7 @@ impl<App> Clone for ServiceAdapter<App> {
 }
 
 #[cfg(feature = "test-util")]
-impl<App> Service<http::Request<Incoming>> for ServiceAdapter<App> {
+impl<App> Service<http::Request<Incoming>> for ConnectionService<App> {
     type Error = Infallible;
     type Future = FutureResponse;
     type Response = http::Response<ResponseBody>;

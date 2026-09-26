@@ -166,12 +166,10 @@ where
 {
     match handshake.await {
         Ok(stream) => {
-            let service = &service;
-
             if stream.preferred_alpn() == Alpn::HTTP_2 {
-                waiter.observe(http_2_conn(stream, service)).await;
+                waiter.observe(http_2_conn(stream, &service)).await;
             } else {
-                waiter.observe(http_11_conn(stream, service)).await;
+                waiter.observe(http_11_conn(stream, &service)).await;
             }
 
             waiter.supervise_upgrade(service.supervisor());

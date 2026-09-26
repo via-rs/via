@@ -1,7 +1,7 @@
 mod service;
 mod shared;
 
-pub(crate) use service::ServiceAdapter;
+pub(crate) use service::{ConnectionService, ServiceAdapter};
 pub use shared::Shared;
 
 use crate::router::Router;

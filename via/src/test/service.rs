@@ -61,6 +61,7 @@ impl<App> Client<App> for TestService<App> {
         &mut self,
         mut request: http::Request<TestBody>,
     ) -> impl Future<Output = crate::Result> {
+        let service = self.service.clone().into_service();
         let headers = self.headers.clone();
         let cookies = self.cookies.iter().fold(String::new(), |value, cookie| {
             value + "; " + &cookie.to_string()
@@ -80,7 +81,7 @@ impl<App> Client<App> for TestService<App> {
             }
 
             // Call the test service adapter to get a response future.
-            let response = Response::from(self.service.call(request).await?);
+            let response = Response::from(service.call(request).await?);
 
             // Add the cookies in the "set-cookie" headers to the client cookies.
             for value in response.headers().get_all(SET_COOKIE) {

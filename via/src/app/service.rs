@@ -1,3 +1,4 @@
+use delegate::delegate;
 use hyper::body::Incoming;
 use hyper::service::Service;
 use std::collections::VecDeque;
@@ -6,17 +7,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::Via;
+use super::{Shared, Via};
 use crate::request::{Envelope, Request, RequestBody};
 use crate::response::ResponseBody;
-use crate::server::ServerConfig;
-use crate::{BoxFuture, Next, err};
+use crate::server::{ServerConfig, UpgradeSupervisor};
+use crate::{BoxFuture, Next, Router, err};
 
 #[cfg(feature = "test-util")]
 use crate::test::TestBody;
-
-#[cfg(feature = "test-util")]
-use super::Shared;
 
 const MAX_URI_PATH_LEN: usize = 8092; // 8 KB
 
@@ -26,12 +24,21 @@ type ServiceRequest = http::Request<TestBody>;
 #[cfg(not(feature = "test-util"))]
 type ServiceRequest = http::Request<Incoming>;
 
-pub struct FutureResponse {
+pub(crate) struct FutureResponse {
     future: BoxFuture,
 }
 
-pub struct ServiceAdapter<App> {
+pub(crate) struct ServiceAdapter<App> {
     service: Arc<ViaService<App>>,
+}
+
+pub(crate) struct ConnectionService<App> {
+    service: UpgradeableService<App>,
+}
+
+struct UpgradeableService<App> {
+    service: Arc<ViaService<App>>,
+    upgrade: UpgradeSupervisor,
 }
 
 struct ViaService<App> {
@@ -49,6 +56,29 @@ impl FutureResponse {
         });
 
         Self { future }
+    }
+}
+
+impl<App> ConnectionService<App> {
+    #[inline]
+    pub(crate) fn config(&self) -> &ServerConfig {
+        self.service.config()
+    }
+
+    #[inline(always)]
+    pub(crate) fn supervisor(&self) -> &UpgradeSupervisor {
+        &self.service.upgrade
+    }
+}
+
+impl<App> Service<ServiceRequest> for ConnectionService<App> {
+    type Error = Infallible;
+    type Future = FutureResponse;
+    type Response = http::Response<ResponseBody>;
+
+    #[inline(never)]
+    fn call(&self, request: ServiceRequest) -> Self::Future {
+        self.service.call(request)
     }
 }
 
@@ -89,12 +119,26 @@ impl<App> ServiceAdapter<App> {
 
     #[inline]
     pub(crate) fn config(&self) -> &ServerConfig {
-        &self.service.config
+        self.service().config()
+    }
+
+    #[inline]
+    pub(crate) fn into_service(self) -> ConnectionService<App> {
+        ConnectionService {
+            service: UpgradeableService {
+                service: self.service,
+                upgrade: UpgradeSupervisor::new(),
+            },
+        }
     }
 
     #[cfg(feature = "test-util")]
     pub(crate) fn app(&self) -> &Shared<App> {
         self.service.via.app()
+    }
+
+    fn service(&self) -> &ViaService<App> {
+        &self.service
     }
 }
 
@@ -107,19 +151,8 @@ impl<App> Clone for ServiceAdapter<App> {
     }
 }
 
-impl<App> Service<ServiceRequest> for ServiceAdapter<App> {
-    type Error = Infallible;
-    type Future = FutureResponse;
-    type Response = http::Response<ResponseBody>;
-
-    #[inline(never)]
-    fn call(&self, request: ServiceRequest) -> Self::Future {
-        self.service.call(request)
-    }
-}
-
 #[cfg(feature = "test-util")]
-impl<App> Service<http::Request<Incoming>> for ServiceAdapter<App> {
+impl<App> Service<http::Request<Incoming>> for ConnectionService<App> {
     type Error = Infallible;
     type Future = FutureResponse;
     type Response = http::Response<ResponseBody>;
@@ -129,7 +162,23 @@ impl<App> Service<http::Request<Incoming>> for ServiceAdapter<App> {
     }
 }
 
-impl<App> Service<ServiceRequest> for ViaService<App> {
+impl<App> UpgradeableService<App> {
+    delegate! {
+        to self.service() {
+            fn config(&self) -> &ServerConfig;
+        }
+    }
+
+    fn service(&self) -> &ViaService<App> {
+        &self.service
+    }
+
+    fn supervisor(&self) -> &UpgradeSupervisor {
+        &self.upgrade
+    }
+}
+
+impl<App> Service<ServiceRequest> for UpgradeableService<App> {
     type Error = Infallible;
     type Future = FutureResponse;
     type Response = http::Response<ResponseBody>;
@@ -140,48 +189,73 @@ impl<App> Service<ServiceRequest> for ViaService<App> {
 
         // Immediately respond with 414 if the path length exceeds the maximum.
         if path.len() > MAX_URI_PATH_LEN {
-            return FutureResponse::max_path_len_exceeded();
+            FutureResponse::max_path_len_exceeded()
+        } else {
+            let service = self.service();
+
+            // The middleware stack.
+            let mut deque = VecDeque::with_capacity(18);
+
+            // Preallocate enough space to store at least 6 path params.
+            let mut params = Vec::with_capacity(6);
+
+            // Populate the middleware stack with the resolved routes.
+            for (route, param) in service.router().traverse(path) {
+                // Extend deque with the route's middleware stack.
+                deque.extend(route);
+
+                // Extend params with the route's optional dynamic parameter.
+                params.extend(param);
+            }
+
+            // Wrap the incoming request with our custom Request struct.
+            let mut request = {
+                let (parts, body) = request.into_parts();
+
+                // Params are stored adjacent to the request head. This allows us
+                // to discard the body and drop the associated channel if the
+                // request is upgraded and moved into a WebSocket task.
+                let envelope = Envelope::new(parts, params);
+
+                // Preallocate enough space to store 9 frames of request body data.
+                let frames = Vec::with_capacity(9);
+
+                // Limit request body sizes to the configured maximum.
+                let body = RequestBody::new(service.config().max_request_size(), body, frames);
+
+                // Request owns a copy of Shared<App>.
+                let app = service.app().clone();
+
+                Request::new(envelope, body, app)
+            };
+
+            // Insert a supervisor into the request extensions.
+            //
+            // It will *eventually* contain a panic handle to shutdown the
+            // server if a panic occurs in a websocket reactor task.
+            let supervisor = self.supervisor().clone();
+
+            if request.extensions_mut().insert(supervisor).is_none() {
+                // Placeholder for tracing...
+            }
+
+            // Call the middleware stack to get a response.
+            FutureResponse {
+                future: Next::new(deque).call(request),
+            }
         }
+    }
+}
 
-        // The middleware stack.
-        let mut deque = VecDeque::with_capacity(18);
-
-        // Preallocate enough space to store at least 6 path params.
-        let mut params = Vec::with_capacity(6);
-
-        // Preallocate enough space to store 9 frames of request body data.
-        let frames = Vec::with_capacity(9);
-
-        // Populate the middleware stack with the resolved routes.
-        for (route, param) in self.via.router().traverse(path) {
-            // Extend deque with the route's middleware stack.
-            deque.extend(route);
-
-            // Extend params with the route's optional dynamic parameter.
-            params.extend(param);
+impl<App> ViaService<App> {
+    delegate! {
+        to self.via {
+            fn app(&self) -> &Shared<App>;
+            fn router(&self) -> &Router<App>;
         }
+    }
 
-        // Request owns a copy of Shared<App>.
-        let app = self.via.app().clone();
-
-        // Wrap the incoming request with our custom Request struct.
-        let request = {
-            let (parts, body) = request.into_parts();
-
-            // Params are stored adjacent to the request head. This allows us
-            // to discard the body and drop the associated channel if the
-            // request is upgraded and moved into a WebSocket task.
-            let envelope = Envelope::new(parts, params);
-
-            // Limit request body sizes to the configured maximum.
-            let body = RequestBody::new(self.config.max_request_size(), body, frames);
-
-            Request::new(envelope, body, app)
-        };
-
-        // Call the middleware stack to get a response.
-        FutureResponse {
-            future: Next::new(deque).call(request),
-        }
+    fn config(&self) -> &ServerConfig {
+        &self.config
     }
 }

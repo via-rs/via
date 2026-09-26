@@ -1,18 +1,20 @@
+mod panic;
 mod state;
+
+pub(crate) use panic::{UpgradeSupervisor, catch_unwind};
 
 use delegate::delegate;
 use hyper::server::conn::*;
 use hyper_util::rt::TokioExecutor;
-use std::mem::{self, ManuallyDrop};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Notify;
-use tokio::sync::futures::Notified;
 
 use super::io::IoWithPermit;
-use crate::app::ServiceAdapter;
+use crate::app::ConnectionService;
+
 use state::CancellationState;
 
 pub(super) trait GracefulShutdown {
@@ -32,21 +34,17 @@ pub(super) trait GracefulShutdown {
 // that sends request without a response is an error.
 #[derive(Clone)]
 pub(super) struct CancellationToken {
-    token: Arc<NotifyOnce>,
-}
-
-pub(super) struct PanicHandle {
-    token: Arc<NotifyOnce>,
+    value: Arc<NotifyOnce>,
 }
 
 #[must_use = "futures do nothing unless you `.await` or poll them"]
-pub(super) struct RunUntilCancelled<F> {
-    status: PollStatus,
+pub(super) struct RunUntilCancelled<'a, F> {
     future: F,
-    notify: OwnedNotified,
+    status: PollStatus,
+    notify: Notified<'a>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum PollStatus {
     Waiting,
     Proceed,
@@ -58,15 +56,23 @@ struct NotifyOnce {
     state: CancellationState,
 }
 
-struct OwnedNotified {
-    token: Arc<NotifyOnce>,
-    waiter: ManuallyDrop<Notified<'static>>,
+struct Notified<'a> {
+    waiter: tokio::sync::futures::Notified<'a>,
+    state: &'a CancellationState,
+}
+
+#[cfg_attr(not(debug_assertions), allow(unused_variables))]
+fn on_ready(result: Result<(), hyper::Error>) {
+    #[cfg(debug_assertions)]
+    if let Err(error) = result {
+        log!(error(service = 0), "{}", error);
+    }
 }
 
 impl CancellationToken {
     pub(super) fn new() -> Self {
         let cancellation = Self {
-            token: Arc::new(NotifyOnce {
+            value: Arc::new(NotifyOnce {
                 notify: Notify::new(),
                 state: CancellationState::new(),
             }),
@@ -99,31 +105,29 @@ impl CancellationToken {
         self.token().did_panic()
     }
 
-    pub(super) fn into_panic_handle(self) -> PanicHandle {
-        PanicHandle { token: self.token }
+    pub(super) fn observe<F>(&self, future: F) -> RunUntilCancelled<'_, F>
+    where
+        F: Future<Output = Result<(), hyper::Error>> + GracefulShutdown + Send,
+    {
+        RunUntilCancelled {
+            future,
+            status: PollStatus::Waiting,
+            notify: self.value.notified(),
+        }
     }
 
-    pub(super) fn observe<F>(self, future: F) -> RunUntilCancelled<F>
-    where
-        F: Future<Output = Result<(), hyper::Error>> + GracefulShutdown + Send + 'static,
-    {
-        let notify = self.token.notified_owned();
-
-        RunUntilCancelled {
-            status: PollStatus::Waiting,
-            future,
-            notify,
-        }
+    pub(super) fn supervise_upgrade(self, upgrade: &UpgradeSupervisor) {
+        upgrade.set(self.into())
     }
 }
 
 impl CancellationToken {
     fn notify(&self) {
-        self.token.notify();
+        self.value.notify();
     }
 
     fn token(&self) -> &NotifyOnce {
-        &self.token
+        &self.value
     }
 }
 
@@ -140,46 +144,15 @@ impl NotifyOnce {
         self.notify.notify_waiters();
     }
 
-    fn notified(&self) -> impl Future {
-        self.notify.notified()
-    }
-
-    fn notified_owned(self: Arc<Self>) -> OwnedNotified {
-        let token = self;
-
-        // Arc's pointee remains at the same address if the Arc handle moves.
-        let notify: &Notify = &token.notify;
-
-        // Safety:
-        //
-        // The `notify` field is retained and immutable for the waiter's
-        // entire lifetime.
-        //
-        // The `waiter` field is dropped before `notify`, and neither field
-        // is exposed for replacement or removal.
-        let notify = unsafe { mem::transmute::<&Notify, &'static Notify>(notify) };
-
-        // A borrowed waiter with a 'static lifetime.
-        let waiter = { ManuallyDrop::new(notify.notified()) };
-
-        OwnedNotified { token, waiter }
+    fn notified(&self) -> Notified<'_> {
+        Notified {
+            state: &self.state,
+            waiter: self.notify.notified(),
+        }
     }
 }
 
-impl OwnedNotified {
-    fn token(&self) -> &NotifyOnce {
-        &self.token
-    }
-}
-
-impl Drop for OwnedNotified {
-    fn drop(&mut self) {
-        // Safety: Manually drop `waiter` to guarantee the correct drop order.
-        unsafe { ManuallyDrop::drop(&mut self.waiter) };
-    }
-}
-
-impl Future for OwnedNotified {
+impl Future for Notified<'_> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
@@ -187,63 +160,51 @@ impl Future for OwnedNotified {
         //
         // The `notify` field is never replaced or moved out of `self`. Also,
         // `self` is never replaced moved from the `RunUntilCancelled` future.
-        let waiter = unsafe { self.map_unchecked_mut(|this| &mut *this.waiter) };
+        let waiter = unsafe { self.map_unchecked_mut(|this| &mut this.waiter) };
 
         waiter.poll(context)
     }
 }
 
-impl PanicHandle {
-    #[inline(always)]
-    pub(super) fn notify_panic(&self) {
-        let token = &*self.token;
-
-        token.state.panic();
-        token.notify.notify_waiters();
+impl<'a, F> RunUntilCancelled<'a, F> {
+    delegate! {
+        to self.notify.state {
+            fn is_waiting(&self) -> bool;
+        }
     }
 }
 
-impl<F> Future for RunUntilCancelled<F>
+impl<F> Future for RunUntilCancelled<'_, F>
 where
-    F: Future<Output = Result<(), hyper::Error>> + GracefulShutdown + Send + Unpin + 'static,
+    F: Future<Output = Result<(), hyper::Error>> + GracefulShutdown + Send + Unpin,
 {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
-        #[cfg_attr(not(debug_assertions), allow(unused_variables))]
-        fn on_ready(result: Result<(), hyper::Error>) {
-            #[cfg(debug_assertions)]
-            if let Err(error) = result {
-                log!(error(service = 0), "{}", error);
-            }
-        }
-
         // Safety: Futures are never replaced or moved out of `self`.
         let this = unsafe { self.get_unchecked_mut() };
 
         loop {
             match this.status {
-                ref mut status @ PollStatus::Waiting => {
-                    if this.notify.token().is_waiting() {
-                        *status = PollStatus::Proceed;
-                    } else {
-                        Pin::new(&mut this.future).graceful_shutdown();
-                        *status = PollStatus::Closing;
-                    }
+                PollStatus::Waiting if this.is_waiting() => {
+                    this.status = PollStatus::Proceed;
                 }
-                PollStatus::Proceed => {
+                PollStatus::Closing => {
+                    let future = Pin::new(&mut this.future);
+                    return future.poll(context).map(on_ready);
+                }
+                status => {
+                    let future = Pin::new(&mut this.future);
+
                     // Safety: A pin projection.
                     let notify = unsafe { Pin::new_unchecked(&mut this.notify) };
 
-                    if notify.poll(context).is_ready() {
-                        Pin::new(&mut this.future).graceful_shutdown();
+                    if notify.poll(context).is_ready() || status == PollStatus::Waiting {
+                        future.graceful_shutdown();
                         this.status = PollStatus::Closing;
+                    } else {
+                        return future.poll(context).map(on_ready);
                     }
-
-                    return Pin::new(&mut this.future).poll(context).map(on_ready);
-                }
-                PollStatus::Closing => {
-                    return Pin::new(&mut this.future).poll(context).map(on_ready);
                 }
             }
         }
@@ -251,7 +212,7 @@ where
 }
 
 impl<App, Io> GracefulShutdown
-    for http1::UpgradeableConnection<IoWithPermit<Io>, ServiceAdapter<App>>
+    for http1::UpgradeableConnection<IoWithPermit<Io>, &'_ ConnectionService<App>>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Unpin,
@@ -263,7 +224,7 @@ where
 }
 
 impl<App, Io> GracefulShutdown
-    for http2::Connection<IoWithPermit<Io>, ServiceAdapter<App>, TokioExecutor>
+    for http2::Connection<IoWithPermit<Io>, &'_ ConnectionService<App>, TokioExecutor>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Unpin,

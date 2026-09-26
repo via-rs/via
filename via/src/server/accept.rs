@@ -8,13 +8,11 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-use super::cancel::CancellationToken;
+use super::cancel::{CancellationToken, catch_unwind};
 use super::io::IoWithPermit;
 use super::js::JoinSet;
-use super::tls::{Acceptor, Alpn};
-use crate::app::ServiceAdapter;
-use crate::server::cancel::PanicHandle;
-use crate::server::tls::NegotiateAlpn;
+use super::tls::{Acceptor, Alpn, NegotiateAlpn};
+use crate::app::{ConnectionService, ServiceAdapter};
 
 pub(super) async fn accept<App, Protocol>(
     service: ServiceAdapter<App>,
@@ -89,12 +87,10 @@ where
                     // being queued by the OS.
                     if let Ok(permit) = semaphore.clone().try_acquire_owned() {
                         let handshake = protocol.accept(stream, permit);
-                        let new_service = service.clone();
-                        let panic_handle = cancellation.clone().into_panic_handle();
 
-                        connections.spawn(supervise_conn(
-                            handle_conn(handshake, new_service, waiter),
-                            panic_handle,
+                        connections.spawn(catch_unwind(
+                            handle_conn(handshake, service.clone(), waiter),
+                            cancellation.clone().into(),
                         ));
 
                         if connections.size() >= service.config().cohort_size() {
@@ -145,9 +141,12 @@ where
                 if did_panic {
                     return ExitCode::FAILURE;
                 } else {
-                    let duration = service.config().shutdown_timeout();
+                    let future = timeout(
+                        service.config().shutdown_timeout(),
+                        connections.join_all(),
+                    );
 
-                    if timeout(duration, connections.join_all()).await.is_ok() {
+                    if future.await.is_ok() {
                         return ExitCode::SUCCESS;
                     } else {
                         return ExitCode::FAILURE;
@@ -158,45 +157,9 @@ where
     }
 }
 
-fn supervise_conn<F>(future: F, handle: PanicHandle) -> impl Future<Output = ()> + Send + 'static
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-
-    struct CatchUnwind<F> {
-        future: F,
-        handle: PanicHandle,
-    }
-
-    impl<F> Future for CatchUnwind<F>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        type Output = ();
-
-        fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-            let this = unsafe { self.get_unchecked_mut() };
-            let future = unsafe { Pin::new_unchecked(&mut this.future) };
-
-            match catch_unwind(AssertUnwindSafe(|| future.poll(context))) {
-                Ok(output) => output,
-                Err(_) => {
-                    this.handle.notify_panic();
-                    Poll::Ready(())
-                }
-            }
-        }
-    }
-
-    CatchUnwind { future, handle }
-}
-
 async fn handle_conn<App, Io, F>(
     handshake: F,
-    service: ServiceAdapter<App>,
+    adapter: ServiceAdapter<App>,
     waiter: CancellationToken,
 ) where
     App: Send + Sync + 'static,
@@ -205,22 +168,26 @@ async fn handle_conn<App, Io, F>(
 {
     match handshake.await {
         Ok(stream) => {
+            let service = adapter.into_service();
+
             if stream.preferred_alpn() == Alpn::HTTP_2 {
-                waiter.observe(http_2_conn(stream, service)).await;
+                waiter.observe(http_2_conn(stream, &service)).await;
             } else {
-                waiter.observe(http_11_conn(stream, service)).await;
+                waiter.observe(http_11_conn(stream, &service)).await;
             }
+
+            waiter.supervise_upgrade(service.supervisor());
         }
         Err(error) => {
-            log!(error(tls = 0), "{}", &error);
+            log!(error(tls = 0), "{}", error);
         }
     }
 }
 
 fn http_11_conn<Io, App>(
     stream: IoWithPermit<Io>,
-    service: ServiceAdapter<App>,
-) -> http1::UpgradeableConnection<IoWithPermit<Io>, ServiceAdapter<App>>
+    service: &ConnectionService<App>,
+) -> http1::UpgradeableConnection<IoWithPermit<Io>, &'_ ConnectionService<App>>
 where
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,
@@ -243,8 +210,8 @@ where
 
 fn http_2_conn<Io, App>(
     stream: IoWithPermit<Io>,
-    service: ServiceAdapter<App>,
-) -> http2::Connection<IoWithPermit<Io>, ServiceAdapter<App>, TokioExecutor>
+    service: &ConnectionService<App>,
+) -> http2::Connection<IoWithPermit<Io>, &'_ ConnectionService<App>, TokioExecutor>
 where
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,

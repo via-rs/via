@@ -184,10 +184,10 @@ async fn handle_conn<App, Io, F>(
     }
 }
 
-fn http_11_conn<'a, Io, App>(
+fn http_11_conn<Io, App>(
     stream: IoWithPermit<Io>,
-    service: &'a ConnectionService<App>,
-) -> http1::UpgradeableConnection<IoWithPermit<Io>, &'a ConnectionService<App>>
+    service: &ConnectionService<App>,
+) -> http1::UpgradeableConnection<IoWithPermit<Io>, &'_ ConnectionService<App>>
 where
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,
@@ -208,10 +208,10 @@ where
         .with_upgrades()
 }
 
-fn http_2_conn<'a, Io, App>(
+fn http_2_conn<Io, App>(
     stream: IoWithPermit<Io>,
-    service: &'a ConnectionService<App>,
-) -> http2::Connection<IoWithPermit<Io>, &'a ConnectionService<App>, TokioExecutor>
+    service: &ConnectionService<App>,
+) -> http2::Connection<IoWithPermit<Io>, &'_ ConnectionService<App>, TokioExecutor>
 where
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,

@@ -8,7 +8,10 @@ mod js;
 mod tcp;
 mod tls;
 
-pub(crate) use cancel::{UpgradeSupervisor, catch_unwind};
+pub(crate) use cancel::UpgradeSupervisor;
+
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+pub(crate) use cancel::catch_unwind;
 
 use std::num::NonZeroUsize;
 use std::process::ExitCode;

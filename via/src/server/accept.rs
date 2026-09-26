@@ -12,7 +12,7 @@ use super::cancel::{CancellationToken, catch_unwind};
 use super::io::IoWithPermit;
 use super::js::JoinSet;
 use super::tls::{Acceptor, Alpn, NegotiateAlpn};
-use crate::app::{NewService, ServiceAdapter};
+use crate::app::{ConnectionService, ServiceAdapter};
 
 pub(super) async fn accept<App, Protocol>(
     service: ServiceAdapter<App>,
@@ -87,10 +87,9 @@ where
                     // being queued by the OS.
                     if let Ok(permit) = semaphore.clone().try_acquire_owned() {
                         let handshake = protocol.accept(stream, permit);
-                        let new_service = service.new_service();
 
                         connections.spawn(catch_unwind(
-                            handle_conn(handshake, new_service, waiter),
+                            handle_conn(handshake, service.clone(), waiter),
                             cancellation.clone().into(),
                         ));
 
@@ -158,14 +157,19 @@ where
     }
 }
 
-async fn handle_conn<App, Io, F>(handshake: F, service: NewService<App>, waiter: CancellationToken)
-where
+async fn handle_conn<App, Io, F>(
+    handshake: F,
+    adapter: ServiceAdapter<App>,
+    waiter: CancellationToken,
+) where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + NegotiateAlpn + Send + Unpin + 'static,
     F: Future<Output = io::Result<IoWithPermit<Io>>> + Send + 'static,
 {
     match handshake.await {
         Ok(stream) => {
+            let service = adapter.into_service();
+
             if stream.preferred_alpn() == Alpn::HTTP_2 {
                 waiter.observe(http_2_conn(stream, &service)).await;
             } else {
@@ -182,8 +186,8 @@ where
 
 fn http_11_conn<'a, Io, App>(
     stream: IoWithPermit<Io>,
-    service: &'a NewService<App>,
-) -> http1::UpgradeableConnection<IoWithPermit<Io>, &'a NewService<App>>
+    service: &'a ConnectionService<App>,
+) -> http1::UpgradeableConnection<IoWithPermit<Io>, &'a ConnectionService<App>>
 where
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,
@@ -206,8 +210,8 @@ where
 
 fn http_2_conn<'a, Io, App>(
     stream: IoWithPermit<Io>,
-    service: &'a NewService<App>,
-) -> http2::Connection<IoWithPermit<Io>, &'a NewService<App>, TokioExecutor>
+    service: &'a ConnectionService<App>,
+) -> http2::Connection<IoWithPermit<Io>, &'a ConnectionService<App>, TokioExecutor>
 where
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,

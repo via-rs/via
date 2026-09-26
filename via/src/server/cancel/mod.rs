@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Notify;
 
 use super::io::IoWithPermit;
-use crate::app::NewService;
+use crate::app::ConnectionService;
 
 use state::CancellationState;
 
@@ -212,7 +212,7 @@ where
 }
 
 impl<App, Io> GracefulShutdown
-    for http1::UpgradeableConnection<IoWithPermit<Io>, &'_ NewService<App>>
+    for http1::UpgradeableConnection<IoWithPermit<Io>, &'_ ConnectionService<App>>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Unpin,
@@ -224,7 +224,7 @@ where
 }
 
 impl<App, Io> GracefulShutdown
-    for http2::Connection<IoWithPermit<Io>, &'_ NewService<App>, TokioExecutor>
+    for http2::Connection<IoWithPermit<Io>, &'_ ConnectionService<App>, TokioExecutor>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Unpin,

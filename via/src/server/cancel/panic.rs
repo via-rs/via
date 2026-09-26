@@ -77,6 +77,7 @@ impl UpgradeSupervisor {
         }
     }
 
+    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
     pub(crate) fn to_panic_handle(&self) -> Option<PanicHandle> {
         if let Ok(mut guard) = self.handle.try_lock() {
             guard.take()

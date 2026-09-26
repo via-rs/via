@@ -16,7 +16,6 @@ use tokio_websockets::WebSocketStream;
 
 use super::error::rescue;
 use super::{Channel, Message, Request};
-use crate::Error;
 use crate::server::IoStream;
 use crate::ws::upgrade::Listener;
 
@@ -76,7 +75,7 @@ where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send + 'static,
 {
-    type Output = Result<(), Error>;
+    type Output = ();
 
     fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -310,7 +309,7 @@ where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send + 'static,
 {
-    type Output = Result<(), Error>;
+    type Output = ();
 
     fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
         // Safety:
@@ -334,10 +333,10 @@ where
 
         match poll {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
+            Poll::Ready(Ok(_)) => Poll::Ready(()),
             Poll::Ready(Err(ControlFlow::Break(error))) => {
                 log!(error(ws = 0), "{}", &error);
-                Poll::Ready(Err(error))
+                Poll::Ready(())
             }
             Poll::Ready(Err(ControlFlow::Continue(error))) => {
                 #[cfg(not(debug_assertions))]

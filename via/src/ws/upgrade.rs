@@ -18,7 +18,7 @@ use super::util::{Base64EncodedDigest, sha1};
 use super::{Channel, Request};
 use crate::guard::bytes::{CaseSensitive, Contains, Tag, Trim};
 use crate::guard::{Header, Predicate, header};
-use crate::server::IoStream;
+use crate::server::{IoStream, UpgradeSupervisor, catch_unwind};
 use crate::ws::error::UpgradeError;
 use crate::{BoxFuture, Error, Middleware, Next, Response, ResultExt};
 
@@ -94,22 +94,26 @@ async fn handshake<App>(
 
 async fn reactor<T, App, Await>(mut request: Request<App>, listener: Arc<Listener<T>>)
 where
-    T: Fn(Channel, Request<App>) -> Await + Send,
+    T: Fn(Channel, Request<App>) -> Await + Send + 'static,
+    Listener<T>: Send + Sync,
+    App: Send + Sync + 'static,
     Await: Future<Output = super::Result> + Send + 'static,
 {
-    let err = match unconstrained(handshake(&mut request, &listener.config)).await {
-        Err(error) => Some(error),
+    match unconstrained(handshake(&mut request, &listener.config)).await {
         Ok(stream) => {
-            let task = RunTask::new(listener, request, stream);
-            task.await.err()
+            if let Some(handle) = request
+                .extensions()
+                .get::<UpgradeSupervisor>()
+                .and_then(|supervisor| supervisor.to_panic_handle())
+            {
+                catch_unwind(RunTask::new(listener, request, stream), handle).await;
+            } else {
+                log!(error(ws = 0), "{}", &UpgradeError::Other);
+            }
         }
-    };
-
-    if let Some(error) = err.as_ref() {
-        #[cfg(not(debug_assertions))]
-        let _ = error;
-
-        log!(error(ws = 0), "{}", error);
+        Err(error) => {
+            log!(error(ws = 0), "{}", &error);
+        }
     }
 }
 

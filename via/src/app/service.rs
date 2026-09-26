@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 use super::Via;
 use crate::request::{Envelope, Request, RequestBody};
 use crate::response::ResponseBody;
-use crate::server::ServerConfig;
+use crate::server::{ServerConfig, UpgradeSupervisor};
 use crate::{BoxFuture, Next, err};
 
 #[cfg(feature = "test-util")]
@@ -32,6 +32,11 @@ pub struct FutureResponse {
 
 pub struct ServiceAdapter<App> {
     service: Arc<ViaService<App>>,
+}
+
+pub(crate) struct NewService<App> {
+    service: Arc<ViaService<App>>,
+    upgrade: UpgradeSupervisor,
 }
 
 struct ViaService<App> {
@@ -89,12 +94,23 @@ impl<App> ServiceAdapter<App> {
 
     #[inline]
     pub(crate) fn config(&self) -> &ServerConfig {
-        &self.service.config
+        self.service().config()
+    }
+
+    pub(crate) fn new_service(&self) -> NewService<App> {
+        NewService {
+            service: self.service.clone(),
+            upgrade: UpgradeSupervisor::new(),
+        }
     }
 
     #[cfg(feature = "test-util")]
     pub(crate) fn app(&self) -> &Shared<App> {
         self.service.via.app()
+    }
+
+    fn service(&self) -> &ViaService<App> {
+        &self.service
     }
 }
 
@@ -107,13 +123,35 @@ impl<App> Clone for ServiceAdapter<App> {
     }
 }
 
-impl<App> Service<ServiceRequest> for ServiceAdapter<App> {
+impl<App> NewService<App> {
+    #[inline]
+    pub(crate) fn config(&self) -> &ServerConfig {
+        self.service().config()
+    }
+
+    #[inline]
+    pub(crate) fn supervisor(&self) -> &UpgradeSupervisor {
+        &self.upgrade
+    }
+
+    fn service(&self) -> &ViaService<App> {
+        &self.service
+    }
+}
+
+impl<App> Service<ServiceRequest> for NewService<App> {
     type Error = Infallible;
     type Future = FutureResponse;
     type Response = http::Response<ResponseBody>;
 
     #[inline(never)]
-    fn call(&self, request: ServiceRequest) -> Self::Future {
+    fn call(&self, mut request: ServiceRequest) -> Self::Future {
+        let upgrade = self.upgrade.clone();
+
+        if request.extensions_mut().insert(upgrade).is_none() {
+            // Placeholder for tracing...
+        }
+
         self.service.call(request)
     }
 }
@@ -126,6 +164,12 @@ impl<App> Service<http::Request<Incoming>> for ServiceAdapter<App> {
 
     fn call(&self, request: http::Request<Incoming>) -> Self::Future {
         self.service.call(request.map(TestBody::new))
+    }
+}
+
+impl<App> ViaService<App> {
+    fn config(&self) -> &ServerConfig {
+        &self.config
     }
 }
 

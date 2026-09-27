@@ -204,11 +204,6 @@ impl Error {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn is_restart(&self) -> bool {
-        matches!(&self.source, ErrorSource::Restart)
-    }
-
     #[inline]
     fn as_source(&self) -> ErrorSourceRef<'_> {
         match &self.source {

@@ -181,7 +181,7 @@ impl Future for Facade {
         let mut i = 0;
 
         loop {
-            match &mut this.state {
+            match this.state {
                 IoState::Receive => {
                     log!(info(ws = i), "state = receive");
                     indent!(i);
@@ -225,7 +225,7 @@ impl Future for Facade {
                     }
                 }
 
-                state @ IoState::Send(_) => {
+                ref mut state @ IoState::Send(_) => {
                     let IoState::Send(item) = mem::replace(state, IoState::Flush) else {
                         // We are in an invalid state. End the session.
                         return Poll::Ready(Ok(()));
@@ -281,7 +281,6 @@ where
     T: Fn(Channel, Request<App>) -> Await + Send,
     Await: Future<Output = super::Result> + Send + 'static,
 {
-    #[inline(always)]
     fn reconnect(&mut self) -> &mut Facade {
         let (ours, theirs) = Channel::new();
         let request = self.request.clone();
@@ -320,38 +319,27 @@ where
         // Self is also PhantomPinned, preventing self from moving.
         let this = unsafe { self.get_unchecked_mut() };
 
-        let mut poll = match this.facade.as_mut() {
+        let poll = match this.facade.as_mut() {
             Some(facade) => Pin::new(facade).poll(context),
             None => Pin::new(this.reconnect()).poll(context),
         };
 
-        if let Poll::Ready(Err(ControlFlow::Continue(ref error))) = poll
-            && error.is_restart()
-        {
-            poll = Pin::new(this.reconnect()).poll(context);
-        }
-
         match poll {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(_)) => Poll::Ready(()),
-            Poll::Ready(Err(ControlFlow::Break(error))) => {
-                log!(error(ws = 0), "{}", &error);
-                Poll::Ready(())
-            }
-            Poll::Ready(Err(ControlFlow::Continue(error))) => {
-                #[cfg(not(debug_assertions))]
-                let _ = error;
-
-                log!(warn(ws = 1), "{}", &error);
-
-                // The facade field is no longer valid.
+            Poll::Ready(Err(ref op)) => {
                 this.facade = None;
-
-                // Register an artificial wake.
-                context.waker().wake_by_ref();
-
-                // Return pending.
-                Poll::Pending
+                match *op {
+                    ControlFlow::Continue(ref error) => {
+                        log!(error(ws = 0), "{}", error);
+                        context.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                    ControlFlow::Break(ref error) => {
+                        log!(error(ws = 0), "{}", error);
+                        Poll::Ready(())
+                    }
+                }
             }
         }
     }

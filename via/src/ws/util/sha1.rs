@@ -17,7 +17,7 @@ pub fn sha1(input: &[u8]) -> Result<Base64EncodedDigest, UpgradeError> {
     let mut buf = [0; 28];
 
     match base64.decode_slice(input, &mut buf) {
-        Ok(len) if len == 16 => {
+        Ok(16) => {
             hasher.update(input);
             hasher.update(WS_ACCEPT_GUID);
             if base64.encode_slice(hasher.finish(), &mut buf).is_ok() {

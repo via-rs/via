@@ -16,15 +16,21 @@ pub fn sha1(input: &[u8]) -> Result<Base64EncodedDigest, UpgradeError> {
     let mut hasher = Context::new(&SHA1_FOR_LEGACY_USE_ONLY);
     let mut buf = [0; 28];
 
-    if input.is_ascii() {
-        hasher.update(input);
-        hasher.update(WS_ACCEPT_GUID);
-        if base64.encode_slice(hasher.finish(), &mut buf).is_ok() {
-            return Ok(Base64EncodedDigest(buf));
+    match base64.decode_slice(input, &mut buf) {
+        Ok(16) => {
+            hasher.update(input);
+            hasher.update(WS_ACCEPT_GUID);
+            if base64.encode_slice(hasher.finish(), &mut buf).is_ok() {
+                Ok(Base64EncodedDigest(buf))
+            } else {
+                Err(UpgradeError::Other)
+            }
+        }
+        Ok(_) | Err(_) => {
+            // The key is not valid.
+            Err(UpgradeError::SecWebsocketKey)
         }
     }
-
-    Err(UpgradeError::Other)
 }
 
 impl Base64EncodedDigest {

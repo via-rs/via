@@ -25,6 +25,13 @@ pub fn already_closed() -> Catch {
     ControlFlow::Break(Error::from_source(Box::new(WebSocketError::AlreadyClosed)))
 }
 
+pub fn into_break(catch: Catch) -> Catch {
+    match catch {
+        op @ ControlFlow::Break(_) => op,
+        ControlFlow::Continue(error) => ControlFlow::Break(error),
+    }
+}
+
 pub fn is_restart(catch: &Catch) -> bool {
     match *catch {
         ControlFlow::Break(_) => false,

@@ -143,7 +143,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                 PeerEvent::Lag(len) => {
                     log!(info(chat = 1), "lag notification; len = {}", len);
                     channel.send(serialize_lag_notification(len)?).await?;
-                    return ws::restart().await;
+                    return ws::restart();
                 }
 
                 // The user logged out.

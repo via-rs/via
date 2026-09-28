@@ -14,10 +14,9 @@ use tokio_tungstenite::WebSocketStream;
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
-use super::error::rescue;
-use super::{Channel, Message, Request};
+use super::error::{is_restart, rescue};
+use super::{Channel, Message, Request, upgrade::Listener};
 use crate::server::IoStream;
-use crate::ws::upgrade::Listener;
 
 pub struct RunTask<T, App> {
     run: Pin<Box<Run<T, App>>>,
@@ -171,28 +170,47 @@ macro_rules! indent {
     };
 }
 
+macro_rules! recover_or_restart {
+    ($result:expr, $restart:ident $(, $map_err:expr)?) => {
+        match $result {
+            Ok(output) => output,
+            Err(op) => {
+                $(let op = $map_err(op);)?
+
+                if op.is_continue()
+                    && let Some(op) = $restart
+                {
+                    return Poll::Ready(Err(op));
+                } else {
+                    return Poll::Ready(Err(op));
+                }
+            }
+        }
+    };
+}
+
 impl Future for Facade {
     type Output = super::Result;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let this = self.get_mut();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let mut restart = None;
 
         #[cfg(debug_assertions)]
         let mut i = 0;
 
         loop {
-            match this.state {
+            match self.state {
                 IoState::Receive => {
                     log!(info(ws = i), "state = receive");
                     indent!(i);
 
                     // Confirm that the listener can receive the next message.
-                    if this.rendezvous.has_capacity()? {
+                    if self.rendezvous.has_capacity()? {
                         // Attempt to pull the next message out of the stream.
-                        match this.stream.as_pin_mut().poll_next(cx) {
+                        match self.stream.as_pin_mut().poll_next(cx) {
                             Poll::Ready(Some(Ok(next))) => {
                                 // If send fails, the channel is disconnected.
-                                this.rendezvous.try_send(next)?;
+                                self.rendezvous.try_send(next)?;
                                 log!(info(ws = i), "inbound message forwarded to listener.");
                             }
                             Poll::Ready(Some(Err(error))) => {
@@ -210,18 +228,32 @@ impl Future for Facade {
                     }
 
                     // The listener will probably register an additional wake.
-                    if this.listener.as_mut().poll(cx)?.is_ready() {
-                        // The listener future is ready and did not error.
-                        return Poll::Ready(Ok(()));
+                    match self.listener.as_mut().poll(cx) {
+                        Poll::Pending => {
+                            // noop
+                        }
+                        Poll::Ready(Ok(_)) => {
+                            return Poll::Ready(Ok(()));
+                        }
+                        Poll::Ready(Err(op)) => {
+                            if is_restart(&op) {
+                                restart = Some(op);
+                            } else {
+                                return Poll::Ready(Err(op));
+                            }
+                        }
                     }
 
-                    if let Some(sent) = this.rendezvous.try_recv()? {
-                        this.state = IoState::Send(sent);
-                        log!(info(ws = i), "outbound message received from listener.");
-                        indent!(i);
-                    } else {
-                        log!(info(ws = i), "waiting for something interesting to happen.");
-                        return Poll::Pending;
+                    match recover_or_restart!(self.rendezvous.try_recv(), restart) {
+                        Some(sent) => {
+                            self.state = IoState::Send(sent);
+                            log!(info(ws = i), "outbound message received from listener.");
+                            indent!(i);
+                        }
+                        None => {
+                            log!(info(ws = i), "waiting for something interesting to happen.");
+                            return Poll::Pending;
+                        }
                     }
                 }
 
@@ -234,20 +266,26 @@ impl Future for Facade {
                     log!(info(ws = i), "state = send");
                     indent!(i);
 
-                    match this.stream.as_pin_mut().poll_ready(cx) {
-                        Poll::Ready(Ok(_)) => {
-                            this.stream.as_pin_mut().start_send(item).map_err(rescue)?;
-                            log!(info(ws = i), "outbound message accepted by i/o.");
-                            indent!(i);
-                        }
-                        Poll::Pending => {
-                            log!(info(ws = i), "waiting for i/o to become available.");
-                            this.state = IoState::Send(item);
-                            return Poll::Pending;
-                        }
-                        Poll::Ready(Err(error)) => {
-                            return Poll::Ready(Err(rescue(error)));
-                        }
+                    if let Poll::Ready(ready) = self.stream.as_pin_mut().poll_ready(cx) {
+                        // Surface errors that may have occurred in poll_ready.
+                        recover_or_restart!(ready, restart, rescue);
+
+                        // Transfer ownership of the next item to the stream.
+                        recover_or_restart!(
+                            self.stream.as_pin_mut().start_send(item),
+                            restart,
+                            rescue
+                        );
+
+                        // Transition to IoState::Flush.
+                        log!(info(ws = i), "outbound message accepted by i/o.");
+                        indent!(i);
+                    } else if let Some(op) = restart {
+                        return Poll::Ready(Err(op));
+                    } else {
+                        log!(info(ws = i), "waiting for i/o to become available.");
+                        self.state = IoState::Send(item);
+                        return Poll::Pending;
                     }
                 }
 
@@ -255,21 +293,27 @@ impl Future for Facade {
                     log!(info(ws = i), "state = flush");
                     indent!(i);
 
-                    match this.stream.as_pin_mut().poll_flush(cx) {
-                        Poll::Pending => {
-                            log!(info(ws = i), "waiting for flush to complete.");
-                        }
-                        Poll::Ready(Ok(_)) => {
-                            log!(info(ws = i), "outbound message sent successfully.");
-                            this.state = IoState::Receive;
+                    if let Poll::Ready(flush) = self.stream.as_pin_mut().poll_flush(cx) {
+                        // Surface errors that may have occurred in poll_flush.
+                        recover_or_restart!(flush, restart, rescue);
+
+                        log!(info(ws = i), "outbound message sent successfully.");
+
+                        if let Some(op) = restart {
+                            return Poll::Ready(Err(op));
+                        } else {
+                            self.state = IoState::Receive;
                             cx.waker().wake_by_ref();
+                            return Poll::Pending;
                         }
-                        Poll::Ready(Err(error)) => {
-                            return Poll::Ready(Err(rescue(error)));
+                    } else {
+                        log!(info(ws = i), "waiting for flush to complete.");
+                        if let Some(op) = restart {
+                            return Poll::Ready(Err(op));
+                        } else {
+                            return Poll::Pending;
                         }
                     }
-
-                    return Poll::Pending;
                 }
             }
         }

@@ -25,6 +25,13 @@ pub fn already_closed() -> Catch {
     ControlFlow::Break(Error::from_source(Box::new(WebSocketError::AlreadyClosed)))
 }
 
+pub fn is_restart(catch: &Catch) -> bool {
+    match *catch {
+        ControlFlow::Break(_) => false,
+        ControlFlow::Continue(ref error) => error.is_restart(),
+    }
+}
+
 pub fn rescue(error: WebSocketError) -> Catch {
     use std::io::ErrorKind;
 

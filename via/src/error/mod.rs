@@ -70,6 +70,22 @@ where
     serializer.serialize_u16(status.as_u16())
 }
 
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+impl Error {
+    #[inline]
+    pub(crate) fn restart() -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            source: ErrorSource::Restart,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_restart(&self) -> bool {
+        matches!(self.source, ErrorSource::Restart)
+    }
+}
+
 impl Error {
     /// Returns an `Error` with the message provided.
     ///
@@ -194,14 +210,6 @@ impl Error {
         let mut error = Self::new(format!("missing required query parameter: \"{}\".", name));
         error.status = StatusCode::BAD_REQUEST;
         error
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn restart() -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            source: ErrorSource::Restart,
-        }
     }
 
     #[inline]

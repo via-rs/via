@@ -21,7 +21,9 @@ pub use error::Result;
 pub use request::Request;
 pub use upgrade::Ws;
 
-use crate::error::{Error, Propagate};
+use std::ops::ControlFlow;
+
+use crate::error::Error;
 
 /// Upgrade the connection to a web socket.
 ///
@@ -75,10 +77,7 @@ where
 ///
 /// The existing listener will first yield so the reactor can complete pending
 /// tasks.
-pub async fn restart() -> Result {
-    // Immediately yield so the reactor can complete any pending tasks.
-    tokio::task::yield_now().await;
-
+pub fn restart() -> Result {
     // Instructs the reactor to replace the listener.
-    Err(Error::restart()).or_continue()
+    Err(ControlFlow::Continue(Error::restart()))
 }

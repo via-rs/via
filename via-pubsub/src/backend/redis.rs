@@ -3,7 +3,6 @@ use redis::{Client, PushInfo, PushKind, RedisResult, Value};
 use serde::{Serialize, de::DeserializeOwned};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::ControlFlow;
 use tokio::sync::{broadcast, mpsc};
 use via::error::{Catch, Error};
 
@@ -236,10 +235,7 @@ where
             Ok(event) => Ok(Some(event)),
             Err(broadcast::error::TryRecvError::Empty) => Ok(None),
             Err(broadcast::error::TryRecvError::Closed) => Err(error::sender_dropped(0)),
-            Err(broadcast::error::TryRecvError::Lagged(n)) => {
-                let message = format!("capacity too small. skipped {} messages.", n);
-                Err(ControlFlow::Continue(Error::new(message)))
-            }
+            Err(broadcast::error::TryRecvError::Lagged(n)) => Ok(Some(RawPeerEvent::Lag(n))),
         }
     }
 }

@@ -32,7 +32,7 @@ enum IoState {
 struct Facade {
     listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
     state: IoState,
-    stream: ManuallyDrop<WebSocketStreamMut>,
+    stream: WebSocketStreamMut,
     rendezvous: Channel,
 }
 
@@ -104,18 +104,6 @@ where
     }
 }
 
-impl Drop for Facade {
-    fn drop(&mut self) {
-        // Safety:
-        //
-        // A `Facade` can only be constructed if `Run` does not already have a
-        // `Facade`. Also, `Run` explicitly drops `facade` before `stream`.
-        unsafe {
-            ManuallyDrop::drop(&mut self.stream);
-        }
-    }
-}
-
 impl Future for Facade {
     type Output = super::Result;
 
@@ -138,10 +126,8 @@ impl Future for Facade {
                     // When `restart.is_some()`, this loop terminates before
                     // returning to `IoState::Receive`.
                     if this.rendezvous.has_capacity()? {
-                        let stream = Pin::new(&mut *this.stream);
-
                         // Attempt to pull the next message out of the stream.
-                        match stream.poll_next(cx) {
+                        match Pin::new(&mut this.stream).poll_next(cx) {
                             Poll::Ready(Some(Ok(next))) => {
                                 // If send fails, the channel is disconnected.
                                 this.rendezvous.try_send(next)?;
@@ -197,11 +183,9 @@ impl Future for Facade {
                         return Poll::Ready(Ok(()));
                     };
 
-                    let mut stream = Pin::new(&mut *this.stream);
-
-                    match stream.as_mut().poll_ready(cx) {
+                    match Pin::new(&mut this.stream).poll_ready(cx) {
                         Poll::Ready(Ok(_)) => {
-                            if let Err(error) = stream.start_send(message) {
+                            if let Err(error) = Pin::new(&mut this.stream).start_send(message) {
                                 rescue_if!(restart.is_none(), error);
                             } else {
                                 log!(info(ws = i), "outbound message accepted by i/o.");
@@ -228,9 +212,7 @@ impl Future for Facade {
                     log!(info(ws = i), "state = flush");
                     indent!(i);
 
-                    let stream = Pin::new(&mut *this.stream);
-
-                    match stream.poll_flush(cx) {
+                    match Pin::new(&mut this.stream).poll_flush(cx) {
                         Poll::Ready(Ok(_)) => {
                             log!(info(ws = i), "outbound message sent successfully.");
                             if let Some(op) = restart {
@@ -271,7 +253,7 @@ where
         let facade = Facade {
             listener: Box::pin((self.listener.handle)(theirs, request)),
             state: IoState::Receive,
-            stream: ManuallyDrop::new(WebSocketStreamMut::new(&mut *self.stream)),
+            stream: WebSocketStreamMut::new(&mut *self.stream),
             rendezvous: ours,
         };
 

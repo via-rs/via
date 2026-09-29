@@ -39,9 +39,31 @@ struct Facade {
 struct Run<T, App> {
     listener: Arc<Listener<T>>,
     request: Request<App>,
-    stream: WebSocketStream<IoStream>,
+    stream: ManuallyDrop<WebSocketStream<IoStream>>,
     facade: Option<Facade>,
     _pin: PhantomPinned,
+}
+
+macro_rules! indent {
+    ($i:ident = $value:expr) => {
+        #[cfg(debug_assertions)]
+        {
+            $i = $value;
+        }
+    };
+    ($i:ident) => {
+        indent!($i = $i + 1);
+    };
+}
+
+macro_rules! rescue_if {
+    ($cond:expr, $error:expr) => {
+        if $cond {
+            return Poll::Ready(Err(rescue($error)));
+        } else {
+            return Poll::Ready(Err(ControlFlow::Break($error.into())));
+        }
+    };
 }
 
 impl<T, App, Await> RunTask<T, App>
@@ -58,7 +80,7 @@ where
             run: Box::pin(Run {
                 listener,
                 request,
-                stream,
+                stream: ManuallyDrop::new(stream),
                 facade: None,
                 _pin: PhantomPinned,
             }),
@@ -86,32 +108,12 @@ impl Drop for Facade {
     fn drop(&mut self) {
         // Safety:
         //
-        // A `Facade` can only be constructed if the owner of the value at
-        // `self.stream` does not already have a `Facade`.
-        unsafe { ManuallyDrop::drop(&mut self.stream) }
+        // A `Facade` can only be constructed if `Run` does not already have a
+        // `Facade`. Also, `Run` explicitly drops `facade` before `stream`.
+        unsafe {
+            ManuallyDrop::drop(&mut self.stream);
+        }
     }
-}
-
-macro_rules! indent {
-    ($i:ident = $value:expr) => {
-        #[cfg(debug_assertions)]
-        {
-            $i = $value;
-        }
-    };
-    ($i:ident) => {
-        indent!($i = $i + 1);
-    };
-}
-
-macro_rules! rescue_if {
-    ($cond:expr, $error:expr) => {
-        if $cond {
-            return Poll::Ready(Err(rescue($error)));
-        } else {
-            return Poll::Ready(Err(ControlFlow::Break($error.into())));
-        }
-    };
 }
 
 impl Future for Facade {
@@ -269,7 +271,7 @@ where
         let facade = Facade {
             listener: Box::pin((self.listener.handle)(theirs, request)),
             state: IoState::Receive,
-            stream: ManuallyDrop::new(WebSocketStreamMut::new(&mut self.stream)),
+            stream: ManuallyDrop::new(WebSocketStreamMut::new(&mut *self.stream)),
             rendezvous: ours,
         };
 
@@ -282,6 +284,23 @@ where
         // Implementing this any other way introduces an unlikely yet
         // recognizable re-entrancy pattern.
         unsafe { self.facade.as_mut().unwrap_unchecked() }
+    }
+}
+
+impl<T, App> Drop for Run<T, App> {
+    fn drop(&mut self) {
+        // The `facade` field must be dropped before `stream`.
+        if let Some(facade) = self.facade.take() {
+            drop(facade);
+        }
+
+        // Safety:
+        //
+        // Manually dropping `stream` after `facade` upholds Rust's aliasing
+        // rules of not more than one mutable borrow occuring at once.
+        unsafe {
+            ManuallyDrop::drop(&mut self.stream);
+        }
     }
 }
 
@@ -315,7 +334,7 @@ where
                 this.facade = None;
                 match *op {
                     ControlFlow::Continue(ref error) => {
-                        log!(error(ws = 6), "{}", error);
+                        log!(error(ws = 0), "{}", error);
                         context.waker().wake_by_ref();
                         Poll::Pending
                     }

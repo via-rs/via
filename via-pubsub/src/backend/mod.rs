@@ -20,18 +20,23 @@ pub struct Event<T, U>(RawEvent<T, U>);
 pub trait Backend {
     type Interest: Copy + Eq + Hash + DeserializeOwned + Serialize;
     type Payload: DeserializeOwned + Serialize;
-
-    fn subscribe(&self) -> Self;
+    type Subscriber: Subscriber<Interest = Self::Interest, Payload = Self::Payload>;
 
     fn dispatch(&self, event: Event<Self::Interest, Self::Payload>);
+    fn subscribe(&self) -> Self::Subscriber;
+}
 
-    #[allow(async_fn_in_trait)]
-    async fn send(&self, event: Event<Self::Interest, Self::Payload>) -> Result<(), Catch>;
+pub trait Subscriber {
+    type Interest: Copy + Eq + Hash + DeserializeOwned + Serialize;
+    type Payload: DeserializeOwned + Serialize;
 
-    #[allow(async_fn_in_trait)]
-    async fn recv(&mut self) -> Result<RawPeerEvent<Self::Interest>, Catch>;
+    fn send(
+        &self,
+        event: Event<Self::Interest, Self::Payload>,
+    ) -> impl Future<Output = Result<(), Catch>>;
 
     fn try_recv(&mut self) -> Result<Option<RawPeerEvent<Self::Interest>>, Catch>;
+    fn recv(&mut self) -> impl Future<Output = Result<RawPeerEvent<Self::Interest>, Catch>>;
 }
 
 #[derive(Clone, Debug)]

@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use via::error::Catch;
 
-use crate::backend::{Backend, Event, PeerEvent, RawPeerEvent};
+use crate::backend::{Backend, Event, PeerEvent, RawPeerEvent, Subscriber};
 
 pub struct Pubsub<T> {
     backend: T,
 }
 
-pub struct Subscription<T: Backend> {
+pub struct Subscription<T: Subscriber> {
     actor: T::Interest,
     backend: T,
     interests: HashSet<T::Interest>,
@@ -22,7 +22,7 @@ impl<T: Backend> Pubsub<T> {
         self.backend.dispatch(event);
     }
 
-    pub fn subscribe(&self, actor: T::Interest) -> Subscription<T> {
+    pub fn subscribe(&self, actor: T::Interest) -> Subscription<T::Subscriber> {
         Subscription {
             actor,
             backend: self.backend.subscribe(),
@@ -31,7 +31,7 @@ impl<T: Backend> Pubsub<T> {
     }
 }
 
-impl<T: Backend> Subscription<T> {
+impl<T: Subscriber> Subscription<T> {
     pub async fn send(&self, event: Event<T::Interest, T::Payload>) -> Result<(), Catch> {
         self.backend.send(event).await
     }
@@ -58,7 +58,7 @@ impl<T: Backend> Subscription<T> {
     }
 }
 
-impl<T: Backend> Subscription<T> {
+impl<T: Subscriber> Subscription<T> {
     #[inline]
     fn interested_in(&self, event: RawPeerEvent<T::Interest>) -> Option<PeerEvent<T::Interest>> {
         match event {

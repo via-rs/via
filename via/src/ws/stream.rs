@@ -64,19 +64,15 @@ impl WebSocketStreamMut {
 // with a `*mut WebSocketStream` in `WebSocketStreamMut`. We know that this
 // borrow is always valid because:
 //
-// - `Facade` can only exist as a field of `Run`.
+// - `Facade` can only exist as a field of `Run`
 //
 // - `Run` can only be constructed with a stable heap address as
-//   `Pin<Box<Run>>`.
+//   `Pin<Box<Run>>`
 //
-// - `Run` never moves or reassigns the value stored in the `stream` field.
+// - `Run` never moves or reassigns the value stored in the `stream` field
 //
-// - `Facade` explicitly nulls the `stream` field in it's drop impl and `Run`
-//   explicitly drops `facade` before `stream`.
-//
-// - `Run` drops `Facade` and yields to the runtime before replacing it.
-//   Temporally buffering the construction of the next
-//   `*mut WebSocketStream<IoStream>`.
+// - `Run` explicitly drops `facade` before `stream` is dropped and never
+//   replaces it in the same call stack that sets `facade` to `None`
 unsafe impl Send for WebSocketStreamMut {}
 
 impl Drop for WebSocketStreamMut {

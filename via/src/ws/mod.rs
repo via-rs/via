@@ -13,6 +13,7 @@ mod channel;
 mod error;
 mod request;
 mod run;
+mod stream;
 mod upgrade;
 mod util;
 

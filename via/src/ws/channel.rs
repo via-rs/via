@@ -108,30 +108,34 @@ impl Future for Recv<'_> {
 impl Future for Send<'_> {
     type Output = super::Result;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        // Sending a message in the body of a receive loop requires back
-        // pressure.
-        //
-        // If the sender is blocked because the receiver has not yet received
-        // the previous message, return pending.
-        if poll_ready(self.sender, cx)?.is_pending() {
-            return Poll::Pending;
-        }
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut(); // reification not required.
 
-        let Some(message) = self.message.take() else {
-            // The message was received by the sender.
-            return Poll::Ready(Ok(()));
-        };
-
-        match self.sender.try_send(message) {
-            Ok(_) => Poll::Ready(Ok(())),
-            Err(error) => {
-                if error.is_disconnected() {
-                    Poll::Ready(Err(already_closed()))
-                } else {
-                    Poll::Pending
+        // Send in the body of a receive loop requires back pressure. The
+        // following readiness check registers a wake if the channel is full.
+        if poll_ready(this.sender, cx)?.is_ready() {
+            if let Some(message) = this.message.take() {
+                // `poll_ready` guarantees `TrySendError::Full` is unreachable.
+                match this.sender.try_send(message) {
+                    Ok(_) => Poll::Ready(Ok(())),
+                    Err(_) => {
+                        std::hint::cold_path();
+                        Poll::Ready(Err(already_closed()))
+                    }
                 }
+            } else {
+                Poll::Ready(Ok(()))
             }
+        } else {
+            // If the sender is blocked because the receiver has not yet
+            // received the previous message, return pending. This should be
+            // rare.
+            //
+            // Consider sending a message in a listener like any other write,
+            // it implies acquiring a lock and should be done once per listener
+            // wake. If you must send more than one message per listener wake,
+            // batch them by using a vec in your notification data structure.
+            Poll::Pending
         }
     }
 }

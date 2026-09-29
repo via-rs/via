@@ -29,7 +29,7 @@ pub(super) struct WebSocketStreamMut {
 
 impl WebSocketStreamMut {
     #[inline]
-    pub(super) fn new(io: &mut WebSocketStream<IoStream>) -> Self {
+    pub(super) unsafe fn new(io: &mut WebSocketStream<IoStream>) -> Self {
         Self { io }
     }
 }

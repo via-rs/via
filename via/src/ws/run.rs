@@ -253,7 +253,12 @@ where
         let facade = Facade {
             listener: Box::pin((self.listener.handle)(theirs, request)),
             state: IoState::Receive,
-            stream: WebSocketStreamMut::new(&mut *self.stream),
+            // Safety:
+            //
+            // Both `Facade` and `Run` uphold the invariants required to treat
+            // this self-referential as `'static`. These types are not intended
+            // for use outside of the context in which they are used.
+            stream: unsafe { WebSocketStreamMut::new(&mut *self.stream) },
             rendezvous: ours,
         };
 

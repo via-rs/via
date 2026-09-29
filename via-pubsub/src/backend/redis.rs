@@ -98,9 +98,8 @@ where
                     match signer.deserialize::<_, U>(payload) {
                         // Event deserialized successfully.
                         Ok(raw_peer_event) => {
-                            if trx.fanout.send(raw_peer_event).is_err() {
-                                return; // Receivers dropped. Don't become a zombie.
-                            }
+                            // Zero subscribers does not terminate the loop.
+                            let _ = trx.fanout.send(raw_peer_event);
                         }
 
                         // Deserialization failed.

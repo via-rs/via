@@ -3,12 +3,12 @@ use redis::{Client, PushInfo, PushKind, RedisResult, Value};
 use serde::{Serialize, de::DeserializeOwned};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::ControlFlow;
 use tokio::sync::{broadcast, mpsc};
 use via::error::{Catch, Error};
 
 use super::signed::{Key, Signer};
 use super::{Backend, Event, RawPeerEvent};
+use crate::backend::Subscriber;
 use crate::pubsub::Pubsub;
 use crate::util::error;
 
@@ -25,6 +25,11 @@ pub struct Builder<'a, T, U> {
 }
 
 pub struct Redis<T, U> {
+    sender: mpsc::Sender<Event<T, U>>,
+    fanout: broadcast::Sender<RawPeerEvent<T>>,
+}
+
+pub struct Subscription<T, U> {
     sender: mpsc::Sender<Event<T, U>>,
     receiver: broadcast::Receiver<RawPeerEvent<T>>,
 }
@@ -92,9 +97,8 @@ where
                     match signer.deserialize::<_, U>(payload) {
                         // Event deserialized successfully.
                         Ok(raw_peer_event) => {
-                            if trx.fanout.send(raw_peer_event).is_err() {
-                                return; // Receivers dropped. Don't become a zombie.
-                            }
+                            // Zero subscribers does not terminate the loop.
+                            let _ = trx.fanout.send(raw_peer_event);
                         }
 
                         // Deserialization failed.
@@ -185,21 +189,31 @@ where
     T: Copy + Eq + Hash + DeserializeOwned + Serialize + Send + 'static,
     U: DeserializeOwned + Serialize + Send + 'static,
 {
+    type Subscriber = Subscription<T, U>;
     type Interest = T;
     type Payload = U;
-
-    fn subscribe(&self) -> Self {
-        Self {
-            sender: self.sender.clone(),
-            receiver: self.receiver.resubscribe(),
-        }
-    }
 
     fn dispatch(&self, event: Event<Self::Interest, Self::Payload>) {
         if self.sender.try_send(event).is_err() {
             log!(warn, "failed to synchronously send event.");
         }
     }
+
+    fn subscribe(&self) -> Self::Subscriber {
+        Subscription {
+            sender: self.sender.clone(),
+            receiver: self.fanout.subscribe(),
+        }
+    }
+}
+
+impl<T, U> Subscriber for Subscription<T, U>
+where
+    T: Copy + Eq + Hash + DeserializeOwned + Serialize + Send + 'static,
+    U: DeserializeOwned + Serialize + Send + 'static,
+{
+    type Interest = T;
+    type Payload = U;
 
     async fn send(&self, event: Event<T, U>) -> Result<(), Catch> {
         self.sender.send(event).await.map_err(error::sender_dropped)
@@ -221,10 +235,7 @@ where
             Ok(event) => Ok(Some(event)),
             Err(broadcast::error::TryRecvError::Empty) => Ok(None),
             Err(broadcast::error::TryRecvError::Closed) => Err(error::sender_dropped(0)),
-            Err(broadcast::error::TryRecvError::Lagged(n)) => {
-                let message = format!("capacity too small. skipped {} messages.", n);
-                Err(ControlFlow::Continue(Error::new(message)))
-            }
+            Err(broadcast::error::TryRecvError::Lagged(n)) => Ok(Some(RawPeerEvent::Lag(n))),
         }
     }
 }
@@ -252,13 +263,7 @@ where
         let (sender, outbound) = mpsc::channel(concurrency);
 
         // Used by subscribers to receive updates from the redis task.
-        let (fanout, receiver) = broadcast::channel(concurrency);
-
-        // Create a pubsub backend powered by redis.
-        //
-        // We do this eagerly so the channels used as part of our public API
-        // do not get confused with those used in the redis client task.
-        let backend = Redis { sender, receiver };
+        let (fanout, _) = broadcast::channel(concurrency);
 
         // Construct a signer key to sign messages.
         //
@@ -300,7 +305,7 @@ where
 
             // Create a dispatcher with the channel deps of the redis task.
             let trx = Dispatcher {
-                fanout,
+                fanout: fanout.clone(),
                 inbound,
                 outbound,
                 concurrency: MAX_PIPELINE_SIZE.div_euclid(max_event_size),
@@ -313,7 +318,7 @@ where
             })
         });
 
-        Ok(Pubsub::new(backend))
+        Ok(Pubsub::new(Redis { sender, fanout }))
     }
 
     /// The number of events that can be published simultaneously.

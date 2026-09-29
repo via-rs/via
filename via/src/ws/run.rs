@@ -258,6 +258,7 @@ where
             // Both `Facade` and `Run` uphold the invariants required to treat
             // this self-referential as `'static`. These types are not intended
             // for use outside of the context in which they are used.
+            #[allow(clippy::explicit_auto_deref)]
             stream: unsafe { WebSocketStreamMut::new(&mut *self.stream) },
             rendezvous: ours,
         };

@@ -8,6 +8,7 @@ pub use redis::Redis;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::hash::Hash;
 use via::error::Catch;
 

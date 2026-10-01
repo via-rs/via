@@ -2,6 +2,7 @@ use futures_core::Stream;
 use futures_sink::Sink;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(feature = "tokio-tungstenite")]
 use tokio_tungstenite::WebSocketStream;
@@ -11,32 +12,31 @@ use tokio_websockets::WebSocketStream;
 
 use super::channel::Message;
 use super::error::WebSocketError;
-use crate::server::IoStream;
 
 const _: () = {
     const fn assert_send<T: Send>() {}
-    assert_send::<WebSocketStream<IoStream>>();
+    assert_send::<WebSocketStream<()>>();
 };
 
 const _: () = {
     const fn assert_unpin<T: Unpin>() {}
-    assert_unpin::<WebSocketStream<IoStream>>();
+    assert_unpin::<WebSocketStream<()>>();
 };
 
-pub(super) struct WebSocketStreamMut {
-    io: *mut WebSocketStream<IoStream>,
+pub(super) struct WebSocketStreamMut<Io> {
+    io: *mut WebSocketStream<Io>,
 }
 
-impl WebSocketStreamMut {
+impl<Io> WebSocketStreamMut<Io> {
     #[inline]
-    pub(super) unsafe fn new(io: &mut WebSocketStream<IoStream>) -> Self {
+    pub(super) unsafe fn new(io: &mut WebSocketStream<Io>) -> Self {
         Self { io }
     }
 }
 
-impl WebSocketStreamMut {
+impl<Io> WebSocketStreamMut<Io> {
     #[inline(always)]
-    fn project(self: Pin<&mut Self>) -> Pin<&mut WebSocketStream<IoStream>> {
+    fn project(self: Pin<&mut Self>) -> Pin<&mut WebSocketStream<Io>> {
         // Safety:
         //
         // The raw pointer at `self.io` is always valid because:
@@ -73,9 +73,9 @@ impl WebSocketStreamMut {
 //
 // - `Run` explicitly drops `facade` before `stream` is dropped and never
 //   replaces it in the same call stack that sets `facade` to `None`
-unsafe impl Send for WebSocketStreamMut {}
+unsafe impl<Io: Send> Send for WebSocketStreamMut<Io> {}
 
-impl Drop for WebSocketStreamMut {
+impl<Io> Drop for WebSocketStreamMut<Io> {
     fn drop(&mut self) {
         // Defensive poisoning. Dereferencing a null ptr and a dangling reference
         // to an I/O stream are both undefined behavior. However, dereferencing a
@@ -92,7 +92,10 @@ impl Drop for WebSocketStreamMut {
     }
 }
 
-impl Sink<Message> for WebSocketStreamMut {
+impl<Io> Sink<Message> for WebSocketStreamMut<Io>
+where
+    Io: AsyncRead + AsyncWrite + Send + Unpin,
+{
     type Error = WebSocketError;
 
     fn start_send(self: Pin<&mut Self>, message: Message) -> Result<(), Self::Error> {
@@ -121,7 +124,10 @@ impl Sink<Message> for WebSocketStreamMut {
     }
 }
 
-impl Stream for WebSocketStreamMut {
+impl<Io> Stream for WebSocketStreamMut<Io>
+where
+    Io: AsyncRead + AsyncWrite + Send + Unpin,
+{
     type Item = Result<Message, WebSocketError>;
 
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {

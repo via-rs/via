@@ -1,7 +1,7 @@
 mod panic;
 mod state;
 
-pub(crate) use panic::{UpgradeSupervisor, catch_unwind};
+pub(crate) use panic::catch_unwind;
 
 use delegate::delegate;
 use hyper::server::conn::*;
@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Notify;
 
 use super::io::IoWithPermit;
-use crate::app::ConnectionService;
+use super::service::ServiceAdapter;
 
 use state::CancellationState;
 
@@ -61,6 +61,24 @@ struct Notified<'a> {
     state: &'a CancellationState,
 }
 
+#[inline(always)]
+pub(super) fn wait_for_ctrl_c(cancellation: CancellationToken) {
+    let ctrl_c = Box::pin(async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            eprintln!("unable to register the 'ctrl-c' signal.");
+        }
+    });
+
+    tokio::spawn(async move {
+        ctrl_c.await;
+
+        let token = cancellation.token();
+
+        token.state.cancel();
+        token.notify.notify_waiters();
+    });
+}
+
 #[cfg_attr(not(debug_assertions), allow(unused_variables))]
 fn on_ready(result: Result<(), hyper::Error>) {
     #[cfg(debug_assertions)]
@@ -71,28 +89,12 @@ fn on_ready(result: Result<(), hyper::Error>) {
 
 impl CancellationToken {
     pub(super) fn new() -> Self {
-        let cancellation = Self {
+        Self {
             value: Arc::new(NotifyOnce {
                 notify: Notify::new(),
                 state: CancellationState::new(),
             }),
-        };
-
-        tokio::spawn({
-            let cancellation = cancellation.clone();
-            let ctrl_c = Box::pin(async {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    eprintln!("unable to register the 'ctrl-c' signal.");
-                }
-            });
-
-            async move {
-                ctrl_c.await;
-                cancellation.notify();
-            }
-        });
-
-        cancellation
+        }
     }
 
     pub(super) async fn wait(&self) -> bool {
@@ -116,16 +118,6 @@ impl CancellationToken {
         }
     }
 
-    pub(super) fn supervise_upgrade(self, upgrade: &UpgradeSupervisor) {
-        upgrade.set(self.into())
-    }
-}
-
-impl CancellationToken {
-    fn notify(&self) {
-        self.value.notify();
-    }
-
     fn token(&self) -> &NotifyOnce {
         &self.value
     }
@@ -137,11 +129,6 @@ impl NotifyOnce {
             fn did_panic(&self) -> bool;
             fn is_waiting(&self) -> bool;
         }
-    }
-
-    fn notify(&self) {
-        self.state.cancel();
-        self.notify.notify_waiters();
     }
 
     fn notified(&self) -> Notified<'_> {
@@ -212,7 +199,7 @@ where
 }
 
 impl<App, Io> GracefulShutdown
-    for http1::UpgradeableConnection<IoWithPermit<Io>, &'_ ConnectionService<App>>
+    for http1::UpgradeableConnection<IoWithPermit<Io>, ServiceAdapter<App>>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Unpin,
@@ -224,7 +211,7 @@ where
 }
 
 impl<App, Io> GracefulShutdown
-    for http2::Connection<IoWithPermit<Io>, &'_ ConnectionService<App>, TokioExecutor>
+    for http2::Connection<IoWithPermit<Io>, ServiceAdapter<App>, TokioExecutor>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Unpin,

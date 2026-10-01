@@ -77,6 +77,7 @@ pub mod guard;
 pub mod request;
 pub mod response;
 pub mod router;
+pub mod server;
 
 #[cfg(feature = "test-util")]
 pub mod test;
@@ -89,7 +90,6 @@ mod before;
 mod cookies;
 mod middleware;
 mod next;
-mod server;
 mod util;
 
 pub use via_macros::resource;
@@ -103,7 +103,7 @@ pub use next::{Continue, Next};
 pub use request::{Payload, Request};
 pub use response::{Finalize, Response};
 pub use router::{Route, Router, delete, get, head, options, patch, post, put, trace};
-pub use server::Server;
+pub use server::{Server, upgrade};
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 pub use ws::ws;

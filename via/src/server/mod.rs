@@ -5,25 +5,24 @@ mod accept;
 mod cancel;
 mod io;
 mod js;
+mod service;
 mod tcp;
 mod tls;
 
-pub(crate) use cancel::UpgradeSupervisor;
-
-#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-pub(crate) use cancel::catch_unwind;
+pub use service::{Supervisor, Upgraded, upgrade};
 
 use std::num::NonZeroUsize;
 use std::process::ExitCode;
 use std::time::Duration;
 use tokio::net::{TcpListener, ToSocketAddrs};
 
-use crate::app::{ServiceAdapter, Via};
+use crate::app::Via;
 use crate::error::Error;
 use crate::router::Router;
 use crate::server::tcp::TcpAcceptor;
 
 use accept::accept;
+use service::ServiceAdapter;
 
 #[cfg(feature = "native-tls")]
 use tls::NativeTlsAcceptor;
@@ -31,25 +30,14 @@ use tls::NativeTlsAcceptor;
 #[cfg(feature = "rustls-23")]
 use tls::RustlsAcceptor;
 
-#[cfg(all(
-    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
-    not(feature = "rustls-23"),
-    feature = "native-tls",
-))]
-pub(crate) type IoStream = io::IoWithPermit<tls::NativeTlsStream>;
+#[cfg(all(feature = "native-tls", not(feature = "rustls-23")))]
+type IoStream = io::IoWithPermit<tls::NativeTlsStream>;
 
-#[cfg(all(
-    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
-    not(feature = "native-tls"),
-    feature = "rustls-23",
-))]
-pub(crate) type IoStream = io::IoWithPermit<tls::RustlsStream>;
+#[cfg(all(feature = "rustls-23", not(feature = "native-tls")))]
+type IoStream = io::IoWithPermit<tls::RustlsStream>;
 
-#[cfg(all(
-    any(feature = "tokio-tungstenite", feature = "tokio-websockets"),
-    not(any(feature = "native-tls", feature = "rustls-23"))
-))]
-pub(crate) type IoStream = io::IoWithPermit<tcp::TcpStream>;
+#[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
+type IoStream = io::IoWithPermit<tcp::TcpStream>;
 
 const DEFAULT_MAX_BUF_SIZE: usize = 16384; // 16 KB
 
@@ -282,14 +270,12 @@ where
     /// on your application's availability while preventing conflicts between the
     /// process supervisor of an individual node and the replacement and
     /// decommissioning logic of the cluster.
-    pub fn listen(self, addr: impl ToSocketAddrs) -> impl Future<Output = Result<ExitCode, Error>> {
-        let service = ServiceAdapter::new(self.config.clone(), self.app);
-        let protocol = TcpAcceptor::new(self.config.tls_handshake_timeout);
+    pub async fn listen(self, addr: impl ToSocketAddrs) -> Result<ExitCode, Error> {
+        let service = ServiceAdapter::new(self.config.max_request_size, self.app)?;
+        let acceptor = TcpAcceptor::new(self.config.tls_handshake_timeout);
+        let listener = TcpListener::bind(addr).await?;
 
-        async {
-            let listener = TcpListener::bind(addr).await?;
-            Ok(accept(service, protocol, listener).await)
-        }
+        Ok(accept(acceptor, listener, service, Box::new(self.config)).await)
     }
 
     /// Listens for incoming HTTPS connections using `native-tls` for TLS
@@ -311,22 +297,20 @@ where
     ///
     /// See [`Server::listen`] for details on exit code semantics.
     #[cfg(feature = "native-tls")]
-    pub fn listen_native_tls(
+    pub async fn listen_native_tls(
         self,
         addr: impl ToSocketAddrs,
         identity: native_tls::Identity,
         alpn_protocols: &[impl AsRef<str>],
-    ) -> impl Future<Output = Result<ExitCode, Error>> {
-        let service = ServiceAdapter::new(self.config.clone(), self.app);
-        let protocol = {
+    ) -> Result<ExitCode, Error> {
+        let service = ServiceAdapter::new(self.config.max_request_size, self.app)?;
+        let acceptor = {
             let timeout = self.config.tls_handshake_timeout;
             NativeTlsAcceptor::new(identity, timeout, alpn_protocols)
         };
+        let listener = TcpListener::bind(addr).await?;
 
-        async {
-            let listener = TcpListener::bind(addr).await?;
-            Ok(accept(service, protocol, listener).await)
-        }
+        Ok(accept(acceptor, listener, service, Box::new(self.config)).await)
     }
 
     /// Listens for incoming HTTPS connections using `rustls` for TLS
@@ -351,18 +335,16 @@ where
     ///
     /// See [`Server::listen`] for details on exit code semantics.
     #[cfg(feature = "rustls-23")]
-    pub fn listen_rustls_23(
+    pub async fn listen_rustls_23(
         self,
         addr: impl ToSocketAddrs,
         config: rustls::ServerConfig,
-    ) -> impl Future<Output = Result<ExitCode, Error>> {
-        let service = ServiceAdapter::new(self.config.clone(), self.app);
-        let protocol = RustlsAcceptor::new(self.config.tls_handshake_timeout, config);
+    ) -> Result<ExitCode, Error> {
+        let service = ServiceAdapter::new(self.config.max_request_size, self.app)?;
+        let acceptor = RustlsAcceptor::new(self.config.tls_handshake_timeout, config);
+        let listener = TcpListener::bind(addr).await?;
 
-        async {
-            let listener = TcpListener::bind(addr).await?;
-            Ok(accept(service, protocol, listener).await)
-        }
+        Ok(accept(acceptor, listener, service, Box::new(self.config)).await)
     }
 }
 
@@ -438,10 +420,6 @@ impl ServerConfig {
 
     pub(super) fn max_connections(&self) -> usize {
         self.max_connections.min(MAX_CONNECTIONS)
-    }
-
-    pub(super) fn max_request_size(&self) -> usize {
-        self.max_request_size
     }
 
     pub(super) fn shutdown_timeout(&self) -> Duration {

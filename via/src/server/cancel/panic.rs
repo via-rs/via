@@ -1,20 +1,16 @@
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use super::{CancellationToken, NotifyOnce};
+use delegate::delegate;
 
-pub(crate) struct PanicHandle {
-    notify: Arc<NotifyOnce>,
-}
+use crate::server::cancel::NotifyOnce;
 
-#[derive(Clone)]
-pub(crate) struct UpgradeSupervisor {
-    handle: Arc<Mutex<Option<PanicHandle>>>,
-}
+use super::CancellationToken;
 
-pub(super) struct CatchUnwind<F> {
+struct PanicHandle(CancellationToken);
+
+struct CatchUnwind<F> {
     future: F,
     handle: PanicHandle,
 }
@@ -22,12 +18,15 @@ pub(super) struct CatchUnwind<F> {
 #[inline(always)]
 pub(crate) fn catch_unwind<F>(
     future: F,
-    handle: PanicHandle,
+    token: CancellationToken,
 ) -> impl Future<Output = ()> + Send + 'static
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    CatchUnwind { future, handle }
+    CatchUnwind {
+        future,
+        handle: PanicHandle(token),
+    }
 }
 
 impl<F> Future for CatchUnwind<F>
@@ -43,7 +42,11 @@ where
         match std::panic::catch_unwind(AssertUnwindSafe(|| future.poll(context))) {
             Ok(output) => output,
             Err(_) => {
-                this.handle.notify_panic();
+                let token = this.handle.token();
+
+                token.state.panic();
+                token.notify.notify_waiters();
+
                 Poll::Ready(())
             }
         }
@@ -51,45 +54,16 @@ where
 }
 
 impl PanicHandle {
-    #[inline(always)]
-    fn notify_panic(&self) {
-        let token = &*self.notify;
-
-        token.state.panic();
-        token.notify.notify_waiters();
+    delegate! {
+        to self.0 {
+            fn token(&self) -> &NotifyOnce;
+        }
     }
 }
 
 impl From<CancellationToken> for PanicHandle {
     #[inline]
-    fn from(token: CancellationToken) -> Self {
-        Self {
-            notify: token.value,
-        }
-    }
-}
-
-impl UpgradeSupervisor {
-    #[inline(always)]
-    pub(crate) fn new() -> Self {
-        Self {
-            handle: Default::default(),
-        }
-    }
-
-    #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    pub(crate) fn to_panic_handle(&self) -> Option<PanicHandle> {
-        if let Ok(mut guard) = self.handle.try_lock() {
-            guard.take()
-        } else {
-            None
-        }
-    }
-
-    #[inline(always)]
-    pub(super) fn set(&self, handle: PanicHandle) {
-        if let Ok(mut guard) = self.handle.try_lock() {
-            *guard = Some(handle);
-        }
+    fn from(handle: CancellationToken) -> Self {
+        Self(handle)
     }
 }

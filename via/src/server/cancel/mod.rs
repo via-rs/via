@@ -1,7 +1,7 @@
 mod panic;
 mod state;
 
-pub(crate) use panic::{UpgradeSupervisor, catch_unwind};
+pub(crate) use panic::catch_unwind;
 
 use delegate::delegate;
 use hyper::server::conn::*;
@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Notify;
 
 use super::io::IoWithPermit;
-use crate::app::ConnectionService;
+use super::service::ServiceAdapter;
 
 use state::CancellationState;
 
@@ -88,7 +88,11 @@ impl CancellationToken {
 
             async move {
                 ctrl_c.await;
-                cancellation.notify();
+
+                let token = cancellation.token();
+
+                token.state.cancel();
+                token.notify.notify_waiters();
             }
         });
 
@@ -116,16 +120,6 @@ impl CancellationToken {
         }
     }
 
-    pub(super) fn supervise_upgrade(self, upgrade: &UpgradeSupervisor) {
-        upgrade.set(self.into())
-    }
-}
-
-impl CancellationToken {
-    fn notify(&self) {
-        self.value.notify();
-    }
-
     fn token(&self) -> &NotifyOnce {
         &self.value
     }
@@ -137,11 +131,6 @@ impl NotifyOnce {
             fn did_panic(&self) -> bool;
             fn is_waiting(&self) -> bool;
         }
-    }
-
-    fn notify(&self) {
-        self.state.cancel();
-        self.notify.notify_waiters();
     }
 
     fn notified(&self) -> Notified<'_> {
@@ -212,7 +201,7 @@ where
 }
 
 impl<App, Io> GracefulShutdown
-    for http1::UpgradeableConnection<IoWithPermit<Io>, &'_ ConnectionService<App>>
+    for http1::UpgradeableConnection<IoWithPermit<Io>, ServiceAdapter<App>>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Unpin,
@@ -224,7 +213,7 @@ where
 }
 
 impl<App, Io> GracefulShutdown
-    for http2::Connection<IoWithPermit<Io>, &'_ ConnectionService<App>, TokioExecutor>
+    for http2::Connection<IoWithPermit<Io>, ServiceAdapter<App>, TokioExecutor>
 where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + Unpin,

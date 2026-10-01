@@ -7,6 +7,7 @@ use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(feature = "tokio-tungstenite")]
 use tokio_tungstenite::WebSocketStream;
@@ -17,10 +18,9 @@ use tokio_websockets::WebSocketStream;
 use super::error::{into_break, is_restart, rescue};
 use super::stream::WebSocketStreamMut;
 use super::{Channel, Message, Request, upgrade::Listener};
-use crate::server::IoStream;
 
-pub struct RunTask<T, App> {
-    run: Pin<Box<Run<T, App>>>,
+pub struct RunTask<T, Io, App> {
+    run: Pin<Box<Run<T, Io, App>>>,
 }
 
 enum IoState {
@@ -29,18 +29,18 @@ enum IoState {
     Flush,
 }
 
-struct Facade {
+struct Facade<Io> {
     listener: Pin<Box<dyn Future<Output = super::Result> + Send>>,
     state: IoState,
-    stream: WebSocketStreamMut,
+    stream: WebSocketStreamMut<Io>,
     rendezvous: Channel,
 }
 
-struct Run<T, App> {
+struct Run<T, Io, App> {
     listener: Arc<Listener<T>>,
     request: Request<App>,
-    stream: ManuallyDrop<WebSocketStream<IoStream>>,
-    facade: Option<Facade>,
+    stream: ManuallyDrop<WebSocketStream<Io>>,
+    facade: Option<Facade<Io>>,
     _pin: PhantomPinned,
 }
 
@@ -66,15 +66,16 @@ macro_rules! rescue_if {
     };
 }
 
-impl<T, App, Await> RunTask<T, App>
+impl<T, App, Io, Await> RunTask<T, Io, App>
 where
     T: Fn(Channel, Request<App>) -> Await + Send,
+    Io: AsyncRead + AsyncWrite + Send + Unpin,
     Await: Future<Output = super::Result> + Send + 'static,
 {
     pub(super) fn new(
         listener: Arc<Listener<T>>,
         request: Request<App>,
-        stream: WebSocketStream<IoStream>,
+        stream: WebSocketStream<Io>,
     ) -> Self {
         Self {
             run: Box::pin(Run {
@@ -88,9 +89,10 @@ where
     }
 }
 
-impl<T, App, Await> Future for RunTask<T, App>
+impl<T, App, Io, Await> Future for RunTask<T, Io, App>
 where
     T: Fn(Channel, Request<App>) -> Await + Send,
+    Io: AsyncRead + AsyncWrite + Send + Unpin,
     Await: Future<Output = super::Result> + Send + 'static,
 {
     type Output = ();
@@ -104,7 +106,10 @@ where
     }
 }
 
-impl Future for Facade {
+impl<Io> Future for Facade<Io>
+where
+    Io: AsyncRead + AsyncWrite + Send + Unpin,
+{
     type Output = super::Result;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
@@ -241,13 +246,14 @@ impl Future for Facade {
     }
 }
 
-impl<T, App, Await> Run<T, App>
+impl<T, App, Io, Await> Run<T, Io, App>
 where
     T: Fn(Channel, Request<App>) -> Await + Send,
+    Io: AsyncRead + AsyncWrite + Send + Unpin,
     Await: Future<Output = super::Result> + Send + 'static,
 {
     #[inline(always)]
-    fn reconnect(&mut self) -> &mut Facade {
+    fn reconnect(&mut self) -> &mut Facade<Io> {
         let (ours, theirs) = Channel::new();
         let request = self.request.clone();
         let facade = Facade {
@@ -275,7 +281,7 @@ where
     }
 }
 
-impl<T, App> Drop for Run<T, App> {
+impl<T, App, Io> Drop for Run<T, App, Io> {
     fn drop(&mut self) {
         // The `facade` field must be dropped before `stream`.
         if let Some(facade) = self.facade.take() {
@@ -292,9 +298,10 @@ impl<T, App> Drop for Run<T, App> {
     }
 }
 
-impl<T, App, Await> Future for Run<T, App>
+impl<T, App, Io, Await> Future for Run<T, Io, App>
 where
     T: Fn(Channel, Request<App>) -> Await + Send,
+    Io: AsyncRead + AsyncWrite + Send + Unpin,
     Await: Future<Output = super::Result> + Send + 'static,
 {
     type Output = ();

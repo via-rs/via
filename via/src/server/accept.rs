@@ -8,21 +8,23 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
-use super::cancel::{CancellationToken, catch_unwind};
+use super::ServerConfig;
+use super::cancel::catch_unwind;
 use super::io::IoWithPermit;
 use super::js::JoinSet;
+use super::service::ServiceAdapter;
 use super::tls::{Acceptor, Alpn, NegotiateAlpn};
-use crate::app::{ConnectionService, ServiceAdapter};
 
-pub(super) async fn accept<App, Protocol>(
-    service: ServiceAdapter<App>,
-    protocol: Protocol,
+pub(super) async fn accept<App, Accept>(
+    acceptor: Accept,
     listener: TcpListener,
+    adapter: ServiceAdapter<App>,
+    config: Box<ServerConfig>,
 ) -> ExitCode
 where
     App: Send + Sync + 'static,
-    Protocol: Acceptor,
-    Protocol::Stream: Send + Unpin + 'static,
+    Accept: Acceptor,
+    Accept::Stream: Send + Unpin + 'static,
 {
     // Connection bookkeeping occurs in `JoinSet`. Connections that survive
     // more than a single cohort generation "detach" (i.e websockets).
@@ -39,10 +41,7 @@ where
     // to join enough connections to accommodate their users without detaching an
     // entire cohort and use the metric to configure rate-limiting in the network
     // tier (API gateway, reverse-proxy, load balancer, etc.).
-    let (recycler, mut connections) = JoinSet::new(service.config().max_num_cohorts());
-
-    // Notify connection tasks when a shutdown signal is received by the process.
-    let cancellation = CancellationToken::new();
+    let (recycler, mut connections) = JoinSet::new(config.max_num_cohorts());
 
     // Provides a "soft" upper-bound on concurrency.
     //
@@ -53,7 +52,7 @@ where
     // on RST. If configured properly, the resulting infrastructure intersects
     // assurance with availability that resembles telcom.
     let semaphore = {
-        let max_connections = service.config().max_connections();
+        let max_connections = config.max_connections();
 
         if max_connections <= 1 {
             log!(error(accept = 0), "max_connections must be > 10");
@@ -67,7 +66,7 @@ where
 
     // Start accepting incoming connections.
     loop {
-        let cancellation = cancellation.clone();
+        let waiter = adapter.cancellation().clone();
 
         // Either accept the next connection from the TCP listener or receive a
         // shutdown signal.
@@ -86,17 +85,17 @@ where
                     // of the loop but that would result in more connections
                     // being queued by the OS.
                     if let Ok(permit) = semaphore.clone().try_acquire_owned() {
-                        let handshake = protocol.accept(stream, permit);
-                        let adapter = service.clone();
-                        let waiter = cancellation.clone();
+                        let handshake = acceptor.accept(stream, permit);
+                        let service = adapter.clone();
 
                         connections.spawn(catch_unwind(
-                            handle_conn(handshake, adapter, waiter),
-                            cancellation.into(),
+                            handle_conn(handshake, service, config.clone()),
+                            waiter,
                         ));
 
-                        if connections.size() >= service.config().cohort_size() {
-                            connections.rotate(recycler.clone());
+                        if connections.size() >= config.cohort_size() {
+                            let recycler = recycler.clone();
+                            connections.rotate(recycler);
                         }
                     } else if let Err(error) = stream.set_zero_linger() {
                         log!(error(accept = 0), "{}", error);
@@ -139,12 +138,12 @@ where
             },
 
             // Shutdown request received.
-            did_panic = cancellation.wait() => {
+            did_panic = waiter.wait() => {
                 if did_panic {
                     return ExitCode::FAILURE;
                 } else {
                     let future = timeout(
-                        service.config().shutdown_timeout(),
+                        config.shutdown_timeout(),
                         connections.join_all(),
                     );
 
@@ -161,8 +160,8 @@ where
 
 async fn handle_conn<App, Io, F>(
     handshake: F,
-    adapter: ServiceAdapter<App>,
-    waiter: CancellationToken,
+    service: ServiceAdapter<App>,
+    config: Box<ServerConfig>,
 ) where
     App: Send + Sync + 'static,
     Io: AsyncRead + AsyncWrite + NegotiateAlpn + Send + Unpin + 'static,
@@ -170,15 +169,13 @@ async fn handle_conn<App, Io, F>(
 {
     match handshake.await {
         Ok(stream) => {
-            let service = adapter.into_service();
-
             if stream.preferred_alpn() == Alpn::HTTP_2 {
-                waiter.observe(http_2_conn(stream, &service)).await;
+                let waiter = service.cancellation().clone();
+                waiter.observe(http_2_conn(&config, stream, service)).await;
             } else {
-                waiter.observe(http_11_conn(stream, &service)).await;
+                let waiter = service.cancellation().clone();
+                waiter.observe(http_11_conn(&config, stream, service)).await;
             }
-
-            waiter.supervise_upgrade(service.supervisor());
         }
         Err(error) => {
             log!(error(tls = 0), "{}", error);
@@ -187,9 +184,10 @@ async fn handle_conn<App, Io, F>(
 }
 
 fn http_11_conn<Io, App>(
+    config: &ServerConfig,
     stream: IoWithPermit<Io>,
-    service: &ConnectionService<App>,
-) -> http1::UpgradeableConnection<IoWithPermit<Io>, &'_ ConnectionService<App>>
+    service: ServiceAdapter<App>,
+) -> http1::UpgradeableConnection<IoWithPermit<Io>, ServiceAdapter<App>>
 where
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,
@@ -199,11 +197,11 @@ where
         .auto_date_header(true)
         .half_close(false)
         .ignore_invalid_headers(false)
-        .keep_alive(service.config().keep_alive())
-        .max_buf_size(service.config().max_buf_size())
+        .keep_alive(config.keep_alive())
+        .max_buf_size(config.max_buf_size())
         .pipeline_flush(false)
         .preserve_header_case(false)
-        .header_read_timeout(Some(service.config().http1_header_read_timeout()))
+        .header_read_timeout(Some(config.http1_header_read_timeout()))
         .timer(TokioTimer::new())
         .title_case_headers(false)
         .serve_connection(stream, service)
@@ -211,9 +209,10 @@ where
 }
 
 fn http_2_conn<Io, App>(
+    config: &ServerConfig,
     stream: IoWithPermit<Io>,
-    service: &ConnectionService<App>,
-) -> http2::Connection<IoWithPermit<Io>, &'_ ConnectionService<App>, TokioExecutor>
+    service: ServiceAdapter<App>,
+) -> http2::Connection<IoWithPermit<Io>, ServiceAdapter<App>, TokioExecutor>
 where
     Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     App: Send + Sync + 'static,
@@ -225,8 +224,8 @@ where
         .initial_connection_window_size(Some(1048576)) // 1 MB
         .initial_stream_window_size(Some(65536)) // 64 MB
         .max_frame_size(Some(16384)) // 16 KB
-        .max_concurrent_streams(service.config().http2_max_concurrent_streams())
-        .max_send_buf_size(service.config().http2_max_send_buf_size())
+        .max_concurrent_streams(config.http2_max_concurrent_streams())
+        .max_send_buf_size(config.http2_max_send_buf_size())
         .timer(TokioTimer::new())
         .serve_connection(stream, service)
 }

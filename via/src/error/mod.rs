@@ -42,6 +42,10 @@ enum ErrorSource {
     AllowMethod(Box<MethodNotAllowed>),
     Message(String),
     Other(BoxError),
+
+    #[allow(dead_code)]
+    Hyper(hyper::Error),
+
     Json(serde_json::Error),
 
     #[allow(dead_code)]
@@ -53,6 +57,7 @@ enum ErrorSourceRef<'a> {
     Message(&'a str),
     Other(&'a (dyn std::error::Error + 'static)),
     Json(&'a serde_json::Error),
+    Hyper(&'a hyper::Error),
     Restart,
 }
 
@@ -178,6 +183,14 @@ impl Error {
 }
 
 impl Error {
+    #[cfg(not(feature = "test-util"))]
+    pub(crate) fn from_hyper(error: hyper::Error) -> Self {
+        Self {
+            source: ErrorSource::Hyper(error),
+            status: StatusCode::BAD_REQUEST,
+        }
+    }
+
     pub(crate) fn invalid_utf8_sequence(name: &str) -> Self {
         let mut error = Self::new(format!("invalid utf-8 sequence of bytes in {}.", name));
         error.status = StatusCode::BAD_REQUEST;
@@ -188,15 +201,6 @@ impl Error {
         Self {
             source: ErrorSource::AllowMethod(Box::new(error)),
             status: StatusCode::METHOD_NOT_ALLOWED,
-        }
-    }
-
-    pub(crate) fn payload_too_large() -> Self {
-        let message = "request body exceeds the maximum length".to_owned();
-
-        Self {
-            source: ErrorSource::Message(message),
-            status: StatusCode::PAYLOAD_TOO_LARGE,
         }
     }
 
@@ -219,6 +223,7 @@ impl Error {
             ErrorSource::Message(message) => ErrorSourceRef::Message(message),
             ErrorSource::Other(source) => ErrorSourceRef::Other(source.as_ref()),
             ErrorSource::Json(source) => ErrorSourceRef::Json(source),
+            ErrorSource::Hyper(source) => ErrorSourceRef::Hyper(source),
             ErrorSource::Restart => ErrorSourceRef::Restart,
         }
     }
@@ -229,6 +234,7 @@ impl Error {
             ErrorSource::AllowMethod(error) => Err(Some(error)),
             ErrorSource::Other(error) => Err(Some(&**error)),
             ErrorSource::Json(error) => Err(Some(error)),
+            ErrorSource::Hyper(error) => Err(Some(error)),
             ErrorSource::Restart => Err(None),
         }
     }
@@ -261,6 +267,7 @@ impl Display for Error {
             ErrorSourceRef::AllowMethod(source) => Display::fmt(source, f),
             ErrorSourceRef::Other(source) => Display::fmt(source, f),
             ErrorSourceRef::Json(source) => Display::fmt(source, f),
+            ErrorSourceRef::Hyper(source) => Display::fmt(source, f),
             ErrorSourceRef::Restart => write!(f, "restart"),
         }
     }
@@ -273,6 +280,7 @@ impl From<Error> for BoxError {
             ErrorSource::Message(string) => string.into(),
             ErrorSource::Other(source) => source,
             ErrorSource::Json(source) => source.into(),
+            ErrorSource::Hyper(source) => source.into(),
             ErrorSource::Restart => {
                 hint::cold_path();
                 "restart".to_owned().into()

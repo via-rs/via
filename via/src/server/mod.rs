@@ -9,6 +9,7 @@ mod service;
 mod tcp;
 mod tls;
 
+pub(crate) use service::ServiceAdapter;
 pub use service::{Supervisor, Upgraded, upgrade};
 
 use std::num::NonZeroUsize;
@@ -22,7 +23,6 @@ use crate::router::Router;
 use crate::server::tcp::TcpAcceptor;
 
 use accept::accept;
-use service::ServiceAdapter;
 
 #[cfg(feature = "native-tls")]
 use tls::NativeTlsAcceptor;
@@ -39,13 +39,14 @@ type IoStream = io::IoWithPermit<tls::RustlsStream>;
 #[cfg(not(any(feature = "native-tls", feature = "rustls-23")))]
 type IoStream = io::IoWithPermit<tcp::TcpStream>;
 
+pub(crate) const DEFAULT_MAX_REQUEST_SIZE: usize = 104_857_600; // 100 MB
+
 const DEFAULT_MAX_BUF_SIZE: usize = 16384; // 16 KB
 
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
 const DEFAULT_COHORT_SIZE: CohortSize = CohortSize::new(512);
 const DEFAULT_NUM_COHORTS: usize = DEFAULT_MAX_CONNECTIONS.div_ceil(DEFAULT_COHORT_SIZE.get());
 
-const DEFAULT_MAX_REQUEST_SIZE: usize = 104_857_600; // 100 MB
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_HTTP2_MAX_SEND_BUF_SIZE: usize = 65536; // 64 KB
 

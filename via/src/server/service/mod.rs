@@ -132,11 +132,9 @@ impl<App> Service<ServiceRequest> for ServiceAdapter<App> {
 }
 
 #[cfg(feature = "test-util")]
-impl ServiceAdapter<App> {
-    delegate::delegate! {
-        to self.service() {
-            pub(crate) fn app(&self) -> &Shared<App>;
-        }
+impl<App> ServiceAdapter<App> {
+    pub fn app(&self) -> &Shared<App> {
+        &self.service().app
     }
 }
 

@@ -1,11 +1,13 @@
 use cookie::{Cookie, CookieJar};
+use delegate::delegate;
 use http::header::{COOKIE, SET_COOKIE};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use hyper::service::Service;
 
 use super::client::Client;
 use super::request::TestBody;
-use crate::app::{ServiceAdapter, Via};
+use crate::app::Via;
+use crate::server::{DEFAULT_MAX_REQUEST_SIZE, ServiceAdapter};
 use crate::{Error, Response, Router, Shared};
 
 pub struct TestService<App> {
@@ -17,16 +19,23 @@ pub struct TestService<App> {
 /// Create a test client with the provided `router` for `app`.
 pub fn service<App>(router: Router<App>, app: App) -> TestService<App> {
     let via = Via::new(router, app);
-    let config = Default::default();
 
     TestService {
-        service: ServiceAdapter::new(config, via),
+        service: ServiceAdapter::new(DEFAULT_MAX_REQUEST_SIZE, via).unwrap(),
         headers: HeaderMap::new(),
         cookies: CookieJar::new(),
     }
 }
 
 impl<App> TestService<App> {
+    delegate! {
+        to self.service {
+            /// Returns reference to the shared application associated with
+            /// this client.
+            pub fn app(&self) -> &Shared<App>;
+        }
+    }
+
     /// Include the provided key-value pair in the headers of each request made
     /// with this client.
     pub fn header<K, V>(mut self, key: K, value: V) -> Result<Self, Error>
@@ -44,12 +53,6 @@ impl<App> TestService<App> {
         Ok(self)
     }
 
-    /// Returns reference to the shared application associated with this
-    /// client.
-    pub fn app(&self) -> &Shared<App> {
-        self.service.app()
-    }
-
     /// Returns a mutable reference to the cookies associated with this client.
     pub fn cookies_mut(&mut self) -> &mut CookieJar {
         &mut self.cookies
@@ -61,7 +64,7 @@ impl<App> Client<App> for TestService<App> {
         &mut self,
         mut request: http::Request<TestBody>,
     ) -> impl Future<Output = crate::Result> {
-        let service = self.service.clone().into_service();
+        let service = self.service.clone();
         let headers = self.headers.clone();
         let cookies = self.cookies.iter().fold(String::new(), |value, cookie| {
             value + "; " + &cookie.to_string()

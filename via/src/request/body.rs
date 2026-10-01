@@ -9,7 +9,7 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 use tokio::task::coop;
 
-use crate::error::Error;
+use crate::{Error, err};
 
 #[cfg(feature = "test-util")]
 use crate::test::TestBody;
@@ -27,6 +27,7 @@ pub struct Coalesce {
 }
 
 pub struct RequestBody {
+    poll_progress: usize,
     remaining: usize,
 
     #[cfg(feature = "test-util")]
@@ -135,20 +136,24 @@ impl Coalesce {
 impl Future for Coalesce {
     type Output = Result<Aggregate, Error>;
 
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
         loop {
             let coop = ready!(coop::poll_proceed(context));
 
-            match Pin::new(&mut self.body).poll_frame(context)? {
-                Poll::Ready(Some(frame)) => {
+            match Pin::new(&mut this.body).poll_frame(context) {
+                Poll::Ready(Some(Ok(frame))) => {
                     coop.made_progress();
-
                     if let Ok(data) = frame.into_data() {
-                        self.body.frames_mut()?.push(data);
+                        this.body.frames_mut()?.push(data);
                     }
                 }
+                Poll::Ready(Some(Err(error))) => {
+                    return Poll::Ready(Err(error));
+                }
                 Poll::Ready(None) => {
-                    return Poll::Ready(self.body.finish(None));
+                    return Poll::Ready(this.body.finish(None));
                 }
                 Poll::Pending => {
                     return Poll::Pending;
@@ -180,6 +185,7 @@ impl RequestBody {
     #[cfg(not(feature = "test-util"))]
     pub(crate) fn new(remaining: usize, body: hyper::body::Incoming, frames: Vec<Bytes>) -> Self {
         Self {
+            poll_progress: 3,
             remaining,
             body,
             frames: Some(frames),
@@ -215,12 +221,6 @@ impl RequestBody {
     fn frames_mut(&mut self) -> Result<&mut Vec<Bytes>, Error> {
         self.frames.as_mut().ok_or_else(already_read)
     }
-
-    fn has_capacity(&self) -> bool {
-        self.body.size_hint().exact().is_none_or(|upper| {
-            u64::try_from(self.remaining).is_ok_and(|remaining| remaining >= upper)
-        })
-    }
 }
 
 impl Body for RequestBody {
@@ -229,30 +229,57 @@ impl Body for RequestBody {
 
     fn poll_frame(
         mut self: Pin<&mut Self>,
-        context: &mut Context,
+        context: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        if self.remaining == 0 || !self.has_capacity() {
-            return Poll::Ready(Some(Err(Error::payload_too_large())));
-        }
+        for _ in 0..self.poll_progress.min(2) {
+            let coop = ready!(coop::poll_proceed(context));
 
-        let Some(frame) = ready!(Pin::new(&mut self.body).poll_frame(context)?) else {
-            return Poll::Ready(None);
-        };
+            return match Pin::new(&mut self.body).poll_frame(context) {
+                Poll::Ready(Some(Ok(frame))) => {
+                    if let Some(data) = frame.data_ref() {
+                        let len = data.len();
 
-        if let Some(data) = frame.data_ref() {
-            let Some(remaining) = self.remaining.checked_sub(data.remaining()) else {
-                self.remaining = 0;
-                return Poll::Ready(Some(Err(Error::payload_too_large())));
+                        if len == 0 {
+                            self.poll_progress -= 1;
+                            coop.made_progress();
+                            continue;
+                        } else if let Some(remaining) = self.remaining.checked_sub(len) {
+                            self.poll_progress = 3;
+                            self.remaining = remaining;
+                            coop.made_progress();
+                        } else {
+                            self.poll_progress = 0;
+                            self.remaining = 0;
+                            let error = err!(413, "request body exceeds the maximum length");
+                            return Poll::Ready(Some(Err(error)));
+                        }
+                    } else {
+                        self.poll_progress = 3;
+                        coop.made_progress();
+                    }
+
+                    Poll::Ready(Some(Ok(frame)))
+                }
+                Poll::Ready(Some(Err(error))) => {
+                    self.remaining = 0;
+                    Poll::Ready(Some(Err(error.into())))
+                }
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
             };
-
-            self.remaining = remaining;
         }
 
-        Poll::Ready(Some(Ok(frame)))
+        if self.poll_progress > 0 {
+            context.waker().wake_by_ref();
+            Poll::Pending
+        } else {
+            let error = err!(400, "progress deadline exceeded while reading request body");
+            Poll::Ready(Some(Err(error)))
+        }
     }
 
     fn is_end_stream(&self) -> bool {
-        self.remaining == 0 || !self.has_capacity() || self.body.is_end_stream()
+        self.body.is_end_stream()
     }
 
     fn size_hint(&self) -> SizeHint {
@@ -315,35 +342,39 @@ impl_timeout_after!(WithTrailers);
 impl Future for WithTrailers {
     type Output = Result<Aggregate, Error>;
 
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, context: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
         loop {
             let coop = ready!(coop::poll_proceed(context));
 
-            match Pin::new(&mut self.body).poll_frame(context)? {
-                Poll::Ready(Some(frame)) => {
-                    match frame.into_data() {
-                        Ok(data) => {
-                            self.body.frames_mut()?.push(data);
-                        }
-                        Err(frame) => {
-                            let Ok(trailers) = frame.into_trailers() else {
-                                let error = unknown_frame_type();
-                                return Poll::Ready(Err(error));
-                            };
-
-                            if let Some(existing) = self.trailers.as_mut() {
-                                existing.extend(trailers);
-                            } else {
-                                self.trailers = Some(trailers);
-                            }
-                        }
+            match Pin::new(&mut this.body).poll_frame(context) {
+                Poll::Ready(Some(Ok(frame))) => match frame.into_data() {
+                    Ok(data) => {
+                        this.body.frames_mut()?.push(data);
+                        coop.made_progress();
                     }
+                    Err(frame) => {
+                        let Ok(trailers) = frame.into_trailers() else {
+                            let error = unknown_frame_type();
+                            return Poll::Ready(Err(error));
+                        };
 
-                    coop.made_progress();
+                        if let Some(existing) = this.trailers.as_mut() {
+                            existing.extend(trailers);
+                        } else {
+                            this.trailers = Some(trailers);
+                        }
+
+                        coop.made_progress();
+                    }
+                },
+                Poll::Ready(Some(Err(error))) => {
+                    return Poll::Ready(Err(error));
                 }
                 Poll::Ready(None) => {
-                    let trailers = self.trailers.take();
-                    return Poll::Ready(self.body.finish(trailers));
+                    let trailers = this.trailers.take();
+                    return Poll::Ready(this.body.finish(trailers));
                 }
                 Poll::Pending => {
                     return Poll::Pending;

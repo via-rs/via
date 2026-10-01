@@ -67,7 +67,7 @@ where
 
     // Start accepting incoming connections.
     loop {
-        let waiter = cancellation.clone();
+        let cancellation = cancellation.clone();
 
         // Either accept the next connection from the TCP listener or receive a
         // shutdown signal.
@@ -87,10 +87,12 @@ where
                     // being queued by the OS.
                     if let Ok(permit) = semaphore.clone().try_acquire_owned() {
                         let handshake = protocol.accept(stream, permit);
+                        let adapter = service.clone();
+                        let waiter = cancellation.clone();
 
                         connections.spawn(catch_unwind(
-                            handle_conn(handshake, service.clone(), waiter),
-                            cancellation.clone().into(),
+                            handle_conn(handshake, adapter, waiter),
+                            cancellation.into(),
                         ));
 
                         if connections.size() >= service.config().cohort_size() {
@@ -137,7 +139,7 @@ where
             },
 
             // Shutdown request received.
-            did_panic = waiter.wait() => {
+            did_panic = cancellation.wait() => {
                 if did_panic {
                     return ExitCode::FAILURE;
                 } else {

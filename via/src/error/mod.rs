@@ -42,7 +42,10 @@ enum ErrorSource {
     AllowMethod(Box<MethodNotAllowed>),
     Message(String),
     Other(BoxError),
+
+    #[allow(dead_code)]
     Hyper(hyper::Error),
+
     Json(serde_json::Error),
 
     #[allow(dead_code)]
@@ -180,6 +183,7 @@ impl Error {
 }
 
 impl Error {
+    #[cfg(not(feature = "test-util"))]
     pub(crate) fn from_hyper(error: hyper::Error) -> Self {
         Self {
             source: ErrorSource::Hyper(error),

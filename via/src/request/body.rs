@@ -261,6 +261,12 @@ impl Body for RequestBody {
 
                     Poll::Ready(Some(Ok(frame)))
                 }
+                #[cfg(feature = "test-util")]
+                Poll::Ready(Some(Err(error))) => {
+                    self.remaining = 0;
+                    Poll::Ready(Some(Err(error)))
+                }
+                #[cfg(not(feature = "test-util"))]
                 Poll::Ready(Some(Err(error))) => {
                     self.remaining = 0;
                     Poll::Ready(Some(Err(Error::from_hyper(error))))

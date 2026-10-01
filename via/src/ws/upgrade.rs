@@ -2,6 +2,7 @@ use http::StatusCode;
 use http::header::{self as h, HeaderMap};
 use std::future::Future;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::task::coop::unconstrained;
 
 #[cfg(feature = "tokio-tungstenite")]
@@ -18,7 +19,7 @@ use super::util::{Base64EncodedDigest, sha1};
 use super::{Channel, Request};
 use crate::guard::bytes::{CaseSensitive, Contains, Tag, Trim};
 use crate::guard::{Header, Predicate, header};
-use crate::server::{IoStream, UpgradeSupervisor, catch_unwind};
+use crate::server::{Upgraded, upgrade};
 use crate::ws::error::UpgradeError;
 use crate::{BoxFuture, Error, Middleware, Next, Response, ResultExt};
 
@@ -51,70 +52,44 @@ fn configure<T>(listener: &mut Arc<Listener<T>>) -> &mut WsConfig {
 }
 
 #[cfg(feature = "tokio-tungstenite")]
-async fn handshake<App>(
-    request: &mut Request<App>,
-    config: &WsConfig,
-) -> Result<WebSocketStream<IoStream>, Error> {
-    let on_upgrade = request.on_upgrade.take().expect("already upgraded.");
-    let config = WebSocketConfig::default()
-        .accept_unmasked_frames(false)
-        .read_buffer_size(config.buffer_size)
-        .write_buffer_size(config.buffer_size)
-        .max_frame_size(config.max_frame_size)
-        .max_message_size(config.max_message_size);
+async fn connect(
+    upgraded: Upgraded,
+    config: WsConfig,
+) -> Result<WebSocketStream<impl AsyncRead + AsyncWrite + Send + Unpin>, Error> {
+    let parts = upgraded.downcast()?;
+    let stream = WebSocketStream::from_partially_read(
+        parts.io,
+        parts.read_buf.into(),
+        Role::Server,
+        Some(
+            WebSocketConfig::default()
+                .accept_unmasked_frames(false)
+                .read_buffer_size(config.buffer_size)
+                .write_buffer_size(config.buffer_size)
+                .max_frame_size(config.max_frame_size)
+                .max_message_size(config.max_message_size),
+        ),
+    );
 
-    let upgraded = on_upgrade.await?;
-    let Ok(parts) = upgraded.downcast() else {
-        return Err(UpgradeError::Other.into());
-    };
-
-    Ok(WebSocketStream::from_raw_socket(parts.io, Role::Server, Some(config)).await)
+    Ok(stream.await)
 }
 
-#[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
-async fn handshake<App>(
-    request: &mut Request<App>,
-    config: &WsConfig,
-) -> Result<WebSocketStream<IoStream>, Error> {
+#[cfg(feature = "tokio-websockets")]
+fn connect(
+    upgraded: Upgraded,
+    config: WsConfig,
+) -> Result<WebSocketStream<impl AsyncRead + AsyncWrite + Send + Unpin>, Error> {
     use tokio_websockets::{Config, Limits, server::Builder};
 
-    let on_upgrade = request.on_upgrade.take().expect("already upgraded.");
     let limits = Limits::default().max_payload_len(config.max_message_size);
     let config = Config::default()
         .frame_size(config.max_frame_size.unwrap_or(DEFAULT_FRAME_SIZE))
         .flush_threshold(config.buffer_size);
 
-    let upgraded = on_upgrade.await?;
-    let Ok(parts) = upgraded.downcast() else {
-        return Err(UpgradeError::Other.into());
-    };
-
-    Ok(Builder::new().config(config).limits(limits).serve(parts.io))
-}
-
-async fn reactor<T, App, Await>(mut request: Request<App>, listener: Arc<Listener<T>>)
-where
-    T: Fn(Channel, Request<App>) -> Await + Send + 'static,
-    Listener<T>: Send + Sync,
-    App: Send + Sync + 'static,
-    Await: Future<Output = super::Result> + Send + 'static,
-{
-    match unconstrained(handshake(&mut request, &listener.config)).await {
-        Ok(stream) => {
-            if let Some(handle) = request
-                .extensions()
-                .get::<UpgradeSupervisor>()
-                .and_then(|supervisor| supervisor.to_panic_handle())
-            {
-                catch_unwind(RunTask::new(listener, request, stream), handle).await;
-            } else {
-                log!(error(ws = 0), "{}", &UpgradeError::Other);
-            }
-        }
-        Err(error) => {
-            log!(error(ws = 0), "{}", &error);
-        }
-    }
+    Ok(Builder::new()
+        .limits(limits)
+        .config(config)
+        .serve(upgraded.downcast()?.io))
 }
 
 impl<T> Ws<T> {
@@ -187,7 +162,7 @@ where
     App: Send + Sync + 'static,
     Await: Future<Output = super::Result> + Send + 'static,
 {
-    fn call(&self, request: crate::Request<App>, _: Next<App>) -> BoxFuture {
+    fn call(&self, mut request: crate::Request<App>, _: Next<App>) -> BoxFuture {
         let listener = Arc::clone(&self.listener);
         let is_valid = self.validate(request.headers());
 
@@ -200,7 +175,33 @@ where
                 .header(h::UPGRADE, "websocket")
                 .finish();
 
-            tokio::spawn(reactor(Request::new(request), listener));
+            tokio::spawn(async {
+                match upgrade(&mut request).await {
+                    Ok(supervisor) => {
+                        let handshake = supervisor.handshake(async |upgraded| {
+                            #[cfg(feature = "tokio-tungstenite")]
+                            let stream = connect(upgraded, listener.config).await?;
+
+                            #[cfg(feature = "tokio-websockets")]
+                            let stream = connect(upgraded, listener.config)?;
+
+                            Ok(RunTask::new(listener, Request::new(request), stream))
+                        });
+
+                        match unconstrained(handshake).await {
+                            Ok(reactor) => {
+                                reactor.await;
+                            }
+                            Err(error) => {
+                                log!(error(ws = 1), "{}", &error);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        log!(error(ws = 0), "{}", &error);
+                    }
+                }
+            });
 
             result
         })

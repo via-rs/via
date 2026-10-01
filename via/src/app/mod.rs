@@ -1,7 +1,5 @@
-mod service;
 mod shared;
 
-pub(crate) use service::{ConnectionService, ServiceAdapter};
 pub use shared::Shared;
 
 use crate::router::Router;
@@ -21,11 +19,8 @@ impl<App> Via<App> {
 }
 
 impl<App> Via<App> {
-    fn app(&self) -> &Shared<App> {
-        &self.app
-    }
-
-    fn router(&self) -> &Router<App> {
-        &self.router
+    #[inline]
+    pub(crate) fn into_parts(self) -> (Router<App>, Shared<App>) {
+        (self.router, self.app)
     }
 }

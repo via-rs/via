@@ -9,7 +9,7 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 use super::ServerConfig;
-use super::cancel::catch_unwind;
+use super::cancel::{catch_unwind, wait_for_ctrl_c};
 use super::io::IoWithPermit;
 use super::js::JoinSet;
 use super::service::ServiceAdapter;
@@ -26,23 +26,6 @@ where
     Accept: Acceptor,
     Accept::Stream: Send + Unpin + 'static,
 {
-    // Connection bookkeeping occurs in `JoinSet`. Connections that survive
-    // more than a single cohort generation "detach" (i.e websockets).
-    //
-    // The `JoinSet` layout is recycled when possible. However, an entire cohort
-    // can detach if the server is experiencing an abnormally high-volume of
-    // concurrent connections.
-    //
-    // This allows the `JoinSet` to quarantine retired cohorts when necessary and
-    // temporally decouples an allocation from load.
-    //
-    // Users of Via that wish to retain the same pair of join set cohorts for the
-    // entire runtime of their program can determine the amount of time required
-    // to join enough connections to accommodate their users without detaching an
-    // entire cohort and use the metric to configure rate-limiting in the network
-    // tier (API gateway, reverse-proxy, load balancer, etc.).
-    let (recycler, mut connections) = JoinSet::new(config.max_num_cohorts());
-
     // Provides a "soft" upper-bound on concurrency.
     //
     // When there no more permits available, the connection is reset. For this
@@ -64,10 +47,28 @@ where
         Arc::new(Semaphore::new(max_connections - 1))
     };
 
+    // Notify waiters when the process receives a ctrl_c signal.
+    wait_for_ctrl_c(adapter.cancellation().clone());
+
+    // Connection bookkeeping occurs in `JoinSet`. Connections that survive
+    // more than a single cohort generation "detach" (i.e websockets).
+    //
+    // The `JoinSet` layout is recycled when possible. However, an entire cohort
+    // can detach if the server is experiencing an abnormally high-volume of
+    // concurrent connections.
+    //
+    // This allows the `JoinSet` to quarantine retired cohorts when necessary and
+    // temporally decouples an allocation from load.
+    //
+    // Users of Via that wish to retain the same pair of join set cohorts for the
+    // entire runtime of their program can determine the amount of time required
+    // to join enough connections to accommodate their users without detaching an
+    // entire cohort and use the metric to configure rate-limiting in the network
+    // tier (API gateway, reverse-proxy, load balancer, etc.).
+    let (recycler, mut connections) = JoinSet::new(config.max_num_cohorts());
+
     // Start accepting incoming connections.
     loop {
-        let waiter = adapter.cancellation().clone();
-
         // Either accept the next connection from the TCP listener or receive a
         // shutdown signal.
         tokio::select! {
@@ -87,6 +88,7 @@ where
                     if let Ok(permit) = semaphore.clone().try_acquire_owned() {
                         let handshake = acceptor.accept(stream, permit);
                         let service = adapter.clone();
+                        let waiter = adapter.cancellation().clone();
 
                         connections.spawn(catch_unwind(
                             handle_conn(handshake, service, config.clone()),
@@ -138,7 +140,7 @@ where
             },
 
             // Shutdown request received.
-            did_panic = waiter.wait() => {
+            did_panic = adapter.cancellation().wait() => {
                 if did_panic {
                     return ExitCode::FAILURE;
                 } else {

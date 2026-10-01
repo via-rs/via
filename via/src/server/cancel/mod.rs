@@ -61,6 +61,24 @@ struct Notified<'a> {
     state: &'a CancellationState,
 }
 
+#[inline(always)]
+pub(super) fn wait_for_ctrl_c(cancellation: CancellationToken) {
+    let ctrl_c = Box::pin(async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            eprintln!("unable to register the 'ctrl-c' signal.");
+        }
+    });
+
+    tokio::spawn(async move {
+        ctrl_c.await;
+
+        let token = cancellation.token();
+
+        token.state.cancel();
+        token.notify.notify_waiters();
+    });
+}
+
 #[cfg_attr(not(debug_assertions), allow(unused_variables))]
 fn on_ready(result: Result<(), hyper::Error>) {
     #[cfg(debug_assertions)]
@@ -71,32 +89,12 @@ fn on_ready(result: Result<(), hyper::Error>) {
 
 impl CancellationToken {
     pub(super) fn new() -> Self {
-        let cancellation = Self {
+        Self {
             value: Arc::new(NotifyOnce {
                 notify: Notify::new(),
                 state: CancellationState::new(),
             }),
-        };
-
-        tokio::spawn({
-            let cancellation = cancellation.clone();
-            let ctrl_c = Box::pin(async {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    eprintln!("unable to register the 'ctrl-c' signal.");
-                }
-            });
-
-            async move {
-                ctrl_c.await;
-
-                let token = cancellation.token();
-
-                token.state.cancel();
-                token.notify.notify_waiters();
-            }
-        });
-
-        cancellation
+        }
     }
 
     pub(super) async fn wait(&self) -> bool {

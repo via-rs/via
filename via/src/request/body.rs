@@ -176,6 +176,7 @@ impl RequestBody {
     #[cfg(feature = "test-util")]
     pub(crate) fn new(remaining: usize, body: impl Into<TestBody>, frames: Vec<Bytes>) -> Self {
         Self {
+            poll_progress: 3,
             remaining,
             body: body.into(),
             frames: Some(frames),

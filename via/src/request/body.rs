@@ -263,7 +263,7 @@ impl Body for RequestBody {
                 }
                 Poll::Ready(Some(Err(error))) => {
                     self.remaining = 0;
-                    Poll::Ready(Some(Err(Error::from_source(Box::new(error)))))
+                    Poll::Ready(Some(Err(Error::from_hyper(error))))
                 }
                 Poll::Ready(None) => Poll::Ready(None),
                 Poll::Pending => Poll::Pending,

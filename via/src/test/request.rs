@@ -169,9 +169,7 @@ impl Body for TestBody {
         mut self: Pin<&mut Self>,
         context: &mut Context,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        Pin::new(&mut self.body)
-            .poll_frame(context)
-            .map_err(Error::from_source)
+        Pin::new(&mut self.body).poll_frame(context)
     }
 
     fn is_end_stream(&self) -> bool {

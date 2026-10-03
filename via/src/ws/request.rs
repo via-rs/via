@@ -26,17 +26,28 @@ impl<App> Request<App> {
             /// Returns a reference to the associated extensions.
             pub fn extensions(&self) -> &Extensions;
 
+            /// Returns a reference to the request's URI.
+            pub fn uri(&self) -> &Uri;
+
             /// Returns reference to the second argument passed to [`Server::new`].
+            ///
             /// [`Server::new`]: crate::Server::new
             pub fn app(&self) -> &App;
+
+            /// Returns an owned, reference-counting pointer to the second argument
+            /// passed to [`Server::new`].
+            ///
+            /// [`Server::new`]: crate::Server::new
+            pub fn app_owned(&self) -> Shared<App>;
         }
     }
 
     /// Returns a convenient wrapper around an optional reference to
     /// the path parameter in the request's uri with the provided `name`.
     pub fn param<'b>(&self, name: &'b str) -> PathParam<'_, 'b> {
-        let source = self.envelope().path();
-        let param = params::get(self.envelope().params(), name);
+        let envelope = self.envelope();
+        let source = envelope.uri().path();
+        let param = params::get(envelope.params(), name);
 
         PathParam::new(source, param, name)
     }
@@ -45,7 +56,8 @@ impl<App> Request<App> {
     where
         T: TryFrom<QueryParams<'a>, Error = Error>,
     {
-        T::try_from(QueryParams::new(self.envelope().query()))
+        let query = self.envelope().uri().query();
+        T::try_from(QueryParams::new(query))
     }
 
     pub fn params<'a, T>(&'a self) -> crate::Result<T>
@@ -53,9 +65,11 @@ impl<App> Request<App> {
         T: TryFrom<PathParams<'a>>,
         Error: From<T::Error>,
     {
+        let envelope = self.envelope();
+
         Ok(T::try_from(PathParams::new(
-            self.envelope().path(),
-            self.envelope().params(),
+            envelope.uri().path(),
+            envelope.params(),
         ))?)
     }
 
@@ -86,11 +100,8 @@ impl<App> Clone for Request<App> {
 }
 
 impl<App> Envelope<App> {
-    delegate! {
-        to self.uri {
-            fn path(&self) -> &str;
-            fn query(&self) -> Option<&str>;
-        }
+    fn app_owned(&self) -> Shared<App> {
+        self.app.clone()
     }
 
     fn extensions(&self) -> &Extensions {
@@ -99,6 +110,10 @@ impl<App> Envelope<App> {
 
     fn params(&self) -> &[via_router::PathParam] {
         &self.params
+    }
+
+    fn uri(&self) -> &Uri {
+        &self.uri
     }
 
     fn app(&self) -> &App {

@@ -50,14 +50,12 @@ fn query_pos_for_key(
 }
 
 impl<'a> PathParams<'a> {
-    pub fn get<'b>(&self, name: &'b str) -> PathParam<'a, 'b> {
-        PathParam::new(self.path, get(self.spans, name), name)
-    }
-}
-
-impl<'a> PathParams<'a> {
     pub(crate) fn new(path: &'a str, spans: &'a [via_router::PathParam]) -> Self {
         Self { path, spans }
+    }
+
+    pub fn get<'b>(&self, name: &'b str) -> PathParam<'a, 'b> {
+        PathParam::new(self.path, get(self.spans, name), name)
     }
 }
 

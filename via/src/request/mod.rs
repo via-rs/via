@@ -433,3 +433,10 @@ impl<App> Finalize for Request<App> {
         response.body(ResponseBody::boxed(body))
     }
 }
+
+#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
+impl<App> From<Request<App>> for crate::ws::Request<App> {
+    fn from(request: Request<App>) -> Self {
+        Self::new(request.envelope.parts, request.envelope.params, request.app)
+    }
+}

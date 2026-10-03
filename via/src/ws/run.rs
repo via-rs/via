@@ -257,7 +257,7 @@ where
         let (ours, theirs) = Channel::new();
         let request = self.request.clone();
         let facade = Facade {
-            listener: Box::pin((self.listener.handle)(theirs, request)),
+            listener: Box::pin(((&*self.listener).handle)(theirs, request)),
             state: IoState::Receive,
             // Safety:
             //

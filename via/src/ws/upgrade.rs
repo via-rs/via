@@ -185,7 +185,7 @@ where
                             #[cfg(feature = "tokio-websockets")]
                             let stream = connect(upgraded, listener.config)?;
 
-                            Ok(RunTask::new(listener, Request::new(request), stream))
+                            Ok(RunTask::new(listener, request.into(), stream))
                         });
 
                         match unconstrained(handshake).await {

@@ -107,7 +107,7 @@ pub async fn verify_session(mut request: Request, next: Next) -> via::Result {
     // If `Ok(())`, the account is valid.
     let result = {
         // Acquire a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Execute the query.
         User::exists(&mut connection, me).await
@@ -180,6 +180,7 @@ fn require_secret(name: &str) -> via::Result<Zeroizing<String>> {
 }
 
 impl Unicorn {
+    #[inline(always)] // #[not(callable)]
     pub async fn new() -> via::Result<(usize, Self)> {
         // Get the suggested amount of parallelism from the environment.
         //
@@ -236,21 +237,12 @@ impl Unicorn {
         // by the PubSub redis client.
     }
 
-    pub async fn database(&self) -> via::Result<Connection<'_>> {
-        match self.database.get().await {
-            Ok(connection) => Ok(connection),
-
-            #[cfg(not(debug_assertions))]
-            Err(_) => Err(via::err!(500, "internal server error")),
-
-            #[cfg(debug_assertions)]
-            Err(error) => {
-                log!(error(database), "{}", &error);
-                Err(via::err!(500, "internal server error"))
-            }
-        }
+    #[inline]
+    pub fn database(&self) -> &Pool<Postgres> {
+        &self.database
     }
 
+    #[inline]
     pub fn pubsub(&self) -> &Pubsub<Redis<Id, Notification>> {
         &self.pubsub
     }

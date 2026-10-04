@@ -30,7 +30,7 @@ async fn index(request: Request, _: Next) -> via::Result {
     // Load a page of threads.
     let mut feed = {
         // Checkout a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Load the threads in the channel, paginated `by_keyset`.
         let threads = ThreadWithUser::query()
@@ -69,7 +69,7 @@ async fn show(request: Request, _: Next) -> via::Result {
 
     let thread = {
         // Acquire a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         Thread::find(&mut connection, id).await?
     };

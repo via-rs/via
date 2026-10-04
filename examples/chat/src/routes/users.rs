@@ -28,7 +28,7 @@ async fn index(request: Request, _: Next) -> via::Result {
     // Load a page of users, sorted alphabetically by their username.
     let users = {
         // Checkout a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Execute the query.
         User::query()
@@ -62,7 +62,7 @@ async fn create(request: Request, _: Next) -> via::Result {
     // Insert the user into the users table.
     let user = {
         // Acquire a database connection.
-        let mut connection = app.database().await?;
+        let mut connection = app.database().get().await?;
 
         // Perform the insert.
         User::create(&mut connection, new_user).await?
@@ -81,7 +81,7 @@ async fn show(request: Request, _: Next) -> via::Result {
     // Find the user with id = `:user-id`.
     let user = {
         // Acquire a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Execute the query.
         User::query()
@@ -114,7 +114,7 @@ async fn update(request: Request, _: Next) -> via::Result {
     // Apply the change set to the active user.
     let user = {
         // Acquire a database connection.
-        let mut connection = app.database().await?;
+        let mut connection = app.database().get().await?;
 
         // Perform the update.
         User::update(&mut connection, id, changes).await?
@@ -137,7 +137,7 @@ async fn destroy(request: Request, _: Next) -> via::Result {
         deny!(403, "only the account owner can delete a user");
     } else {
         // Acquire a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Perform the delete.
         User::destroy(&mut connection, id).await?;

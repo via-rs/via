@@ -148,6 +148,7 @@ where
                         if let Some(inbound) = next {
                             this.rendezvous.try_send(inbound)?; // If send fails, disconnect.
                             log!(info(ws = i), "inbound message forwarded to listener.");
+                            indent!(i);
                         }
                     }
 
@@ -169,7 +170,6 @@ where
                         }
                     } else if this.rendezvous.has_outbound() {
                         this.state = IoState::Send;
-                        indent!(i);
                     } else {
                         return Poll::Pending;
                     }

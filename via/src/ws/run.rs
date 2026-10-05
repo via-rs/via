@@ -15,6 +15,8 @@ use tokio_tungstenite::WebSocketStream;
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
+use crate::ws::error::integrity_check_failed;
+
 use super::error::{into_break, is_restart, rescue};
 use super::stream::WebSocketStreamMut;
 use super::{Channel, Request, upgrade::Listener};
@@ -205,9 +207,7 @@ where
                                 if let Some(op) = restart {
                                     return Poll::Ready(Err(op));
                                 } else {
-                                    this.state = IoState::Receive;
-                                    cx.waker().wake_by_ref();
-                                    return Poll::Pending;
+                                    return Poll::Ready(Err(integrity_check_failed()));
                                 }
                             }
                         }

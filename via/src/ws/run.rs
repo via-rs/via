@@ -201,12 +201,14 @@ where
                                         rescue_if!(restart.is_none(), error);
                                     }
                                 }
-                            } else if let Some(op) = restart {
-                                return Poll::Ready(Err(op));
                             } else {
-                                this.state = IoState::Receive;
-                                cx.waker().wake_by_ref();
-                                return Poll::Pending;
+                                if let Some(op) = restart {
+                                    return Poll::Ready(Err(op));
+                                } else {
+                                    this.state = IoState::Receive;
+                                    cx.waker().wake_by_ref();
+                                    return Poll::Pending;
+                                }
                             }
                         }
                         Poll::Ready(Err(error)) => {

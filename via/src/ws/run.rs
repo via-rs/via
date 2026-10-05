@@ -155,9 +155,13 @@ where
                     if let Poll::Ready(result) = this.listener.as_mut().poll(cx) {
                         match result {
                             Err(error) if is_restart(&error) => {
-                                this.state = IoState::Send;
-                                restart = Some(error);
-                                // Attempt to drain the channel before restart.
+                                if this.rendezvous.has_outbound() {
+                                    this.state = IoState::Send;
+                                    restart = Some(error);
+                                    // Attempt to drain the channel before restart.
+                                } else {
+                                    return Poll::Ready(Err(error));
+                                }
                             }
                             output => {
                                 return Poll::Ready(output);
@@ -201,7 +205,8 @@ where
                                 return Poll::Ready(Err(op));
                             } else {
                                 this.state = IoState::Receive;
-                                log!(info(ws = i), "waiting for listener progress.");
+                                cx.waker().wake_by_ref();
+                                return Poll::Pending;
                             }
                         }
                         Poll::Ready(Err(error)) => {

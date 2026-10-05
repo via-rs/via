@@ -7,18 +7,21 @@ pub use tokio_websockets::{CloseCode, Message};
 use futures_channel::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use super::error::already_closed;
 use super::util::poll_immediate_no_wake;
 
 pub struct Channel {
+    full: Arc<AtomicBool>,
     tx: Sender<Message>,
     rx: Receiver<Message>,
 }
 
 struct Send<'a> {
-    sender: &'a mut Sender<Message>,
+    channel: &'a mut Channel,
     message: Option<Message>,
 }
 
@@ -44,7 +47,7 @@ fn poll_ready(tx: &mut Sender<Message>, cx: &mut Context) -> Poll<super::Result>
 impl Channel {
     pub fn send(&mut self, message: impl Into<Message>) -> impl Future<Output = super::Result> {
         Send {
-            sender: &mut self.tx,
+            channel: self,
             message: Some(message.into()),
         }
     }
@@ -61,7 +64,23 @@ impl Channel {
         let (tx1, rx2) = mpsc::channel(0);
         let (tx2, rx1) = mpsc::channel(0);
 
-        (Self { tx: tx1, rx: rx1 }, Self { tx: tx2, rx: rx2 })
+        let ours = Self {
+            full: Arc::new(AtomicBool::new(false)),
+            tx: tx1,
+            rx: rx1,
+        };
+
+        let theirs = Self {
+            full: Arc::clone(&ours.full),
+            tx: tx2,
+            rx: rx2,
+        };
+
+        (ours, theirs)
+    }
+
+    pub(super) fn has_outbound(&self) -> bool {
+        self.full.swap(false, Ordering::Relaxed)
     }
 
     /// Check the capacity of the channel without registering a wake.
@@ -113,11 +132,16 @@ impl Future for Send<'_> {
 
         // Send in the body of a receive loop requires back pressure. The
         // following readiness check registers a wake if the channel is full.
-        if poll_ready(this.sender, cx)?.is_ready() {
+        if poll_ready(&mut this.channel.tx, cx)?.is_ready() {
             if let Some(message) = this.message.take() {
+                let channel = &mut this.channel;
+
                 // `poll_ready` guarantees `TrySendError::Full` is unreachable.
-                match this.sender.try_send(message) {
-                    Ok(_) => Poll::Ready(Ok(())),
+                match channel.tx.try_send(message) {
+                    Ok(_) => {
+                        channel.full.store(true, Ordering::Relaxed);
+                        Poll::Ready(Ok(()))
+                    }
                     Err(_) => {
                         std::hint::cold_path();
                         Poll::Ready(Err(already_closed()))

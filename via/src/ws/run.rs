@@ -2,7 +2,7 @@ use futures_core::Stream;
 use futures_sink::Sink;
 use std::future::Future;
 use std::marker::PhantomPinned;
-use std::mem::{self, ManuallyDrop};
+use std::mem::ManuallyDrop;
 use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use tokio_websockets::WebSocketStream;
 
 use super::error::{into_break, is_restart, rescue};
 use super::stream::WebSocketStreamMut;
-use super::{Channel, Message, Request, upgrade::Listener};
+use super::{Channel, Request, upgrade::Listener};
 
 pub struct RunTask<T, Io, App> {
     run: Pin<Box<Run<T, Io, App>>>,
@@ -25,7 +25,7 @@ pub struct RunTask<T, Io, App> {
 
 enum IoState {
     Receive,
-    Send(Message),
+    Send,
     Flush,
 }
 
@@ -132,83 +132,80 @@ where
                     // returning to `IoState::Receive`.
                     if this.rendezvous.has_capacity()? {
                         // Attempt to pull the next message out of the stream.
-                        match Pin::new(&mut this.stream).poll_next(cx) {
-                            Poll::Ready(Some(Ok(next))) => {
-                                // If send fails, the channel is disconnected.
-                                this.rendezvous.try_send(next)?;
-                                log!(info(ws = i), "inbound message forwarded to listener.");
-                            }
-                            Poll::Ready(Some(Err(error))) => {
-                                return Poll::Ready(Err(rescue(error)));
-                            }
+                        let next = match Pin::new(&mut this.stream).poll_next(cx) {
+                            Poll::Ready(Some(Ok(next))) => Some(next),
+                            Poll::Pending => None,
+
                             // The stream has ended. The web socket is closed.
                             Poll::Ready(None) => {
                                 return Poll::Ready(Ok(()));
                             }
-                            // The stream is empty. Poll the listener.
-                            Poll::Pending => {}
-                        }
-                    } else {
-                        log!(info(ws = i), "listener is busy.");
-                    }
-
-                    // The listener will probably register an additional wake.
-                    if let Poll::Ready(result) = this.listener.as_mut().poll(cx) {
-                        if let Err(error) = result {
-                            if is_restart(&error) {
-                                // Attempt to drain the channel before restart.
-                                restart = Some(error);
-                            } else {
-                                return Poll::Ready(Err(error));
+                            Poll::Ready(Some(Err(error))) => {
+                                return Poll::Ready(Err(rescue(error)));
                             }
-                        } else {
-                            return Poll::Ready(Ok(()));
+                        };
+
+                        if let Some(inbound) = next {
+                            this.rendezvous.try_send(inbound)?; // If send fails, disconnect.
+                            log!(info(ws = i), "inbound message forwarded to listener.");
                         }
                     }
 
-                    // A try_recv error is a disconnect.
-                    if let Some(outbound) = this.rendezvous.try_recv()? {
-                        this.state = IoState::Send(outbound);
-                        log!(info(ws = i), "outbound message received from listener.");
+                    // Polling the listener should guarantee an organic wake.
+                    if let Poll::Ready(result) = this.listener.as_mut().poll(cx) {
+                        match result {
+                            Err(error) if is_restart(&error) => {
+                                this.state = IoState::Send;
+                                restart = Some(error);
+                                // Attempt to drain the channel before restart.
+                            }
+                            output => {
+                                return Poll::Ready(output);
+                            }
+                        }
+                    } else if this.rendezvous.has_outbound() {
+                        this.state = IoState::Send;
                         indent!(i);
-                    } else if let Some(op) = restart {
-                        return Poll::Ready(Err(op));
                     } else {
-                        log!(info(ws = i), "waiting for something interesting to happen.");
                         return Poll::Pending;
                     }
                 }
 
-                ref mut state @ IoState::Send(_) => {
+                IoState::Send => {
                     log!(info(ws = i), "state = send");
                     indent!(i);
 
-                    let IoState::Send(message) = mem::replace(state, IoState::Flush) else {
-                        // We are in an invalid state. End the session.
-                        return Poll::Ready(Ok(()));
-                    };
-
                     match Pin::new(&mut this.stream).poll_ready(cx) {
-                        Poll::Ready(Ok(_)) => {
-                            if let Err(error) = Pin::new(&mut this.stream).start_send(message) {
-                                rescue_if!(restart.is_none(), error);
-                            } else {
-                                log!(info(ws = i), "outbound message accepted by i/o.");
-                                indent!(i);
-                            }
-                        }
-                        Poll::Ready(Err(error)) => {
-                            rescue_if!(restart.is_none(), error);
-                        }
                         Poll::Pending => {
-                            // If restart was requested, disconnect instead of buffering.
+                            // If restart was requested, disconnect.
                             if let Some(op) = restart.map(into_break) {
                                 return Poll::Ready(Err(op));
                             } else {
                                 log!(info(ws = i), "waiting for i/o to become available.");
-                                this.state = IoState::Send(message);
                                 return Poll::Pending;
                             }
+                        }
+                        Poll::Ready(Ok(_)) => {
+                            if let Some(outbound) = this.rendezvous.try_recv()? {
+                                match Pin::new(&mut this.stream).start_send(outbound) {
+                                    Ok(_) => {
+                                        this.state = IoState::Flush;
+                                        log!(info(ws = i), "outbound message accepted.");
+                                        indent!(i);
+                                    }
+                                    Err(error) => {
+                                        rescue_if!(restart.is_none(), error);
+                                    }
+                                }
+                            } else if let Some(op) = restart {
+                                return Poll::Ready(Err(op));
+                            } else {
+                                this.state = IoState::Receive;
+                                log!(info(ws = i), "waiting for listener progress.");
+                            }
+                        }
+                        Poll::Ready(Err(error)) => {
+                            rescue_if!(restart.is_none(), error);
                         }
                     }
                 }

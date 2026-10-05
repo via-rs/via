@@ -1,6 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::ops::ControlFlow;
 
+use crate::err;
 use crate::error::{Catch, Error};
 use crate::guard::error::InvalidHeader;
 
@@ -23,6 +24,10 @@ pub enum UpgradeError {
 
 pub fn already_closed() -> Catch {
     ControlFlow::Break(Error::from_source(Box::new(WebSocketError::AlreadyClosed)))
+}
+
+pub fn integrity_check_failed() -> Catch {
+    ControlFlow::Break(err!(500, "integrity check failed."))
 }
 
 pub fn into_break(catch: Catch) -> Catch {

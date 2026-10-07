@@ -43,7 +43,7 @@ pub mod test {
             let confirm_password = DROWSSAP.to_owned().into();
 
             User::create(
-                &mut client.app().database().await?,
+                &mut client.app().database().get().await?,
                 NewUser::new(email, username, password, confirm_password),
             )
             .await?
@@ -81,7 +81,7 @@ pub mod test {
     pub async fn logout(client: &mut Client, user: User) -> via::Result<()> {
         let affected_rows = {
             // Checkout a database connection.
-            let mut connection = client.app().database().await?;
+            let mut connection = client.app().database().get().await?;
 
             // Destroy the user.
             User::destroy(&mut connection, *user.id()).await?

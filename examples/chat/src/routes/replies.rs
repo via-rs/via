@@ -39,7 +39,7 @@ async fn index(request: Request, _: Next) -> via::Result {
     // Load the replies to the thread with `thread_id`.
     let mut feed = {
         // Acquire a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Load the replies to the thread, paginated by `keyset_args`.
         let threads = ThreadWithUser::query()
@@ -78,7 +78,7 @@ async fn show(request: Request, _: Next) -> via::Result {
     // Find the reply with an id = :reply-id.
     let reply = {
         // Acquire a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Execute the query.
         Thread::find(&mut connection, id).await?

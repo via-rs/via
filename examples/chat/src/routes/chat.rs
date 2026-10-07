@@ -27,10 +27,21 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
     // An authenticated user is required.
     let me = request.me().or_break()?;
 
+    // Borrow `&App` for the duration of this listener. We own a copy of
+    // `request` and it is guaranteed a stable memory address by `Arc`.
+    //
+    // Therefore, we know that this borrow is valid for the lifetime of the
+    // future returned by this function. Also, checking out a database
+    // connection is not a callable function on `&App`.
+    //
+    // The risk of holding this borrow between awaits is considerably lower
+    // than any of the alternatives.
+    let app = request.app();
+
     // Load a user preview for the current user along with their channels.
     let user = {
         // Acquire a database connection.
-        let mut connection = request.app().database().await.or_break()?;
+        let mut connection = app.database().get().await.or_break()?;
 
         // Execute the query.
         User::with_subscriptions(&mut connection, me)
@@ -39,7 +50,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
     };
 
     // Get a subscription scoped to the current user.
-    let mut subscription = request.app().pubsub().subscribe(me);
+    let mut subscription = app.pubsub().subscribe(me);
 
     // Register interest in the channels that the user is subscribed to.
     user.subscriptions()
@@ -90,8 +101,8 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                 // Persist the client event and prepare to notify peers.
                 let notification = {
                     // Acquire a database connection.
-                    let mut connection = request.app().database().await.or_break()?;
-                    //                                                  ^^^^^^^^
+                    let mut connection = app.database().get().await.or_break()?;
+                    //                                              ^^^^^^^^
                     // If we are unable to connect to the database, end the
                     // session.
                     //

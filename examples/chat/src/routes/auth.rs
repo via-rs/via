@@ -38,7 +38,7 @@ pub async fn login(request: Request, _: Next) -> via::Result {
     // Find the user with the matching set of credentials.
     let user = {
         // Acquire a database connection.
-        let mut connection = app.database().await?;
+        let mut connection = app.database().get().await?;
 
         // Authenticate the user.
         User::authenticate(&mut connection, params).await?
@@ -95,7 +95,7 @@ pub async fn me(request: Request, _: Next) -> via::Result {
     // Find the active user.
     let user = {
         // Acquire a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Execute the query.
         User::query()

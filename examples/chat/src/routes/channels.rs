@@ -36,7 +36,7 @@ pub async fn authorization(mut request: Request, next: Next) -> via::Result {
     // Find the current user's subscription to the channel.
     let channel = {
         // Checkout a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // The user's subscription to the channel must exist and have the
         // minimum auth claims in order to proceed.
@@ -71,7 +71,7 @@ async fn index(request: Request, _: Next) -> via::Result {
     // Load the active user's subscriptions.
     let channels = {
         // Checkout a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         ChannelSubscription::query()
             .filter(subscription::by_user(me))
@@ -97,7 +97,7 @@ async fn create(request: Request, _: Next) -> via::Result {
     // Insert the channel and associate it to the active user.
     let channel = {
         // Acquire a database connection.
-        let mut connection = app.database().await?;
+        let mut connection = app.database().get().await?;
 
         // Insert the channel.
         Channel::create(&mut connection, me, new_channel).await?
@@ -125,7 +125,7 @@ async fn show(request: Request, _: Next) -> via::Result {
     // Load the associations for the channel in `subscription`.
     let threads = {
         // Acquire a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Get the id of the channel from `subscription`.
         let channel_id = subscription.channel_id();
@@ -170,7 +170,7 @@ async fn update(request: Request, _: Next) -> via::Result {
     // Apply the change set to the channel.
     let channel = {
         // Acquire a database connection.
-        let mut connection = app.database().await?;
+        let mut connection = app.database().get().await?;
 
         // Get the channel id from subscription.
         let channel_id = subscription.channel_id();
@@ -196,7 +196,7 @@ async fn destroy(request: Request, _: Next) -> via::Result {
         deny!(403, "deleting a channel requires a channel admin");
     } else {
         // Acquire a database connection.
-        let mut connection = request.app().database().await?;
+        let mut connection = request.app().database().get().await?;
 
         // Get the channel id from `subscription`.
         let id = subscription.channel_id();

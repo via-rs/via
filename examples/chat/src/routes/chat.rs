@@ -27,7 +27,7 @@ enum LagNotification {
     Lag { length: u64 },
 }
 
-macro_rules! unconstrained {
+macro_rules! hurry {
     ($future:expr) => {
         coop::unconstrained($future).await
     };
@@ -54,7 +54,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
     let mut pubsub = app.pubsub().subscribe(me);
 
     // Register interest in the channels that the user is subscribed to.
-    for interest in unconstrained!(async {
+    for interest in hurry!(async {
         let mut connection = app.database().get().await.or_break()?;
         ChannelSubscription::participating(&mut connection, me).await
     })? {
@@ -97,7 +97,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                         new_reply.user_id = Some(me);
 
                         // Acquire a database connection and perform the insert.
-                        unconstrained!(async {
+                        hurry!(async {
                             let mut connection = app.database().get().await.or_break()?;
                             reply_to(&mut connection, new_reply).await.or_continue()
                         })?
@@ -107,7 +107,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                         new_reaction.user_id = Some(me);
 
                         // Acquire a database connection and perform the insert.
-                        unconstrained!(async {
+                        hurry!(async {
                             let mut connection = app.database().get().await.or_break()?;
                             react_to(&mut connection, new_reaction).await.or_continue()
                         })?

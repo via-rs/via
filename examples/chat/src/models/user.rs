@@ -22,6 +22,8 @@ type JoinSubscriptions = InnerJoin<users::table, subscriptions::table>;
 type JoinChannels = InnerJoinOn<JoinSubscriptions, channels::table, ThroughSubscriptions>;
 type ThroughSubscriptions = diesel::dsl::Eq<subscriptions::channel_id, channels::id>;
 
+pub(super) type UserPreviewSqlType = (sql_types::Uuid, sql_types::Text, sql_types::Text);
+
 #[derive(Clone, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 #[serde(rename_all = "camelCase")]

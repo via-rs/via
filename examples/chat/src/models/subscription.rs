@@ -7,8 +7,12 @@ use diesel::serialize::{self, Output, ToSql};
 use diesel::{AsExpression, sql_types};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use via::error::Propagate;
+use via::ws;
+use via_diesel::AsyncQueryDsl;
 
 use super::{Channel, ChannelWithThreads, ThreadDetails, UserPreview};
+use crate::app::Connection;
 use crate::schema::{channels, subscriptions, users};
 use crate::util::Id;
 
@@ -129,6 +133,16 @@ impl NewSubscription {
 }
 
 impl ChannelSubscription {
+    pub async fn participating(connection: &mut Connection<'_>, user: Id) -> ws::Result<Vec<Id>> {
+        let query = subscriptions::table
+            .inner_join(channels::table)
+            .select(channels::id)
+            .filter(by_user(user).and(can_participate()))
+            .limit(1000);
+
+        query.load_async(connection).await.or_break()
+    }
+
     pub fn query() -> Select<JoinChannels, AsSelect<Self, Pg>> {
         subscriptions::table
             .inner_join(channels::table)

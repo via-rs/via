@@ -1,6 +1,6 @@
 [package]
 name = "via-pubsub"
-version = "0.1.0-beta.16"
+version = "0.1.0-beta.17"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -33,3 +33,6 @@ zeroize = "1"
 version = "1"
 features = ["aio", "connection-manager", "tokio-comp"]
 optional = true
+
+[package.metadata.docs.rs]
+features = ["redis"]

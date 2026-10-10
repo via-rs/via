@@ -14,10 +14,20 @@ use time::OffsetDateTime;
 use via_diesel::AsyncQueryDsl;
 
 use super::{ThreadWithUser, User, UserPreview};
-use crate::app::Connection;
+use crate::app::{Connection, Notification};
 use crate::models::ThreadDetails;
+use crate::models::user::UserPreviewSqlType;
 use crate::schema::reactions;
 use crate::util::Id;
+
+type ReactionSqlType = (
+    sql_types::Uuid,        // id
+    sql_types::VarChar,     // email
+    sql_types::Uuid,        // thread_id
+    sql_types::Uuid,        // user_id
+    sql_types::Timestamptz, // created_at
+    sql_types::Timestamptz, // updated_at
+);
 
 #[derive(Debug)]
 pub struct InvalidEmojiError;
@@ -30,8 +40,7 @@ pub struct Emoji {
 }
 
 #[derive(Associations, Debug, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
-#[diesel(belongs_to(ThreadWithUser, foreign_key = thread_id))]
-#[diesel(belongs_to(User))]
+#[diesel(belongs_to(ThreadWithUser, foreign_key = thread_id), belongs_to(User))]
 #[diesel(table_name = reactions)]
 #[serde(rename_all = "camelCase")]
 pub struct Reaction {
@@ -54,13 +63,10 @@ pub struct ChangeSet {
     emoji: Emoji,
 }
 
-#[derive(Debug, Deserialize, Insertable)]
-#[diesel(table_name = reactions)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewReaction {
-    pub thread_id: Option<Id>,
-    pub user_id: Option<Id>,
-
+    thread_id: Id,
     emoji: Emoji,
 }
 
@@ -68,12 +74,12 @@ pub struct NewReaction {
 #[diesel(table_name = reactions)]
 #[serde(rename_all = "camelCase")]
 pub struct NewReactionInChannel {
+    #[diesel(skip_insertion)]
+    pub channel_id: Id,
     pub user_id: Option<Id>,
 
     emoji: Emoji,
 
-    #[diesel(skip_insertion)]
-    channel_id: Id,
     thread_id: Id,
 }
 
@@ -95,7 +101,7 @@ pub struct ReactionPreview {
 }
 
 #[derive(Debug, Deserialize, Queryable, Selectable, Serialize)]
-#[diesel(check_for_backend(Pg))]
+#[diesel(check_for_backend(Pg), table_name = reactions)]
 pub struct ReactionWithUser {
     #[diesel(embed)]
     #[serde(flatten)]
@@ -112,68 +118,6 @@ via_diesel::filters! {
 
 via_diesel::sorts! {
     pub fn recent(#[desc] created_at, id) on reactions;
-}
-
-impl Reaction {
-    pub async fn create(connection: &mut Connection<'_>, init: NewReaction) -> via::Result<Self> {
-        diesel::insert_into(reactions::table)
-            .values(init)
-            .returning(Self::as_returning())
-            .get_result_async(connection)
-            .await
-    }
-
-    pub async fn create_in(
-        connection: &mut Connection<'_>,
-        init: NewReactionInChannel,
-    ) -> via::Result<Self> {
-        diesel::insert_into(reactions::table)
-            .values(init)
-            .returning(Self::as_returning())
-            .get_result_async(connection)
-            .await
-    }
-
-    pub fn query() -> reactions::table {
-        reactions::table
-    }
-
-    pub async fn to_threads(
-        connection: &mut Connection<'_>,
-        threads: Vec<ThreadWithUser>,
-    ) -> via::Result<Vec<ThreadDetails>> {
-        const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
-        const USERNAMES_PER_REACTION: i32 = 6;
-
-        let thread_ids = threads.iter().map(|thread| thread.id()).copied().collect();
-        let reactions = diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
-            .bind::<sql_types::Array<sql_types::Uuid>, Vec<_>>(thread_ids)
-            .bind::<sql_types::Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
-            .bind::<sql_types::Integer, _>(USERNAMES_PER_REACTION)
-            .load_async(connection)
-            .await?;
-
-        Ok(ThreadDetails::grouped_by(threads, reactions))
-    }
-
-    pub fn with_user(self, user: UserPreview) -> ReactionWithUser {
-        ReactionWithUser {
-            reaction: self,
-            user,
-        }
-    }
-}
-
-impl ReactionPreview {
-    pub fn to_id(&self) -> Id {
-        self.thread_id
-    }
-}
-
-impl NewReactionInChannel {
-    pub fn channel_id(&self) -> Id {
-        self.channel_id
-    }
 }
 
 impl Error for InvalidEmojiError {}
@@ -238,5 +182,74 @@ impl Serialize for Emoji {
 impl ToSql<sql_types::VarChar, Pg> for Emoji {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
         <str as ToSql<sql_types::VarChar, Pg>>::to_sql(self, out)
+    }
+}
+
+impl NewReaction {
+    pub fn in_channel(self, channel_id: Id, user_id: Id) -> NewReactionInChannel {
+        NewReactionInChannel {
+            channel_id,
+            thread_id: self.thread_id,
+            user_id: Some(user_id),
+            emoji: self.emoji,
+        }
+    }
+}
+
+impl Reaction {
+    pub async fn create(
+        connection: &mut Connection<'_>,
+        init: NewReactionInChannel,
+    ) -> via::Result<ReactionWithUser> {
+        diesel::sql_query("SELECT * FROM react_to($1, $2, $3)")
+            .bind::<sql_types::Uuid, _>(init.thread_id)
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(init.user_id)
+            .bind::<sql_types::VarChar, _>(init.emoji)
+            .get_result_async(connection)
+            .await
+    }
+
+    pub fn query() -> reactions::table {
+        reactions::table
+    }
+
+    pub async fn to_threads(
+        connection: &mut Connection<'_>,
+        threads: Vec<ThreadWithUser>,
+    ) -> via::Result<Vec<ThreadDetails>> {
+        const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
+        const USERNAMES_PER_REACTION: i32 = 6;
+
+        let thread_ids = threads.iter().map(|thread| thread.id()).copied().collect();
+        let reactions = diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
+            .bind::<sql_types::Array<sql_types::Uuid>, Vec<_>>(thread_ids)
+            .bind::<sql_types::Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
+            .bind::<sql_types::Integer, _>(USERNAMES_PER_REACTION)
+            .load_async(connection)
+            .await?;
+
+        Ok(ThreadDetails::grouped_by(threads, reactions))
+    }
+}
+
+impl ReactionPreview {
+    pub fn to_id(&self) -> Id {
+        self.thread_id
+    }
+}
+
+impl FromSqlRow<sql_types::Untyped, Pg> for ReactionWithUser {
+    fn build_from_row<'a>(row: &impl diesel::row::Row<'a, Pg>) -> deserialize::Result<Self> {
+        println!("build_from_row");
+        Ok(Self {
+            reaction: FromSqlRow::<ReactionSqlType, _>::build_from_row(row)?,
+            user: FromSqlRow::<UserPreviewSqlType, _>::build_from_row(&row.partial_row(6..9))?,
+        })
+    }
+}
+
+impl From<ReactionWithUser> for Notification {
+    fn from(reaction: ReactionWithUser) -> Self {
+        Self::Reaction(reaction)
     }
 }

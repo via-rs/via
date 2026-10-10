@@ -1,7 +1,8 @@
 use diesel::associations::HasTable;
+use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::helper_types::{AsSelect, InnerJoin, Select};
 use diesel::pg::Pg;
-use diesel::prelude::*;
+use diesel::{prelude::*, sql_types};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use via::ResultExt;
@@ -9,18 +10,44 @@ use via_diesel::paginate::{Keyset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
 use super::{Channel, ReactionPreview, User, UserPreview};
-use crate::app::Connection;
+use crate::app::{Connection, Notification};
 use crate::models::Reaction;
+use crate::models::user::UserPreviewSqlType;
 use crate::schema::{threads, users};
 use crate::util::Id;
 
 pub type JoinUsers = InnerJoin<threads::table, users::table>;
 pub type SelectThreadWithUser = Select<JoinUsers, AsSelect<ThreadWithUser, Pg>>;
 
+type ThreadSqlType = (
+    sql_types::Uuid,                      // id
+    sql_types::Text,                      // body
+    sql_types::Uuid,                      // channel_id
+    sql_types::Nullable<sql_types::Uuid>, // thread_id
+    sql_types::Uuid,                      // user_id
+    sql_types::Timestamptz,               // created_at
+    sql_types::Timestamptz,               // updated_at
+    sql_types::BigInt,                    // total_reactions
+    sql_types::BigInt,                    // total_replies
+);
+
+type ReplyToResult = (
+    sql_types::Uuid,                      // id
+    sql_types::Text,                      // body
+    sql_types::Uuid,                      // channel_id
+    sql_types::Nullable<sql_types::Uuid>, // thread_id
+    sql_types::Uuid,                      // user_id
+    sql_types::Timestamptz,               // created_at
+    sql_types::Timestamptz,               // updated_at
+    sql_types::BigInt,                    // total_reactions
+    sql_types::BigInt,                    // total_replies
+    sql_types::Uuid,                      // id
+    sql_types::Uuid,                      // id
+    sql_types::Text,                      // body
+);
+
 #[derive(Associations, Debug, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
-#[diesel(belongs_to(Channel))]
-#[diesel(belongs_to(Thread, foreign_key = thread_id))]
-#[diesel(belongs_to(User))]
+#[diesel(belongs_to(Channel), belongs_to(Thread), belongs_to(User))]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
     id: Id,
@@ -50,6 +77,17 @@ pub struct NewThread {
     pub channel_id: Option<Id>,
     pub thread_id: Option<Id>,
     pub user_id: Option<Id>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize, Insertable)]
+#[diesel(table_name = threads)]
+#[serde(rename_all = "camelCase")]
+pub struct NewThreadInChannel {
+    pub channel_id: Id,
+    pub user_id: Option<Id>,
+
+    thread_id: Option<Id>,
     body: String,
 }
 
@@ -95,6 +133,17 @@ via_diesel::filters! {
 
 via_diesel::sorts! {
     pub fn recent(#[desc] created_at, #[desc] id) on threads;
+}
+
+impl NewThread {
+    fn in_channel(self, channel_id: Id, user_id: Id) -> NewThreadInChannel {
+        NewThreadInChannel {
+            channel_id,
+            thread_id: self.thread_id,
+            user_id: Some(user_id),
+            body: self.body,
+        }
+    }
 }
 
 impl Thread {
@@ -147,10 +196,15 @@ impl Thread {
         Ok(thread)
     }
 
-    pub async fn create(connection: &mut Connection<'_>, init: NewThread) -> via::Result<Self> {
-        diesel::insert_into(threads::table)
-            .values(init)
-            .returning(Self::as_returning())
+    pub async fn create(
+        connection: &mut Connection<'_>,
+        init: NewThreadInChannel,
+    ) -> via::Result<ThreadWithUser> {
+        diesel::sql_query("SELECT * FROM reply_to($1, $2, $3, $4)")
+            .bind::<sql_types::Uuid, _>(init.channel_id)
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(init.thread_id)
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(init.user_id)
+            .bind::<sql_types::Text, _>(init.body)
             .get_result_async(connection)
             .await
     }
@@ -236,5 +290,20 @@ impl<'a> Identifiable for &'a ThreadWithUser {
 
     fn id(self) -> Self::Id {
         Identifiable::id(&self.thread)
+    }
+}
+
+impl FromSqlRow<sql_types::Untyped, Pg> for ThreadWithUser {
+    fn build_from_row<'a>(row: &impl diesel::row::Row<'a, Pg>) -> deserialize::Result<Self> {
+        Ok(Self {
+            thread: FromSqlRow::<ThreadSqlType, _>::build_from_row(row)?,
+            user: FromSqlRow::<UserPreviewSqlType, _>::build_from_row(&row.partial_row(9..12))?,
+        })
+    }
+}
+
+impl From<ThreadWithUser> for Notification {
+    fn from(thread: ThreadWithUser) -> Self {
+        Self::Reply(thread)
     }
 }

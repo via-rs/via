@@ -5,11 +5,11 @@ use via::error::{Catch, Propagate};
 use via::ws::{self, Channel, Message};
 use via_pubsub::{Event, PeerEvent};
 
-use crate::app::{Connection, Notification, Unicorn};
+use crate::app::{Connection, Notification, Postgres, Unicorn};
 use crate::models::reaction::{NewReactionInChannel, Reaction};
-use crate::models::thread::{NewThread, Thread};
+use crate::models::thread::{NewThreadInChannel, Thread};
 use crate::models::user::User;
-use crate::models::{ChannelSubscription, UserPreview};
+use crate::models::{ChannelSubscription, UserPreview, subscription};
 use crate::util::{Id, Session};
 
 type Request = via::ws::Request<Unicorn>;
@@ -17,8 +17,20 @@ type Request = via::ws::Request<Unicorn>;
 #[derive(Deserialize)]
 #[serde(content = "data", rename_all = "lowercase", tag = "type")]
 enum ClientEvent {
-    Reply(NewThread),
+    Reply(NewThreadInChannel),
     Reaction(NewReactionInChannel),
+}
+
+#[derive(Serialize)]
+#[serde(content = "data", rename_all = "lowercase", tag = "type")]
+enum LagNotification {
+    Lag { length: u64 },
+}
+
+macro_rules! hurry {
+    ($future:expr) => {
+        coop::unconstrained($future).await
+    };
 }
 
 pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
@@ -38,24 +50,16 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
     // than any of the alternatives.
     let app = request.app();
 
-    // Load a user preview for the current user along with their channels.
-    let user = {
-        // Acquire a database connection.
-        let mut connection = app.database().get().await.or_break()?;
-
-        // Execute the query.
-        User::with_subscriptions(&mut connection, me)
-            .await
-            .or_break()?
-    };
-
     // Get a subscription scoped to the current user.
-    let mut subscription = app.pubsub().subscribe(me);
+    let mut pubsub = app.pubsub().subscribe(me);
 
     // Register interest in the channels that the user is subscribed to.
-    user.subscriptions()
-        .map(ChannelSubscription::channel_id)
-        .for_each(|interest| subscription.register(interest));
+    for interest in hurry!(async {
+        let mut connection = app.database().get().await.or_break()?;
+        ChannelSubscription::participating(&mut connection, me).await
+    })? {
+        pubsub.register(interest);
+    }
 
     // Start receiving messages from the client and peers.
     loop {
@@ -64,30 +68,18 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
             biased;
 
             // client <- self <- peers
-            result = subscription.recv() => result?,
+            result = pubsub.recv() => result?,
 
             // client -> self -> peers
             outbound = channel.recv() => {
                 // Attempt to extract an event from the next message.
-                let client_event = match outbound {
-                    // Ignore binary messages.
-                    #[cfg(debug_assertions)]
-                    Some(message) if message.is_binary() => {
-                        // Placeholder for tracing...
-                        handle_binary_message(&message);
-                        continue;
-                    }
-
-                    // Deserialize a client event from `message`.
+                let event = match outbound {
+                    // Try to deserialize a `ClientEvent` from text messages.
                     Some(message) if message.is_text() => {
                         log!(info(chat = 1), "event received from client");
-                        deserialize_client_event(&message).or_continue()?
-                        //                                 ^^^^^^^^^^^
-                        //          Restart `chat` if an error occurs.
+                        ClientEvent::try_from(&message).or_continue()?
                     }
-
-                    // All other messages are control codes.
-                    // End the session if Message::is_close. Otherwise, continue.
+                    // Disconnect if it is a close message. Otherwise, continue.
                     other => {
                         if other.as_ref().is_none_or(Message::is_close) {
                             log!(info(chat = 1), "ws session ended");
@@ -99,27 +91,27 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                 };
 
                 // Persist the client event and prepare to notify peers.
-                let notification = {
-                    // Acquire a database connection.
-                    let mut connection = app.database().get().await.or_break()?;
-                    //                                              ^^^^^^^^
-                    // If we are unable to connect to the database, end the
-                    // session.
-                    //
-                    // This allows us to implement reconnect logic on the
-                    // client to find a healthy node.
+                let notification = match event {
+                    ClientEvent::Reply(mut new_reply) => {
+                        // Set the user_id of the reply to the current user id.
+                        new_reply.user_id = Some(me);
 
-                    // Get a user preview from the authenticated user.
-                    //
-                    // This allows us to include the users name and avatar in
-                    // the update notification.
-                    let actor = user.to_preview();
+                        // Acquire a database connection and perform the insert.
+                        hurry!(async {
+                            let mut connection = app.database().get().await.or_break()?;
+                            reply_to(&mut connection, new_reply).await.or_continue()
+                        })?
+                    }
+                    ClientEvent::Reaction(mut new_reaction) => {
+                        // Set the user_id of the reaction to the current user id.
+                        new_reaction.user_id = Some(me);
 
-                    // Perform the insert.
-                    //
-                    // This is likely the first await point in the outbound
-                    // flow where we'll have to yield to runtime.
-                    persist_client_event(&mut connection, actor, client_event).await.or_continue()?
+                        // Acquire a database connection and perform the insert.
+                        hurry!(async {
+                            let mut connection = app.database().get().await.or_break()?;
+                            react_to(&mut connection, new_reaction).await.or_continue()
+                        })?
+                    }
                 };
 
                 // Log the result of the database operation.
@@ -129,7 +121,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                 log!(info(chat = 1), "event saved to database");
 
                 // Publish the notification to subscribers.
-                subscription.send(notification).await?;
+                pubsub.send(notification).await?;
 
                 // Notify the successful publish in debug builds.
                 //
@@ -141,7 +133,7 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                 // If an inbound event was received during the insert and we
                 // have budget remaining, proceed with the inbound event flow.
                 if coop::has_budget_remaining() {
-                    subscription.try_recv()?
+                    pubsub.try_recv()?
                 } else {
                     continue;
                 }
@@ -151,9 +143,12 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
         if let Some(event) = inbound {
             match event {
                 // Lag detected in `subscription`.
-                PeerEvent::Lag(len) => {
-                    log!(info(chat = 1), "lag notification; len = {}", len);
-                    channel.send(serialize_lag_notification(len)?).await?;
+                PeerEvent::Lag(length) => {
+                    log!(info(chat = 1), "lag notification; len = {}", length);
+                    let notification = LagNotification::Lag { length };
+                    let payload = serde_json::to_string(&notification).or_continue()?;
+
+                    channel.send(payload).await?;
                     return ws::restart();
                 }
 
@@ -171,103 +166,53 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                 // The user was invited to a channel.
                 PeerEvent::Register(interest) => {
                     log!(info(chat = 1), "joining channel {}", interest);
-                    subscription.register(interest);
+                    pubsub.register(interest);
                 }
 
                 // The user was removed from a channel.
                 PeerEvent::Deregister(ref interest) => {
                     log!(info(chat = 1), "leaving channel {}", interest);
-                    subscription.deregister(interest);
+                    pubsub.deregister(interest);
                 }
             }
         }
     }
 }
 
-#[cfg(feature = "tokio-tungstenite")]
-fn deserialize_client_event(message: &Message) -> via::Result<ClientEvent> {
-    let text = message.to_text()?;
-    Ok(serde_json::from_str(text)?)
+#[inline]
+async fn react_to(
+    connection: &mut Connection<'_>,
+    new_reaction: NewReactionInChannel,
+) -> via::Result<Event<Id, Notification>> {
+    let interest = new_reaction.channel_id;
+    let notification = Reaction::create(connection, new_reaction).await?.into();
+
+    Ok(Event::relay(interest, notification))
 }
 
-#[cfg(feature = "tokio-websockets")]
-fn deserialize_client_event(message: &Message) -> via::Result<ClientEvent> {
-    let payload = message.as_payload();
-    let text = str::from_utf8(payload)?;
+#[inline]
+async fn reply_to(
+    connection: &mut Connection<'_>,
+    new_reply: NewThreadInChannel,
+) -> via::Result<Event<Id, Notification>> {
+    let interest = new_reply.channel_id;
+    let notification = Thread::create(connection, new_reply).await?.into();
 
-    Ok(serde_json::from_str(text)?)
+    Ok(Event::relay(interest, notification))
 }
 
-fn serialize_lag_notification(length: u64) -> ws::Result<Message> {
-    #[derive(Serialize)]
-    #[serde(content = "data", rename_all = "lowercase", tag = "type")]
-    enum LagNotification {
-        Lag { length: u64 },
+impl TryFrom<&'_ Message> for ClientEvent {
+    type Error = via::Error;
+
+    #[cfg(all(feature = "tokio-tungstenite", not(feature = "tokio-websockets")))]
+    fn try_from(message: &'_ Message) -> Result<Self, Self::Error> {
+        let text = message.to_text()?;
+        Ok(serde_json::from_str(text)?)
     }
 
-    let notification = LagNotification::Lag { length };
-    let json_string = serde_json::to_string(&notification).or_continue()?;
-
-    Ok(Message::text(json_string))
-}
-
-#[cfg(all(debug_assertions, feature = "tokio-tungstenite"))]
-fn handle_binary_message(message: &Message) {
-    log!(
-        info(chat = 1),
-        "ignoring binary message (len: {})",
-        message.len()
-    );
-}
-
-#[cfg(all(debug_assertions, feature = "tokio-websockets"))]
-fn handle_binary_message(message: &Message) {
-    log!(
-        info(chat = 1),
-        "ignoring binary message (len: {})",
-        message.as_payload().len()
-    );
-}
-
-async fn persist_client_event(
-    connection: &mut Connection<'_>,
-    actor: UserPreview,
-    event: ClientEvent,
-) -> via::Result<Event<Id, Notification>> {
-    match event {
-        // Insert a thread into the threads table.
-        ClientEvent::Reply(mut new_thread) => {
-            // The authenticated user owns the thread.
-            new_thread.user_id = Some(actor.id());
-
-            // Store the channel id so we can use it as a pubsub interest.
-            let Some(interest) = new_thread.channel_id else {
-                deny!(500, "thread is missing required field channel_id");
-            };
-
-            // Perform the insert.
-            let thread = Thread::create(connection, new_thread).await?;
-            let thread = thread.with_user(actor);
-
-            // Create a publishable event containing a reply notification
-            // scoped to the channel.
-            Ok(Event::relay(interest, Notification::Reply(thread)))
-        }
-        // Insert a reaction into the reactions table.
-        ClientEvent::Reaction(mut new_reaction) => {
-            // The authenticated user owns the reaction.
-            new_reaction.user_id = Some(actor.id());
-
-            // Store the channel id so we can use it as a pubsub interest.
-            let interest = new_reaction.channel_id();
-
-            // Perform the insert.
-            let reaction = Reaction::create_in(connection, new_reaction).await?;
-            let reaction = reaction.with_user(actor);
-
-            // Create a publishable event containing a reaction notification
-            // scoped to the channel.
-            Ok(Event::relay(interest, Notification::Reaction(reaction)))
-        }
+    #[cfg(all(feature = "tokio-websockets", not(feature = "tokio-tungstenite")))]
+    fn try_from(message: &'_ Message) -> Result<Self, Self::Error> {
+        let text = message.to_text()?;
+        Ok(serde_json::from_str(text)?)
     }
 }

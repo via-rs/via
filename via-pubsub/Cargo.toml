@@ -1,6 +1,6 @@
 [package]
 name = "via-pubsub"
-version = "0.1.0-beta.15"
+version = "0.1.0-beta.16"
 authors = ["Zakari Papa <pino@hey.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"

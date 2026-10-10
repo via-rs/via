@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use via::request::Payloadz;
 use via::{Error, Response, deny, err};
 use via_diesel::AsyncQueryDsl;
-use via_pubsub::Event;
+use via_pubsub::{Dispatch, OurEvent};
 
 use crate::models::user::{User, by_id};
 use crate::util::{Authenticator, Session};
@@ -72,7 +72,7 @@ pub async fn logout(request: Request, _: Next) -> via::Result {
     request.app().logout(&mut response);
 
     // Dispatch a logout event to end ws sessions.
-    if let Ok(event) = me.map(Event::logout) {
+    if let Ok(event) = me.map(OurEvent::logout) {
         request.app().pubsub().dispatch(event);
     }
 

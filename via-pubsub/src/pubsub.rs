@@ -1,83 +1,24 @@
-use std::collections::HashSet;
+use std::future::Future;
 use via::error::Catch;
 
-use crate::backend::{Backend, Event, PeerEvent, RawPeerEvent, Subscriber};
+use crate::sign::OurEvent;
 
-pub struct Pubsub<T> {
-    backend: T,
+pub type Result<T = ()> = std::result::Result<T, Catch>;
+
+pub trait Dispatch<T, U> {
+    type Subscription;
+
+    fn dispatch(&self, event: OurEvent<T, U>);
+    fn subscribe(&self, actor: T) -> Self::Subscription;
 }
 
-pub struct Subscription<T: Subscriber> {
-    actor: T::Interest,
-    backend: T,
-    interests: HashSet<T::Interest>,
+pub trait Publish<T> {
+    fn send(&self, event: T) -> impl Future<Output = Result> + Send;
 }
 
-impl<T: Backend> Pubsub<T> {
-    pub(crate) fn new(backend: T) -> Self {
-        Self { backend }
-    }
+pub trait Receive {
+    type Event;
 
-    pub fn dispatch(&self, event: Event<T::Interest, T::Payload>) {
-        self.backend.dispatch(event);
-    }
-
-    pub fn subscribe(&self, actor: T::Interest) -> Subscription<T::Subscriber> {
-        Subscription {
-            actor,
-            backend: self.backend.subscribe(),
-            interests: HashSet::new(),
-        }
-    }
-}
-
-impl<T: Subscriber> Subscription<T> {
-    pub async fn send(&self, event: Event<T::Interest, T::Payload>) -> Result<(), Catch> {
-        self.backend.send(event).await
-    }
-
-    pub async fn recv(&mut self) -> Result<Option<PeerEvent<T::Interest>>, Catch> {
-        self.backend
-            .recv()
-            .await
-            .map(|event| self.interested_in(event))
-    }
-
-    pub fn try_recv(&mut self) -> Result<Option<PeerEvent<T::Interest>>, Catch> {
-        self.backend
-            .try_recv()
-            .map(|option| option.and_then(|event| self.interested_in(event)))
-    }
-
-    pub fn register(&mut self, interest: T::Interest) {
-        self.interests.insert(interest);
-    }
-
-    pub fn deregister(&mut self, interest: &T::Interest) {
-        self.interests.remove(interest);
-    }
-}
-
-impl<T: Subscriber> Subscription<T> {
-    #[inline]
-    fn interested_in(&self, event: RawPeerEvent<T::Interest>) -> Option<PeerEvent<T::Interest>> {
-        match event {
-            RawPeerEvent::Lag(len) => Some(PeerEvent::Lag(len)),
-
-            RawPeerEvent::Logout(actor) => (actor == self.actor).then_some(PeerEvent::Logout),
-
-            RawPeerEvent::Relay(interest, payload) => self
-                .interests
-                .contains(&interest)
-                .then(|| PeerEvent::Relay(payload)),
-
-            RawPeerEvent::Register(actor, interest) => actor
-                .is_none_or(|id| self.actor == id)
-                .then(|| PeerEvent::Register(interest)),
-
-            RawPeerEvent::Deregister(actor, interest) => actor
-                .is_none_or(|id| self.actor == id)
-                .then(|| PeerEvent::Deregister(interest)),
-        }
-    }
+    fn recv(&mut self) -> impl Future<Output = Result<Option<Self::Event>>> + Send;
+    fn try_recv(&mut self) -> Result<Option<Self::Event>>;
 }

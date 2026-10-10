@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 use via::error::{Catch, Error};
 
-pub fn sender_dropped<T>(_: T) -> Catch {
+pub fn sender_dropped() -> Catch {
     let message = "pubsub closed".to_owned();
     ControlFlow::Break(Error::new(message))
 }

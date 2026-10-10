@@ -1,5 +1,3 @@
-use std::thread::available_parallelism;
-
 use base64::engine::Engine;
 use bb8::{Pool, PooledConnection};
 use cookie::{Cookie, Key, SameSite};
@@ -7,11 +5,12 @@ use diesel_async::AsyncPgConnection;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::thread::available_parallelism;
 use time::OffsetDateTime;
 use via::error::{Catch, Propagate};
 use via::guard::{Project, error::UnknownExtension};
 use via::{Response, deny};
-use via_pubsub::{Pubsub, backend::Redis};
+use via_pubsub::Redis;
 use zeroize::Zeroizing;
 
 use crate::models::{ReactionWithUser, ThreadWithUser, User};
@@ -23,13 +22,13 @@ const DATABASE_URL: &str = "DATABASE_URL";
 const REDIS_URL: &str = "REDIS_URL";
 
 /// The redis channel namespace to which peer events are published.
-const PUBSUB_SCOPE: &str = "unicorn";
-
-// The signing key used to sign and verify peer events.
-const PUBSUB_SIGNER: &str = "PUBSUB_SIGNER";
+const PUBSUB_NAMESPACE: &str = "unicorn";
 
 /// The schema version used to deserialize peer events.
 const PUBSUB_VERSION: u32 = 1;
+
+// The signing key used to sign and verify peer events.
+const PUBSUB_SIGNER: &str = "PUBSUB_SIGNER";
 
 /// The signing key used to sign and verify session cookies.
 const SESSION_SIGNER: &str = "SESSION_SIGNER";
@@ -55,7 +54,7 @@ pub enum Notification {
 /// This type defines the resources that are available to each request.
 pub struct Unicorn {
     database: Pool<Postgres>,
-    pubsub: Pubsub<Redis<Id, Notification>>,
+    pubsub: Redis<Id, Notification>,
     signer: Key,
 }
 
@@ -211,10 +210,10 @@ impl Unicorn {
         let pubsub = {
             let url = require_env(REDIS_URL)?;
 
-            Redis::builder(PUBSUB_SCOPE)
+            Redis::builder(PUBSUB_NAMESPACE)
                 .concurrency(num_workers)
                 .max_event_size(MAX_EVENT_SIZE)
-                .signing_key(require_secret(PUBSUB_SIGNER)?.as_bytes())
+                .signing_key(require_secret(PUBSUB_SIGNER)?)
                 //           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
                 //     Signing key is dropped and zeroed before await.
                 .version(PUBSUB_VERSION)
@@ -243,7 +242,7 @@ impl Unicorn {
     }
 
     #[inline]
-    pub fn pubsub(&self) -> &Pubsub<Redis<Id, Notification>> {
+    pub fn pubsub(&self) -> &Redis<Id, Notification> {
         &self.pubsub
     }
 

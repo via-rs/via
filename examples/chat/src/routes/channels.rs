@@ -7,7 +7,7 @@ use tokio::task::coop;
 use via::{Payload, Response, ResultExt, deny};
 use via_diesel::paginate::PER_PAGE;
 use via_diesel::{AsyncQueryDsl, LimitAndPage, Paginate};
-use via_pubsub::Event;
+use via_pubsub::{Dispatch, OurEvent};
 
 use crate::models::subscription::{self, AuthClaims, ChannelSubscription};
 use crate::models::thread::{self, ThreadDetails, ThreadWithUser};
@@ -104,7 +104,7 @@ async fn create(request: Request, _: Next) -> via::Result {
     };
 
     // Create a "register" event with the current user id and channel id.
-    let event = Event::register(Some(me), *channel.id());
+    let event = OurEvent::register(Some(me), *channel.id());
 
     // Dispatch the "register" event so the current user receives update
     // notifications for changes that occur in `channel`.
@@ -202,7 +202,7 @@ async fn destroy(request: Request, _: Next) -> via::Result {
         let id = subscription.channel_id();
 
         // Unsubscribe all users from the channel.
-        let event = Event::deregister(None, id);
+        let event = OurEvent::deregister(None, id);
         request.app().pubsub().dispatch(event);
 
         // Destroy the channel.

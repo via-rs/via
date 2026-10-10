@@ -1,12 +1,12 @@
 use std::future::Future;
 use via::error::Catch;
 
-use crate::sign::{OurEvent, PeerEvent};
+use crate::sign::OurEvent;
 
 pub type Result<T = ()> = std::result::Result<T, Catch>;
 
 pub trait Dispatch<T, U> {
-    type Subscription: Publish<OurEvent<T, U>> + Receive<Event = PeerEvent<T>>;
+    type Subscription;
 
     fn dispatch(&self, event: OurEvent<T, U>);
     fn subscribe(&self, actor: T) -> Self::Subscription;

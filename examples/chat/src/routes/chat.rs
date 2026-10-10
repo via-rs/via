@@ -3,7 +3,7 @@ use tokio::task::coop;
 use via::deny;
 use via::error::{Catch, Propagate};
 use via::ws::{self, Channel, Message};
-use via_pubsub::{Event, PeerEvent};
+use via_pubsub::{Dispatch, OurEvent, PeerEvent, Publish, Receive, Scope};
 
 use crate::app::{Connection, Notification, Postgres, Unicorn};
 use crate::models::reaction::{NewReactionInChannel, Reaction};
@@ -146,9 +146,9 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
                 PeerEvent::Lag(length) => {
                     log!(info(chat = 1), "lag notification; len = {}", length);
                     let notification = LagNotification::Lag { length };
-                    let payload = serde_json::to_string(&notification).or_continue()?;
+                    let message = serde_json::to_string(&notification).or_continue()?;
 
-                    channel.send(payload).await?;
+                    channel.send(message).await?;
                     return ws::restart();
                 }
 
@@ -183,22 +183,22 @@ pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
 async fn react_to(
     connection: &mut Connection<'_>,
     new_reaction: NewReactionInChannel,
-) -> via::Result<Event<Id, Notification>> {
+) -> via::Result<OurEvent<Id, Notification>> {
     let interest = new_reaction.channel_id;
     let notification = Reaction::create(connection, new_reaction).await?.into();
 
-    Ok(Event::relay(interest, notification))
+    Ok(OurEvent::relay(interest, notification))
 }
 
 #[inline]
 async fn reply_to(
     connection: &mut Connection<'_>,
     new_reply: NewThreadInChannel,
-) -> via::Result<Event<Id, Notification>> {
+) -> via::Result<OurEvent<Id, Notification>> {
     let interest = new_reply.channel_id;
     let notification = Thread::create(connection, new_reply).await?.into();
 
-    Ok(Event::relay(interest, notification))
+    Ok(OurEvent::relay(interest, notification))
 }
 
 impl TryFrom<&'_ Message> for ClientEvent {

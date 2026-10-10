@@ -83,13 +83,13 @@ where
     ///
     /// ```no_run
     /// use std::{env, thread};
-    /// use via_pubsub::backend::Redis;
-    /// # async fn build() -> via::Result<via_pubsub::Pubsub<Redis<(), ()>>> {
+    /// use via_pubsub::Redis;
+    /// # async fn build() -> via::Result<Redis<(), ()>> {
     /// Redis::builder("unicorn")
     ///     .concurrency(thread::available_parallelism()?.get())
     ///     //           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     ///     // The number of async tasks that can wake at once.
-    ///     .signing_key(env::var("PUBSUB_SECRET")?.as_bytes())
+    ///     .signing_key(env::var("PUBSUB_SECRET")?)
     ///     .version(1)
     ///     .connect("redis://localhost:6379/?protocol=resp3")
     ///     .await

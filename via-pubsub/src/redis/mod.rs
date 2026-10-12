@@ -219,7 +219,7 @@ where
 
     fn dispatch(&self, event: OurEvent<T, U>) {
         if self.sender.try_send(event).is_err() {
-            log!(warn, "failed to synchronously send event.");
+            log!(warn(pubsub = 0), "failed to dispatch event.");
         }
     }
 

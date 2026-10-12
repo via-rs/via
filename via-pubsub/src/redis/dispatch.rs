@@ -72,10 +72,10 @@ where
                     log!(info(pubsub), "receive push (len = {})", len);
 
                     for push in events {
-                        if let PushKind::Message = push.kind {
-                            if let [BulkString(scope), BulkString(payload), ..] = &*push.data
-                                && str::from_utf8(scope).is_ok_and(|value| value == signer.scope())
-                            {
+                        if let PushKind::Message = push.kind
+                            && let [BulkString(scope), BulkString(payload), ..] = &*push.data
+                        {
+                            if str::from_utf8(scope).is_ok_and(|value| value == signer.scope()) {
                                 match signer.deserialize::<T, U>(payload) {
                                     // Event deserialized successfully.
                                     Ok(event) => {

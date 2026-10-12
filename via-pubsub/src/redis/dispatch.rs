@@ -79,9 +79,9 @@ where
                                 match signer.deserialize::<T, U>(payload) {
                                     // Event deserialized successfully.
                                     Ok(event) => {
-                                        if trx.fanout.send(event).is_err() {
-                                            break; // Zero subscribers.
-                                        }
+                                        // Continue processing each push.
+                                        // A subscriber can join in the next nanosecond.
+                                        let _ = trx.fanout.send(event);
                                     }
                                     // Deserialization failed.
                                     Err(error) => {

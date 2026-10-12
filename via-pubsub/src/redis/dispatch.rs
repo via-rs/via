@@ -75,6 +75,7 @@ where
                         if let PushKind::Message = push.kind
                             && let [BulkString(scope), BulkString(payload), ..] = &*push.data
                         {
+                            #[allow(clippy::collapsible_if)]
                             if str::from_utf8(scope).is_ok_and(|value| value == signer.scope()) {
                                 match signer.deserialize::<T, U>(payload) {
                                     // Event deserialized successfully.

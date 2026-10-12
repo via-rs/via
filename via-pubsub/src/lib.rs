@@ -2,7 +2,7 @@ macro_rules! log {
     ($level:tt($name:ident), $fmt:literal $($arg:tt)*) => {
         log!($level($name = 0), $fmt $($arg)*);
     };
-    ($level:tt($name:ident = $indent:expr), $fmt:literal $(, $($arg:expr)+)?) => {
+    ($level:tt($name:ident = $indent:expr), $fmt:literal $(, $($arg:expr),+)?) => {
         $($(
             #[cfg(not(debug_assertions))]
             let _ = $arg;

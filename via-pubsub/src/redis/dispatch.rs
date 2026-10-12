@@ -1,5 +1,4 @@
-use redis::aio::ConnectionManager;
-use redis::{PushInfo, PushKind, Value};
+use redis::{PushInfo, PushKind, Value::BulkString, aio::ConnectionManager};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::{broadcast, mpsc};
 
@@ -16,10 +15,10 @@ pub(super) fn dispatch<T, U>(
     mut redis: ConnectionManager,
     signer: Signer,
     mut trx: Dispatcher<T, U>,
-) -> impl Future<Output = ()> + Send
+) -> impl Future<Output = ()>
 where
-    T: DeserializeOwned + Serialize + Send,
-    U: DeserializeOwned + Serialize + Send,
+    T: DeserializeOwned + Serialize,
+    U: DeserializeOwned + Serialize,
 {
     let mut send_buf = Vec::with_capacity(trx.concurrency);
     let mut recv_buf = Vec::with_capacity(trx.concurrency);
@@ -30,89 +29,72 @@ where
             let recv_offset = recv_buf.len();
 
             tokio::select! {
+                // subscriber -> dispatch -> redis
+                len @ 1.. = trx.outbound.recv_many(&mut send_buf, trx.concurrency) => {
+                    let Some(events) = send_buf.get(send_offset..send_offset + len) else {
+                        send_buf = Vec::with_capacity(trx.concurrency);
+                        // Placeholder for tracing...
+                        continue;
+                    };
+
+                    log!(info(pubsub), "publish pipeline (len = {})", len);
+
+                    // Pack the batch of messages into the pipeline.
+                    if let Err(ref error) = events
+                        .iter()
+                        .fold(&mut redis::pipe(), |pipe, event| {
+                            match signer.serialize::<T, U>(event) {
+                                Ok((channel, payload)) => {
+                                    // Append the command to the pipeline.
+                                    pipe.cmd("PUBLISH").arg(channel).arg(payload)
+                                }
+                                Err(error) => {
+                                    // Log the error if #[cfg(debug_assertions)] and return pipe.
+                                    log!(error(pubsub = 1, ret = pipe), "{}", &error)
+                                }
+                            }
+                        })
+                        .exec_async(&mut redis)
+                        .await
+                    {
+                        log!(error(pubsub = 1), "{}", error);
+                    }
+
+                    send_buf.clear();
+                }
                 // subscriber <- dispatch <- redis
                 len @ 1.. = trx.inbound.recv_many(&mut recv_buf, trx.concurrency) => {
-                    let Some(buf) = recv_buf.get(recv_offset..recv_offset + len) else {
+                    let Some(events) = recv_buf.get(recv_offset..recv_offset + len) else {
                         recv_buf = Vec::with_capacity(trx.concurrency);
                         continue;
                     };
 
-                    log!(info, "batch size = {}", len);
+                    log!(info(pubsub), "receive push (len = {})", len);
 
-                    for payload in buf.iter().filter_map(|push| {
-                        let scope = signer.scope();
-                        extract_payload(push, scope)
-                    }) {
-                        match signer.deserialize::<_, U>(payload) {
-                            // Event deserialized successfully.
-                            Ok(raw_peer_event) => {
-                                // Zero subscribers does not terminate the loop.
-                                let _ = trx.fanout.send(raw_peer_event);
-                            }
-
-                            // Deserialization failed.
-                            Err(ref error) => {
-                                #[cfg(not(debug_assertions))]
-                                let _ = error; // Placeholder for tracing...
-                                log!(error, "{}", error);
+                    for push in events {
+                        if let PushKind::Message = push.kind {
+                            if let [BulkString(scope), BulkString(payload), ..] = &*push.data
+                                && str::from_utf8(scope).is_ok_and(|value| value == signer.scope())
+                            {
+                                match signer.deserialize::<T, U>(payload) {
+                                    // Event deserialized successfully.
+                                    Ok(event) => {
+                                        if trx.fanout.send(event).is_err() {
+                                            break; // Zero subscribers.
+                                        }
+                                    }
+                                    // Deserialization failed.
+                                    Err(error) => {
+                                        log!(error(pubsub = 1), "{}", &error);
+                                    }
+                                }
                             }
                         }
                     }
 
                     recv_buf.clear();
                 }
-
-                // subscriber -> dispatch -> redis
-                len @ 1.. = trx.outbound.recv_many(&mut send_buf, trx.concurrency) => {
-                    let mut pipeline = redis::pipe();
-                    let Some(buf) = send_buf.get(send_offset..send_offset + len) else {
-                        // Placeholder for tracing...
-                        send_buf = Vec::with_capacity(trx.concurrency);
-                        continue;
-                    };
-
-                    log!(info, "pipeline size = {}", len);
-
-                    // Pack the batch of messages into the pipeline.
-                    buf.iter().fold(&mut pipeline, |pipe, event| {
-                        match signer.serialize(event) {
-                            Ok((channel, payload)) => pipe
-                                .cmd("PUBLISH")
-                                .arg(channel)
-                                .arg(payload),
-
-                            Err(error) => {
-                                #[cfg(not(debug_assertions))]
-                                let _ = error; // Placeholder for tracing...
-                                log!(error, "{}", &error);
-                                pipe
-                            }
-                        }
-                    });
-
-                    // Publish to peers. If an error occurs, log it in debug builds.
-                    if let Err(error) = pipeline.exec_async(&mut redis).await {
-                        #[cfg(not(debug_assertions))]
-                        let _ = error; // Placeholder for tracing...
-                        log!(error, "{}", &error);
-                    }
-
-                    send_buf.clear();
-                }
             }
         }
-    }
-}
-
-#[inline]
-fn extract_payload<'a>(push: &'a PushInfo, scope: &str) -> Option<&'a [u8]> {
-    if let PushKind::Message = &push.kind
-        && let Some([Value::BulkString(name), Value::BulkString(vec)]) =
-            push.data.split_first_chunk().map(|(head, _)| head)
-        && str::from_utf8(name).is_ok_and(|utf8| scope == utf8)
-    {
-        Some(vec.as_ref())
-    } else {
-        None
     }
 }

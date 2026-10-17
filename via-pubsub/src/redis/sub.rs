@@ -52,6 +52,12 @@ where
     }
 }
 
+impl<T: Clone + Eq + Hash, U> Subscription<T, U> {
+    pub fn actor(&self) -> &T {
+        self.scope.actor()
+    }
+}
+
 impl<T, U> Publish<OurEvent<T, U>> for Subscription<T, U>
 where
     T: Send,

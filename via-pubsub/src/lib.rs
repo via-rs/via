@@ -37,4 +37,4 @@ pub use scope::Scope;
 pub use sign::{Opaque, OurEvent, PeerEvent};
 
 #[cfg(feature = "redis")]
-pub use redis::Redis;
+pub use redis::{Redis, Subscription};

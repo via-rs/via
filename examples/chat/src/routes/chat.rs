@@ -109,10 +109,10 @@ pub async fn chat(mut client: Channel, request: Request<Unicorn>) -> ws::Result 
                 }
 
                 // If the task budget remains, optimistically relay a peer event.
-                if coop::has_budget_remaining() {
-                    if let Some(event) = pubsub.try_recv()? {
-                        recv_peer_event(&mut client, &mut pubsub, event).await?;
-                    }
+                if coop::has_budget_remaining()
+                    && let Some(event) = pubsub.try_recv()?
+                {
+                    recv_peer_event(&mut client, &mut pubsub, event).await?;
                 }
             }
         }

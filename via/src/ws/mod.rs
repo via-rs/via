@@ -74,11 +74,20 @@ where
     Ws::new(listener)
 }
 
+/// End the session from the reactor via early termination.
+///
+/// This function is useful particularly when you want to terminate the ws
+/// session from a helper function outside of a receive loop.
+pub fn disconnect<T>() -> Result<T> {
+    // Instructs the reactor to end the session.
+    Err(ControlFlow::Break(Error::disconnect_ws()))
+}
+
 /// Explicitly restarts a listener while keeping the connection intact.
 ///
 /// The existing listener will first yield so the reactor can complete pending
 /// tasks.
-pub fn restart() -> Result {
+pub fn restart<T>() -> Result<T> {
     // Instructs the reactor to replace the listener.
-    Err(ControlFlow::Continue(Error::restart()))
+    Err(ControlFlow::Continue(Error::restart_ws()))
 }

@@ -49,7 +49,10 @@ enum ErrorSource {
     Json(serde_json::Error),
 
     #[allow(dead_code)]
-    Restart,
+    RestartWs,
+
+    #[allow(dead_code)]
+    DisconnectWs,
 }
 
 enum ErrorSourceRef<'a> {
@@ -58,7 +61,7 @@ enum ErrorSourceRef<'a> {
     Other(&'a (dyn std::error::Error + 'static)),
     Json(&'a serde_json::Error),
     Hyper(&'a hyper::Error),
-    Restart,
+    WsControlFlow,
 }
 
 #[derive(Serialize)]
@@ -78,16 +81,24 @@ where
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 impl Error {
     #[inline]
-    pub(crate) fn restart() -> Self {
+    pub(crate) fn disconnect_ws() -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            source: ErrorSource::Restart,
+            source: ErrorSource::DisconnectWs,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn restart_ws() -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            source: ErrorSource::RestartWs,
         }
     }
 
     #[inline]
     pub(crate) fn is_restart(&self) -> bool {
-        matches!(self.source, ErrorSource::Restart)
+        matches!(self.source, ErrorSource::RestartWs)
     }
 }
 
@@ -224,7 +235,7 @@ impl Error {
             ErrorSource::Other(source) => ErrorSourceRef::Other(source.as_ref()),
             ErrorSource::Json(source) => ErrorSourceRef::Json(source),
             ErrorSource::Hyper(source) => ErrorSourceRef::Hyper(source),
-            ErrorSource::Restart => ErrorSourceRef::Restart,
+            _ => ErrorSourceRef::WsControlFlow,
         }
     }
 
@@ -235,7 +246,7 @@ impl Error {
             ErrorSource::Other(error) => Err(Some(&**error)),
             ErrorSource::Json(error) => Err(Some(error)),
             ErrorSource::Hyper(error) => Err(Some(error)),
-            ErrorSource::Restart => Err(None),
+            _ => Err(None),
         }
     }
 
@@ -268,7 +279,7 @@ impl Display for Error {
             ErrorSourceRef::Other(source) => Display::fmt(source, f),
             ErrorSourceRef::Json(source) => Display::fmt(source, f),
             ErrorSourceRef::Hyper(source) => Display::fmt(source, f),
-            ErrorSourceRef::Restart => write!(f, "restart"),
+            _ => write!(f, "WsControlFlow"),
         }
     }
 }
@@ -281,9 +292,9 @@ impl From<Error> for BoxError {
             ErrorSource::Other(source) => source,
             ErrorSource::Json(source) => source.into(),
             ErrorSource::Hyper(source) => source.into(),
-            ErrorSource::Restart => {
+            _ => {
                 hint::cold_path();
-                "restart".to_owned().into()
+                "WsControlFlow".to_owned().into()
             }
         }
     }

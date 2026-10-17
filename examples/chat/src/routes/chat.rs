@@ -137,6 +137,12 @@ async fn recv_peer_event(
 ) -> ws::Result {
     match next {
         // Lag detected in `subscription`.
+        //
+        // In production, sequential lag notifications should disconnect.
+        //
+        // Client-side reconnection will likely result in the LB routing the
+        // next upgrade request to a node with the bandwidth to handle the
+        // throughput.
         PeerEvent::Lag(length) => {
             log!(info(chat = 1), "lag notification; len = {}", length);
 

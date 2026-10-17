@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::ops::ControlFlow;
-use tokio::task::{coop, yield_now};
+use tokio::task::coop;
 use via::error::{Catch, Propagate};
 use via::ws::{self, Channel, Message};
 use via::{Shared, deny};
@@ -28,7 +28,7 @@ enum LagNotification {
     Lag { length: u64 },
 }
 
-macro_rules! relay {
+macro_rules! recv {
     ($client:ident, $scope:ident, $event:expr) => {
         match $event {
             // Lag detected in `subscription`.
@@ -108,10 +108,7 @@ pub async fn join(mut client: Channel, request: Request) -> ws::Result {
         // This prevents a positive feedback loop from occurring when trying to
         // recover from lag.
         if let Some(event) = scope.try_recv()? {
-            relay!(client, scope, event);
-
-            // Eagerly relaying a peer event requires an unconditional yield.
-            yield_now().await;
+            recv!(client, scope, event);
         }
 
         Ok(scope)
@@ -134,7 +131,7 @@ pub async fn join(mut client: Channel, request: Request) -> ws::Result {
             // peers -> self -> client
             inbound = pubsub.recv() => {
                 if let Some(event) = inbound? {
-                    relay!(client, pubsub, event);
+                    recv!(client, pubsub, event);
                 }
             }
 
@@ -163,7 +160,7 @@ pub async fn join(mut client: Channel, request: Request) -> ws::Result {
                 // If the task budget remains, optimistically relay a peer event.
                 if coop::has_budget_remaining() {
                     if let Some(event) = pubsub.try_recv()? {
-                        relay!(client, pubsub, event);
+                        recv!(client, pubsub, event);
                     }
                 }
             }

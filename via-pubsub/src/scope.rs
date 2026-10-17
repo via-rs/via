@@ -33,6 +33,10 @@ where
         }
     }
 
+    pub(crate) fn actor(&self) -> &Interest {
+        &self.actor
+    }
+
     fn try_claim(&self, event: RawPeerEvent<Interest>) -> Option<PeerEvent<Interest>> {
         match event {
             RawPeerEvent::Lag(len) => {

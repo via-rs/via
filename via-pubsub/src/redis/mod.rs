@@ -1,6 +1,8 @@
 mod dispatch;
 mod sub;
 
+pub use sub::Subscription;
+
 use redis::aio::{ConnectionManager, ConnectionManagerConfig, SendError};
 use redis::{Client, PushInfo, RedisResult};
 use serde::{Serialize, de::DeserializeOwned};
@@ -15,7 +17,7 @@ use crate::scope::Filter;
 use crate::sign::{InvalidKeyError, Key, OurEvent, RawPeerEvent, Signer};
 
 use dispatch::Dispatcher;
-use sub::{Channel, Subscription};
+use sub::Channel;
 
 /// The maximum size in bytes of a pipeline command.
 const MAX_PIPELINE_SIZE: usize = 65536;

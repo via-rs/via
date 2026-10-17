@@ -30,9 +30,6 @@ use routes::auth::{login, logout, me};
 use routes::{channels, reactions, replies, threads, users};
 use util::session::{self, auth_required, authenticate};
 
-#[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-use routes::chat;
-
 const COHORT_SIZE: usize = 512;
 const MAX_CONNECTIONS: usize = 8192;
 const MAX_NUM_COHORTS: usize = MAX_CONNECTIONS.div_ceil(COHORT_SIZE);
@@ -98,7 +95,7 @@ fn routes(home: via::Route<Unicorn>) {
 
     // The /api/chat route.
     #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    path.route("/chat", via::get(authenticate(via::ws(chat::join))));
+    path.route("/chat", via::get(authenticate(via::ws(routes::chat))));
 
     // The /api/channels resource.
     path.route("/channels", channels::collection(auth_required))

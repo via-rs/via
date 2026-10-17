@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::ops::ControlFlow;
 use tokio::task::coop;
 use via::error::{Catch, Propagate};
-use via::ws::{self, Channel, Message};
+use via::ws::{self, Channel, Message, Request};
 use via::{Shared, deny};
 use via_pubsub::{Dispatch, OurEvent, PeerEvent, Publish, Receive, Scope};
 
@@ -13,8 +13,6 @@ use crate::models::user::User;
 use crate::models::{ChannelSubscription, UserPreview, subscription};
 use crate::util::{Id, Session, hurry};
 
-type Request = via::ws::Request<Unicorn>;
-
 #[derive(Deserialize)]
 #[serde(content = "data", rename_all = "lowercase", tag = "type")]
 enum ClientEvent {
@@ -22,54 +20,7 @@ enum ClientEvent {
     Reaction(NewReactionInChannel),
 }
 
-#[derive(Serialize)]
-#[serde(content = "data", rename_all = "lowercase", tag = "type")]
-enum LagNotification {
-    Lag { length: u64 },
-}
-
-macro_rules! recv {
-    ($client:ident, $scope:ident, $event:expr) => {
-        match $event {
-            // Lag detected in `subscription`.
-            PeerEvent::Lag(length) => {
-                log!(info(chat = 1), "lag notification; len = {}", length);
-
-                let notification = LagNotification::Lag { length };
-                let message = serde_json::to_string(&notification).or_continue()?;
-
-                Channel::send(&mut $client, message).await?;
-
-                return ws::restart();
-            }
-
-            // The user logged out.
-            PeerEvent::Logout => {
-                log!(info(chat = 1), "ws session ended");
-                return ws::disconnect(); // End the session.
-            }
-
-            // Notification received from a peer.
-            PeerEvent::Relay(notification) => {
-                Channel::send(&mut $client, notification).await?;
-            }
-
-            // The user was invited to a channel.
-            PeerEvent::Register(interest) => {
-                log!(info(chat = 1), "joining channel {}", interest);
-                Scope::register(&mut $scope, interest);
-            }
-
-            // The user was removed from a channel.
-            PeerEvent::Deregister(ref interest) => {
-                log!(info(chat = 1), "leaving channel {}", interest);
-                Scope::deregister(&mut $scope, interest);
-            }
-        }
-    };
-}
-
-pub async fn join(mut client: Channel, request: Request) -> ws::Result {
+pub async fn chat(mut client: Channel, request: Request<Unicorn>) -> ws::Result {
     log!(info(chat), "setup recv loop");
 
     // Setup the chat session while yielding to the runtime as little as
@@ -108,7 +59,7 @@ pub async fn join(mut client: Channel, request: Request) -> ws::Result {
         // This prevents a positive feedback loop from occurring when trying to
         // recover from lag.
         if let Some(event) = scope.try_recv()? {
-            recv!(client, scope, event);
+            recv_peer_event(&mut client, &mut scope, event).await?;
         }
 
         Ok(scope)
@@ -131,7 +82,7 @@ pub async fn join(mut client: Channel, request: Request) -> ws::Result {
             // peers -> self -> client
             inbound = pubsub.recv() => {
                 if let Some(event) = inbound? {
-                    recv!(client, pubsub, event);
+                    recv_peer_event(&mut client, &mut pubsub, event).await?;
                 }
             }
 
@@ -160,7 +111,7 @@ pub async fn join(mut client: Channel, request: Request) -> ws::Result {
                 // If the task budget remains, optimistically relay a peer event.
                 if coop::has_budget_remaining() {
                     if let Some(event) = pubsub.try_recv()? {
-                        recv!(client, pubsub, event);
+                        recv_peer_event(&mut client, &mut pubsub, event).await?;
                     }
                 }
             }
@@ -176,6 +127,54 @@ fn de_text(message: &Message) -> ws::Result<Option<ClientEvent>> {
         ws::disconnect()
     } else {
         Ok(None)
+    }
+}
+
+async fn recv_peer_event(
+    client: &mut Channel,
+    scope: &mut impl Scope<Id>,
+    next: PeerEvent<Id>,
+) -> ws::Result {
+    match next {
+        // Lag detected in `subscription`.
+        PeerEvent::Lag(length) => {
+            log!(info(chat = 1), "lag notification; len = {}", length);
+
+            #[derive(Serialize)]
+            #[serde(content = "data", rename_all = "lowercase", tag = "type")]
+            enum LagNotification {
+                Lag { length: u64 },
+            }
+
+            let notification = LagNotification::Lag { length };
+            let message = serde_json::to_string(&notification).or_continue()?;
+
+            client.send(message).await?;
+            ws::restart()
+        }
+
+        // The user logged out.
+        PeerEvent::Logout => {
+            log!(info(chat = 1), "ws session ended");
+            ws::disconnect() // End the session.
+        }
+
+        // Notification received from a peer.
+        PeerEvent::Relay(notification) => client.send(notification).await,
+
+        // The user was invited to a channel.
+        PeerEvent::Register(interest) => {
+            log!(info(chat = 1), "joining channel {}", interest);
+            scope.register(interest);
+            Ok(())
+        }
+
+        // The user was removed from a channel.
+        PeerEvent::Deregister(ref interest) => {
+            log!(info(chat = 1), "leaving channel {}", interest);
+            scope.deregister(interest);
+            Ok(())
+        }
     }
 }
 

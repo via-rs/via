@@ -1,8 +1,10 @@
 pub mod session;
 
+mod hurry;
 mod id;
 mod timestamp;
 
+pub(crate) use hurry::hurry;
 pub use id::Id;
 pub use session::{Authenticator, Session};
 pub use timestamp::Iso8601;

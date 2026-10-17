@@ -34,7 +34,7 @@ const PUBSUB_SIGNER: &str = "PUBSUB_SIGNER";
 const SESSION_SIGNER: &str = "SESSION_SIGNER";
 
 /// The maximum size in bytes of chat message or reaction.
-pub const MAX_EVENT_SIZE: usize = 8192;
+pub const MAX_EVENT_SIZE: usize = 16384;
 
 /// The cookie name used to store an encoded identity token.
 pub const SESSION: &str = "via-chat-session";

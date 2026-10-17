@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
-use tokio::task::coop;
-use via::deny;
+use std::ops::ControlFlow;
+use tokio::task::{coop, yield_now};
 use via::error::{Catch, Propagate};
 use via::ws::{self, Channel, Message};
+use via::{Shared, deny};
 use via_pubsub::{Dispatch, OurEvent, PeerEvent, Publish, Receive, Scope};
 
 use crate::app::{Connection, Notification, Postgres, Unicorn};
@@ -10,7 +11,7 @@ use crate::models::reaction::{NewReactionInChannel, Reaction};
 use crate::models::thread::{NewThreadInChannel, Thread};
 use crate::models::user::User;
 use crate::models::{ChannelSubscription, UserPreview, subscription};
-use crate::util::{Id, Session};
+use crate::util::{Id, Session, hurry};
 
 type Request = via::ws::Request<Unicorn>;
 
@@ -27,178 +28,199 @@ enum LagNotification {
     Lag { length: u64 },
 }
 
-macro_rules! hurry {
-    ($future:expr) => {
-        coop::unconstrained($future).await
+macro_rules! relay {
+    ($client:ident, $scope:ident, $event:expr) => {
+        match $event {
+            // Lag detected in `subscription`.
+            PeerEvent::Lag(length) => {
+                log!(info(chat = 1), "lag notification; len = {}", length);
+
+                let notification = LagNotification::Lag { length };
+                let message = serde_json::to_string(&notification).or_continue()?;
+
+                Channel::send(&mut $client, message).await?;
+
+                return ws::restart();
+            }
+
+            // The user logged out.
+            PeerEvent::Logout => {
+                log!(info(chat = 1), "ws session ended");
+                return ws::disconnect(); // End the session.
+            }
+
+            // Notification received from a peer.
+            PeerEvent::Relay(notification) => {
+                Channel::send(&mut $client, notification).await?;
+            }
+
+            // The user was invited to a channel.
+            PeerEvent::Register(interest) => {
+                log!(info(chat = 1), "joining channel {}", interest);
+                Scope::register(&mut $scope, interest);
+            }
+
+            // The user was removed from a channel.
+            PeerEvent::Deregister(ref interest) => {
+                log!(info(chat = 1), "leaving channel {}", interest);
+                Scope::deregister(&mut $scope, interest);
+            }
+        }
     };
 }
 
-pub async fn chat(mut channel: Channel, request: Request) -> ws::Result {
+pub async fn join(mut client: Channel, request: Request) -> ws::Result {
     log!(info(chat), "setup recv loop");
 
-    // An authenticated user is required.
-    let me = request.me().or_break()?;
-
-    // Borrow `&App` for the duration of this listener. We own a copy of
-    // `request` and it is guaranteed a stable memory address by `Arc`.
+    // Setup the chat session while yielding to the runtime as little as
+    // possible.
     //
-    // Therefore, we know that this borrow is valid for the lifetime of the
-    // future returned by this function. Also, checking out a database
-    // connection is not a callable function on `&App`.
+    // This async block performs the following:
     //
-    // The risk of holding this borrow between awaits is considerably lower
-    // than any of the alternatives.
-    let app = request.app();
+    //   - A scoped pubsub subscription is created with the current user's id
+    //     as the "actor"
+    //
+    //   - A list of ids containing authenticated user's subscriptions are
+    //     fetched from the database and registered as an interest
+    //
+    //   - The next event of the pubsub subscription is eagerly received and
+    //     processed in the event that we are recovering from lag
+    //
+    // Each time an error occurs, due to lag or otherwise the user's
+    // subscriptions are rebuilt from scratch. This makes lag recovery
+    // indistinguishable in every way from a new chat session.
+    let mut pubsub = hurry!(async {
+        let unicorn = request.app();
+        let mut scope = unicorn.pubsub().subscribe(request.me().or_break()?);
+        let subscriptions = {
+            let mut connection = unicorn.database().get().await.or_break()?;
+            ChannelSubscription::participating(&mut connection, *scope.actor()).await?
+        };
 
-    // Get a subscription scoped to the current user.
-    let mut pubsub = app.pubsub().subscribe(me);
+        // Register interest in the channels that the user is subscribed to.
+        for interest in subscriptions {
+            scope.register(interest);
+        }
 
-    // Register interest in the channels that the user is subscribed to.
-    for interest in hurry!(async {
-        let mut connection = app.database().get().await.or_break()?;
-        ChannelSubscription::participating(&mut connection, me).await
-    })? {
-        pubsub.register(interest);
-    }
+        // Try to eagerly receive and process the next peer event without
+        // yielding.
+        //
+        // This prevents a positive feedback loop from occurring when trying to
+        // recover from lag.
+        if let Some(event) = scope.try_recv()? {
+            relay!(client, scope, event);
+
+            // Eagerly relaying a peer event requires an unconditional yield.
+            yield_now().await;
+        }
+
+        Ok(scope)
+    })?;
+
+    // Work with an owned copy of our application `Shared<Unicorn>`.
+    //
+    // This shortens the deref chain required to checkout a database connection
+    // for each iteration of the following dispatch loop.
+    //
+    // This atomic operation must be performed after your ws listener has fully
+    // recovered from lag as it can contend with every other request.
+    let unicorn = request.app_owned();
+
+    log!(info(chat), "listening for client and peer events");
 
     // Start receiving messages from the client and peers.
     loop {
-        let inbound = tokio::select! {
-            // Assume that we just published an event.
-            biased;
-
-            // client <- self <- peers
-            result = pubsub.recv() => result?,
-
-            // client -> self -> peers
-            outbound = channel.recv() => {
-                // Attempt to extract an event from the next message.
-                let event = match outbound {
-                    // Try to deserialize a `ClientEvent` from text messages.
-                    Some(message) if message.is_text() => {
-                        log!(info(chat = 1), "event received from client");
-                        ClientEvent::try_from(&message).or_continue()?
-                    }
-                    // Disconnect if it is a close message. Otherwise, continue.
-                    other => {
-                        if other.as_ref().is_none_or(Message::is_close) {
-                            log!(info(chat = 1), "ws session ended");
-                            return Ok(()); // End the session.
-                        } else {
-                            continue;
-                        }
-                    }
-                };
-
-                // Persist the client event and prepare to notify peers.
-                let notification = match event {
-                    ClientEvent::Reply(mut new_reply) => {
-                        // Set the user_id of the reply to the current user id.
-                        new_reply.user_id = Some(me);
-
-                        // Acquire a database connection and perform the insert.
-                        hurry!(async {
-                            let mut connection = app.database().get().await.or_break()?;
-                            reply_to(&mut connection, new_reply).await.or_continue()
-                        })?
-                    }
-                    ClientEvent::Reaction(mut new_reaction) => {
-                        // Set the user_id of the reaction to the current user id.
-                        new_reaction.user_id = Some(me);
-
-                        // Acquire a database connection and perform the insert.
-                        hurry!(async {
-                            let mut connection = app.database().get().await.or_break()?;
-                            react_to(&mut connection, new_reaction).await.or_continue()
-                        })?
-                    }
-                };
-
-                // Log the result of the database operation.
-                //
-                // This let's developers who are reading debug logs know that
-                // we woke for the result of the `persist_client_event` future.
-                log!(info(chat = 1), "event saved to database");
-
-                // Publish the notification to subscribers.
-                pubsub.send(notification).await?;
-
-                // Notify the successful publish in debug builds.
-                //
-                // This is particularly helpful when you want to know whether
-                // or not the reactor woke because a busy subscription caused
-                // the publish future to yield before send.
-                log!(info(chat = 2), "event published");
-
-                // If an inbound event was received during the insert and we
-                // have budget remaining, proceed with the inbound event flow.
-                if coop::has_budget_remaining() {
-                    pubsub.try_recv()?
-                } else {
-                    continue;
+        tokio::select! {
+            // peers -> self -> client
+            inbound = pubsub.recv() => {
+                if let Some(event) = inbound? {
+                    relay!(client, pubsub, event);
                 }
             }
-        };
 
-        if let Some(event) = inbound {
-            match event {
-                // Lag detected in `subscription`.
-                PeerEvent::Lag(length) => {
-                    log!(info(chat = 1), "lag notification; len = {}", length);
-                    let notification = LagNotification::Lag { length };
-                    let message = serde_json::to_string(&notification).or_continue()?;
+            // client -> self -> peers
+            outbound = client.recv() => {
+                // Attempt to extract an event from the next message.
+                if let Some(event) = outbound.as_ref().map_or_else(ws::disconnect, de_text)? {
+                    log!(info(chat = 1), "event received from client");
 
-                    channel.send(message).await?;
-                    return ws::restart();
+                    // Persist the client event and prepare to notify peers.
+                    let notification = event.persist(pubsub.actor(), &unicorn).await?;
+
+                    log!(info(chat = 2), "event persisted to database");
+
+                    // Publish the notification to subscribers.
+                    pubsub.send(notification).await?;
+
+                    // Notify the successful publish in debug builds.
+                    //
+                    // This is particularly helpful when you want to know whether
+                    // or not the reactor woke because a busy subscription caused
+                    // the publish future to yield before send.
+                    log!(info(chat = 2), "event published");
                 }
 
-                // The user logged out.
-                PeerEvent::Logout => {
-                    log!(info(chat = 1), "ws session ended");
-                    return Ok(()); // End the session.
-                }
-
-                // Notification received from a peer.
-                PeerEvent::Relay(notification) => {
-                    channel.send(notification).await?;
-                }
-
-                // The user was invited to a channel.
-                PeerEvent::Register(interest) => {
-                    log!(info(chat = 1), "joining channel {}", interest);
-                    pubsub.register(interest);
-                }
-
-                // The user was removed from a channel.
-                PeerEvent::Deregister(ref interest) => {
-                    log!(info(chat = 1), "leaving channel {}", interest);
-                    pubsub.deregister(interest);
+                // If the task budget remains, optimistically relay a peer event.
+                if coop::has_budget_remaining() {
+                    if let Some(event) = pubsub.try_recv()? {
+                        relay!(client, pubsub, event);
+                    }
                 }
             }
         }
     }
 }
 
-#[inline]
-async fn react_to(
-    connection: &mut Connection<'_>,
-    new_reaction: NewReactionInChannel,
-) -> via::Result<OurEvent<Id, Notification>> {
-    let interest = new_reaction.channel_id;
-    let notification = Reaction::create(connection, new_reaction).await?.into();
-
-    Ok(OurEvent::relay(interest, notification))
+fn de_text(message: &Message) -> ws::Result<Option<ClientEvent>> {
+    if message.is_text() {
+        Ok(Some(ClientEvent::try_from(message).or_continue()?))
+    } else if message.is_close() {
+        log!(info(chat = 1), "ws session ended");
+        ws::disconnect()
+    } else {
+        Ok(None)
+    }
 }
 
-#[inline]
-async fn reply_to(
-    connection: &mut Connection<'_>,
-    new_reply: NewThreadInChannel,
-) -> via::Result<OurEvent<Id, Notification>> {
-    let interest = new_reply.channel_id;
-    let notification = Thread::create(connection, new_reply).await?.into();
+impl ClientEvent {
+    async fn persist(
+        self,
+        actor: &Id,
+        unicorn: &Unicorn,
+    ) -> ws::Result<OurEvent<Id, Notification>> {
+        match self {
+            ClientEvent::Reply(mut init) => {
+                // Set the user_id of the reply to the current user id.
+                init.user_id = Some(*actor);
 
-    Ok(OurEvent::relay(interest, notification))
+                // Copy channel_id so we can use it again as the event interest.
+                let interest = init.channel_id;
+
+                // Acquire a database connection and perform the insert.
+                let thread = hurry!(async {
+                    let mut connection = unicorn.database().get().await.or_break()?;
+                    Thread::create(&mut connection, init).await.or_continue()
+                })?;
+
+                Ok(OurEvent::relay(interest, thread.into()))
+            }
+            ClientEvent::Reaction(mut init) => {
+                // Set the user_id of the reaction to the current user id.
+                init.user_id = Some(*actor);
+
+                // Copy channel_id so we can use it again as the event interest.
+                let interest = init.channel_id;
+
+                // Acquire a database connection and perform the insert.
+                let reaction = hurry!(async {
+                    let mut connection = unicorn.database().get().await.or_break()?;
+                    Reaction::create(&mut connection, init).await.or_continue()
+                })?;
+
+                Ok(OurEvent::relay(interest, reaction.into()))
+            }
+        }
+    }
 }
 
 impl TryFrom<&'_ Message> for ClientEvent {

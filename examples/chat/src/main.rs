@@ -31,7 +31,7 @@ use routes::{channels, reactions, replies, threads, users};
 use util::session::{self, auth_required, authenticate};
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-use crate::app::MAX_EVENT_SIZE;
+use routes::chat;
 
 const COHORT_SIZE: usize = 512;
 const MAX_CONNECTIONS: usize = 8192;
@@ -98,12 +98,7 @@ fn routes(home: via::Route<Unicorn>) {
 
     // The /api/chat route.
     #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-    path.route(
-        "/chat",
-        via::get(authenticate(
-            via::ws(routes::chat).max_message_size(Some(MAX_EVENT_SIZE)),
-        )),
-    );
+    path.route("/chat", via::get(authenticate(via::ws(chat::join))));
 
     // The /api/channels resource.
     path.route("/channels", channels::collection(auth_required))

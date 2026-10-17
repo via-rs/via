@@ -49,7 +49,7 @@ pub async fn chat(mut client: Channel, request: Request<Unicorn>) -> ws::Result 
         };
 
         // Register interest in the channels that the user is subscribed to.
-        for interest in subscriptions {
+        for interest in subscriptions.iter().copied() {
             scope.register(interest);
         }
 

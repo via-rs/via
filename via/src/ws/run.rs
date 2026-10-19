@@ -331,12 +331,19 @@ where
                 this.facade = None;
                 match *op {
                     ControlFlow::Continue(ref error) => {
-                        log!(error(ws = 0), "{}", error);
-                        context.waker().wake_by_ref();
-                        Poll::Pending
+                        if error.is_ws_disconnect() {
+                            Poll::Ready(())
+                        } else {
+                            log!(error(ws = 0), "{}", error);
+                            context.waker().wake_by_ref();
+                            Poll::Pending
+                        }
                     }
                     ControlFlow::Break(ref error) => {
-                        log!(error(ws = 0), "{}", error);
+                        if !error.is_ws_disconnect() {
+                            log!(error(ws = 0), "{}", error);
+                        }
+
                         Poll::Ready(())
                     }
                 }

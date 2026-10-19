@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
-use super::error::already_closed;
+use super::error::{already_closed, readiness_check_required};
 use super::util::poll_immediate_no_wake;
 
 pub struct Channel {
@@ -26,6 +26,7 @@ struct Send<'a> {
 }
 
 struct Recv<'a> {
+    full: &'a AtomicBool,
     recv: mpsc::Recv<'a, mpsc::Receiver<Message>>,
 }
 
@@ -54,6 +55,7 @@ impl Channel {
 
     pub fn recv(&mut self) -> impl Future<Output = Option<Message>> {
         Recv {
+            full: &*self.full,
             recv: self.rx.recv(),
         }
     }
@@ -80,7 +82,7 @@ impl Channel {
     }
 
     pub(super) fn has_outbound(&self) -> bool {
-        self.full.swap(false, Ordering::Relaxed)
+        self.full.load(Ordering::Relaxed)
     }
 
     /// Check the capacity of the channel without registering a wake.
@@ -96,7 +98,10 @@ impl Channel {
     /// Try to receive the next message without registering a wake.
     pub(super) fn try_recv(&mut self) -> super::Result<Option<Message>> {
         match self.rx.try_recv() {
-            Ok(outbound) => Ok(Some(outbound)),
+            Ok(outbound) => {
+                self.full.store(false, Ordering::Relaxed);
+                Ok(Some(outbound))
+            }
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Closed) => Err(already_closed()),
         }
@@ -104,14 +109,19 @@ impl Channel {
 
     /// Try to send the provided message without registering a wake.
     pub(super) fn try_send(&mut self, message: Message) -> super::Result {
-        self.tx.try_send(message).map_err(|error| {
-            debug_assert!(
-                error.into_send_error().is_full(),
-                "via::ws::Channel::try_send(..) requires a readiness check."
-            );
-
-            already_closed()
-        })
+        match self.tx.try_send(message) {
+            Ok(_) => {
+                self.full.store(true, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(error) => {
+                if error.is_full() {
+                    Err(readiness_check_required())
+                } else {
+                    Err(already_closed())
+                }
+            }
+        }
     }
 }
 
@@ -120,7 +130,21 @@ impl Future for Recv<'_> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // Receive progress is driven by the I/O of `WebSocketStream`.
-        Pin::new(&mut self.recv).poll(cx).map(|result| result.ok())
+        match Pin::new(&mut self.recv).poll(cx) {
+            Poll::Ready(Ok(message)) => {
+                self.full.store(false, Ordering::Relaxed);
+                Poll::Ready(Some(message))
+            }
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(_)) => Poll::Ready(None),
+        }
+    }
+}
+
+impl Send<'_> {
+    #[inline]
+    fn channel(&mut self) -> &mut Channel {
+        &mut self.channel
     }
 }
 
@@ -134,20 +158,9 @@ impl Future for Send<'_> {
         // following readiness check registers a wake if the channel is full.
         if poll_ready(&mut this.channel.tx, cx)?.is_ready() {
             if let Some(message) = this.message.take() {
-                let channel = &mut this.channel;
-
-                // `poll_ready` guarantees `TrySendError::Full` is unreachable.
-                match channel.tx.try_send(message) {
-                    Ok(_) => {
-                        channel.full.store(true, Ordering::Relaxed);
-                        Poll::Ready(Ok(()))
-                    }
-                    Err(_) => {
-                        std::hint::cold_path();
-                        Poll::Ready(Err(already_closed()))
-                    }
-                }
+                Poll::Ready(this.channel().try_send(message))
             } else {
+                log!(warn(ws = 0), "send future polled after completion.");
                 Poll::Ready(Ok(()))
             }
         } else {

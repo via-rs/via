@@ -80,7 +80,7 @@ impl Channel {
     }
 
     pub(super) fn has_outbound(&self) -> bool {
-        self.full.load(Ordering::Relaxed)
+        self.full.swap(false, Ordering::Relaxed)
     }
 
     /// Check the capacity of the channel without registering a wake.
@@ -96,10 +96,7 @@ impl Channel {
     /// Try to receive the next message without registering a wake.
     pub(super) fn try_recv(&mut self) -> super::Result<Option<Message>> {
         match self.rx.try_recv() {
-            Ok(outbound) => {
-                self.full.store(false, Ordering::Relaxed);
-                Ok(Some(outbound))
-            }
+            Ok(outbound) => Ok(Some(outbound)),
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Closed) => Err(already_closed()),
         }

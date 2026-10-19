@@ -97,7 +97,12 @@ impl Error {
     }
 
     #[inline]
-    pub(crate) fn is_restart(&self) -> bool {
+    pub(crate) fn is_ws_disconnect(&self) -> bool {
+        matches!(self.source, ErrorSource::DisconnectWs)
+    }
+
+    #[inline]
+    pub(crate) fn is_ws_restart(&self) -> bool {
         matches!(self.source, ErrorSource::RestartWs)
     }
 }
@@ -294,7 +299,16 @@ impl From<Error> for BoxError {
             ErrorSource::Hyper(source) => source.into(),
             _ => {
                 hint::cold_path();
-                "WsControlFlow".to_owned().into()
+
+                let message = "WsControlFlow".to_owned();
+
+                log!(
+                    via(indent = 0),
+                    "unlikely branch taken. BoxError::from({})",
+                    &*message
+                );
+
+                message.into()
             }
         }
     }

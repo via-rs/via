@@ -123,13 +123,6 @@ impl Future for Recv<'_> {
     }
 }
 
-impl Send<'_> {
-    #[inline]
-    fn channel(&mut self) -> &mut Channel {
-        &mut self.channel
-    }
-}
-
 impl Future for Send<'_> {
     type Output = super::Result;
 
@@ -140,8 +133,8 @@ impl Future for Send<'_> {
         // following readiness check registers a wake if the channel is full.
         if poll_ready(&mut this.channel.tx, cx)?.is_ready() {
             if let Some(message) = this.message.take() {
-                this.channel().full.store(true, Ordering::Relaxed);
-                Poll::Ready(this.channel().try_send(message))
+                this.channel.full.store(true, Ordering::Relaxed);
+                Poll::Ready(this.channel.try_send(message))
             } else {
                 log!(warn(ws = 0), "send future polled after completion.");
                 Poll::Ready(Ok(()))

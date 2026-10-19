@@ -15,9 +15,7 @@ use tokio_tungstenite::WebSocketStream;
 #[cfg(feature = "tokio-websockets")]
 use tokio_websockets::WebSocketStream;
 
-use crate::ws::error::integrity_check_failed;
-
-use super::error::{into_break, is_restart, rescue};
+use super::error::{integrity_check_failed, into_break, is_restart, rescue};
 use super::stream::WebSocketStreamMut;
 use super::{Channel, Request, upgrade::Listener};
 
@@ -333,12 +331,19 @@ where
                 this.facade = None;
                 match *op {
                     ControlFlow::Continue(ref error) => {
-                        log!(error(ws = 0), "{}", error);
-                        context.waker().wake_by_ref();
-                        Poll::Pending
+                        if error.is_ws_disconnect() {
+                            Poll::Ready(())
+                        } else {
+                            log!(error(ws = 0), "{}", error);
+                            context.waker().wake_by_ref();
+                            Poll::Pending
+                        }
                     }
                     ControlFlow::Break(ref error) => {
-                        log!(error(ws = 0), "{}", error);
+                        if !error.is_ws_disconnect() {
+                            log!(error(ws = 0), "{}", error);
+                        }
+
                         Poll::Ready(())
                     }
                 }

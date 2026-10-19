@@ -40,7 +40,7 @@ pub fn into_break(catch: Catch) -> Catch {
 pub fn is_restart(catch: &Catch) -> bool {
     match *catch {
         ControlFlow::Break(_) => false,
-        ControlFlow::Continue(ref error) => error.is_restart(),
+        ControlFlow::Continue(ref error) => error.is_ws_restart(),
     }
 }
 

@@ -44,6 +44,10 @@ pub fn is_restart(catch: &Catch) -> bool {
     }
 }
 
+pub fn readiness_check_required() -> Catch {
+    ControlFlow::Break(err!(500, "try_send(..) requires a readiness check."))
+}
+
 pub fn rescue(error: WebSocketError) -> Catch {
     use std::io::ErrorKind;
 

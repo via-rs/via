@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
-use super::error::already_closed;
+use super::error::{already_closed, readiness_check_required};
 use super::util::poll_immediate_no_wake;
 
 pub struct Channel {
@@ -105,12 +105,11 @@ impl Channel {
     /// Try to send the provided message without registering a wake.
     pub(super) fn try_send(&mut self, message: Message) -> super::Result {
         self.tx.try_send(message).map_err(|error| {
-            debug_assert!(
-                error.into_send_error().is_full(),
-                "via::ws::Channel::try_send(..) requires a readiness check."
-            );
-
-            already_closed()
+            if error.is_full() {
+                readiness_check_required()
+            } else {
+                already_closed()
+            }
         })
     }
 }
@@ -120,7 +119,7 @@ impl Future for Recv<'_> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // Receive progress is driven by the I/O of `WebSocketStream`.
-        Pin::new(&mut self.recv).poll(cx).map(|result| result.ok())
+        Pin::new(&mut self.recv).poll(cx).map(Result::ok)
     }
 }
 
@@ -134,20 +133,10 @@ impl Future for Send<'_> {
         // following readiness check registers a wake if the channel is full.
         if poll_ready(&mut this.channel.tx, cx)?.is_ready() {
             if let Some(message) = this.message.take() {
-                let channel = &mut this.channel;
-
-                // `poll_ready` guarantees `TrySendError::Full` is unreachable.
-                match channel.tx.try_send(message) {
-                    Ok(_) => {
-                        channel.full.store(true, Ordering::Relaxed);
-                        Poll::Ready(Ok(()))
-                    }
-                    Err(_) => {
-                        std::hint::cold_path();
-                        Poll::Ready(Err(already_closed()))
-                    }
-                }
+                this.channel.full.store(true, Ordering::Relaxed);
+                Poll::Ready(this.channel.try_send(message))
             } else {
+                log!(warn(ws = 0), "send future polled after completion.");
                 Poll::Ready(Ok(()))
             }
         } else {

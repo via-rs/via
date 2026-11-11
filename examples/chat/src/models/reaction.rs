@@ -240,7 +240,6 @@ impl ReactionPreview {
 
 impl FromSqlRow<sql_types::Untyped, Pg> for ReactionWithUser {
     fn build_from_row<'a>(row: &impl diesel::row::Row<'a, Pg>) -> deserialize::Result<Self> {
-        println!("build_from_row");
         Ok(Self {
             reaction: FromSqlRow::<ReactionSqlType, _>::build_from_row(row)?,
             user: FromSqlRow::<UserPreviewSqlType, _>::build_from_row(&row.partial_row(6..9))?,

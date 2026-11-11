@@ -89,8 +89,13 @@ async fn show(request: Request, _: Next) -> via::Result {
 }
 
 /// Update an existing reply by id.
-fn update(request: Request, _: Next) -> impl Future<Output = via::Result> {
-    update_by_id(request, "reply-id")
+async fn update(request: Request, _: Next) -> via::Result {
+    let scope = UpdateThreadScope {
+        user_id: request.me()?,
+        target_id: request.param("reply-id").parse()?,
+    };
+
+    update_by_id(request, scope).await
 }
 
 /// Delete a user account.

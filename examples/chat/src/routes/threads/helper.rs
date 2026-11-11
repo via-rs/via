@@ -27,12 +27,7 @@ pub struct UpdateThreadScope {
 /// The current user must be authorized to access the channel to which the
 /// thread belongs and own the thread with `id = scope.target_id`. Otherwise,
 /// `403`.
-pub async fn update_by_id(request: Request, param: &str) -> via::Result {
-    let scope = UpdateThreadScope {
-        user_id: request.me()?,
-        target_id: request.param(param).parse()?,
-    };
-
+pub async fn update_by_id(request: Request, scope: UpdateThreadScope) -> via::Result {
     // Aggregate the request body and deserialize a thread change set.
     let (body, app) = request.into_future();
     let changes = body.timeout_after_secs(2).await?.data()?;

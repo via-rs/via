@@ -6,13 +6,15 @@ use diesel::{prelude::*, sql_types};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use via::ResultExt;
+use via::request::PathParams;
 use via_diesel::paginate::{Keyset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
-use super::{Channel, ReactionPreview, User, UserPreview};
+use super::subscription::{ChannelSubscription, Subscription};
+use super::user::{User, UserPreview, UserPreviewSqlType};
+use super::{Channel, Reaction, ReactionPreview};
 use crate::app::{Connection, Notification};
-use crate::models::Reaction;
-use crate::models::user::UserPreviewSqlType;
+use crate::routes::threads::UpdateThreadScope;
 use crate::schema::{threads, users};
 use crate::util::Id;
 
@@ -46,7 +48,16 @@ type ReplyToResult = (
     sql_types::Text,                      // body
 );
 
-#[derive(Associations, Debug, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
+#[derive(
+    Associations,
+    Debug,
+    Deserialize,
+    Identifiable,
+    Queryable,
+    QueryableByName,
+    Selectable,
+    Serialize,
+)]
 #[diesel(belongs_to(Channel), belongs_to(Thread), belongs_to(User))]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
@@ -97,7 +108,7 @@ pub struct ChangeSet {
     body: String,
 }
 
-#[derive(Debug, Deserialize, Queryable, Selectable, Serialize)]
+#[derive(Debug, Deserialize, Queryable, QueryableByName, Selectable, Serialize)]
 #[diesel(table_name = threads)]
 #[diesel(check_for_backend(Pg))]
 pub struct ThreadWithUser {
@@ -120,6 +131,20 @@ pub struct ThreadDetails {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     replies: Vec<ThreadDetails>,
+}
+
+#[derive(Debug, QueryableByName, Serialize)]
+pub struct UpdatedThread {
+    #[diesel(sql_type = sql_types::Bool)]
+    #[serde(skip)]
+    pub was_updated: bool,
+
+    #[diesel(embed)]
+    #[serde(flatten)]
+    thread: Thread,
+
+    #[diesel(embed)]
+    user: UserPreview,
 }
 
 via_diesel::filters! {
@@ -209,6 +234,19 @@ impl Thread {
             .await
     }
 
+    pub async fn update(
+        connection: &mut Connection<'_>,
+        scope: &UpdateThreadScope,
+        changes: ChangeSet,
+    ) -> via::Result<UpdatedThread> {
+        diesel::sql_query("SELECT * FROM update_thread($1, $2, $3)")
+            .bind::<sql_types::Uuid, _>(&scope.target_id)
+            .bind::<sql_types::Uuid, _>(&scope.user_id)
+            .bind::<sql_types::Text, _>(&changes.body)
+            .get_result_async(connection)
+            .await
+    }
+
     pub fn query() -> threads::table {
         threads::table
     }
@@ -267,6 +305,10 @@ impl ThreadWithUser {
     pub fn channel_id(&self) -> Id {
         self.thread.channel_id
     }
+
+    pub fn was_updated(&self) -> bool {
+        self.thread.created_at != self.thread.updated_at
+    }
 }
 
 impl HasTable for ThreadWithUser {
@@ -290,15 +332,6 @@ impl<'a> Identifiable for &'a ThreadWithUser {
 
     fn id(self) -> Self::Id {
         Identifiable::id(&self.thread)
-    }
-}
-
-impl FromSqlRow<sql_types::Untyped, Pg> for ThreadWithUser {
-    fn build_from_row<'a>(row: &impl diesel::row::Row<'a, Pg>) -> deserialize::Result<Self> {
-        Ok(Self {
-            thread: FromSqlRow::<ThreadSqlType, _>::build_from_row(row)?,
-            user: FromSqlRow::<UserPreviewSqlType, _>::build_from_row(&row.partial_row(9..12))?,
-        })
     }
 }
 

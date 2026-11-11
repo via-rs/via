@@ -1,17 +1,23 @@
 via::resource!(app = Unicorn);
 
+pub mod helper;
+
+pub use helper::UpdateThreadScope;
+pub(super) use helper::update_by_id;
+
 use diesel::{BoolExpressionMethods, QueryDsl};
+use http::StatusCode;
 use serde::Serialize;
 use via::request::PathParams;
-use via::{Error, Response, ResultExt};
+use via::{Error, Payload, Response, ResultExt};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
-use crate::models::thread::{by_channel, by_id, is_thread, recent};
+use crate::models::thread::{ChangeSet, by_channel, by_id, is_thread, recent};
 use crate::models::{Reaction, Thread, ThreadWithUser};
 use crate::routes::channels::Subscriber;
 use crate::schema::threads;
-use crate::util::{Id, Iso8601};
+use crate::util::{Id, Iso8601, Session, hurry};
 use crate::{Next, Request, Unicorn};
 
 /// List threads.
@@ -50,10 +56,6 @@ async fn index(request: Request, _: Next) -> via::Result {
 }
 
 /// Create a new thread or reply to a thread.
-///
-/// Responds to:
-/// - `POST /api/channels/:channel-id/threads`
-/// - `POST /api/channels/:channel-id/threads/:thread-id/replies`
 async fn create(_: Request, _: Next) -> via::Result {
     todo!()
 }
@@ -62,28 +64,22 @@ async fn create(_: Request, _: Next) -> via::Result {
 ///
 /// Responds to:
 /// - `GET /api/channels/:channel-id/threads/:thread-id`
-/// - `GET /api/channels/:channel-id/threads/:thread-id/replies/:reply-id`
 async fn show(request: Request, _: Next) -> via::Result {
     // Parse an Id from the :thread-id path parameter.
     let id = request.param("thread-id").parse()?;
 
-    let thread = {
-        // Acquire a database connection.
+    // Checkout a database connection and find the thread with id.
+    let thread = hurry!(async {
         let mut connection = request.app().database().get().await?;
-
-        Thread::find(&mut connection, id).await?
-    };
+        Thread::find(&mut connection, id).await
+    })?;
 
     Response::build().data(thread)
 }
 
-/// Update an existing user.
-///
-/// Responds to `PATCH /users/:user-id`.
-///
-/// The active user must be the user identified by `:user-id`.
-async fn update(_: Request, _: Next) -> via::Result {
-    todo!()
+/// Update an existing thread by id.
+fn update(request: Request, _: Next) -> impl Future<Output = via::Result> {
+    update_by_id(request, "thread-id")
 }
 
 /// Delete a user account.

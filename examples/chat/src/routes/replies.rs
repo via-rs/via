@@ -7,11 +7,12 @@ use via::{Error, Response, ResultExt, deny};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
+use super::threads::{UpdateThreadScope, update_by_id};
 use crate::models::thread::{by_channel, by_thread, recent};
 use crate::models::{Reaction, Thread, ThreadWithUser};
 use crate::routes::channels::Subscriber;
 use crate::schema::threads;
-use crate::util::{Id, Iso8601};
+use crate::util::{Id, Iso8601, Session};
 use crate::{Next, Request, Unicorn};
 
 #[derive(Clone, Debug, Serialize)]
@@ -87,13 +88,9 @@ async fn show(request: Request, _: Next) -> via::Result {
     Response::build().data(reply)
 }
 
-/// Update an existing user.
-///
-/// Responds to `PATCH /users/:user-id`.
-///
-/// The active user must be the user identified by `:user-id`.
-async fn update(_: Request, _: Next) -> via::Result {
-    todo!()
+/// Update an existing reply by id.
+fn update(request: Request, _: Next) -> impl Future<Output = via::Result> {
+    update_by_id(request, "reply-id")
 }
 
 /// Delete a user account.

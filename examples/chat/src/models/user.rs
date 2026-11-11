@@ -55,7 +55,7 @@ pub struct ChangeSet {
     username: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Queryable, Selectable, Serialize)]
+#[derive(Debug, Deserialize, Queryable, QueryableByName, Selectable, Serialize)]
 #[diesel(table_name = users)]
 pub struct UserPreview {
     id: Id,

@@ -17,7 +17,7 @@ use crate::{Next, Request, Unicorn};
 ///
 /// The current user must be authorized to access the channel to which the
 /// thread belongs and own the thread with `id = scope.target_id`. Otherwise,
-/// `403`.
+/// `404`.
 pub async fn update_by_id(request: Request, scope: &UpdateThreadScope) -> via::Result {
     // Aggregate the request body and deserialize a thread change set.
     let (body, app) = request.into_future();

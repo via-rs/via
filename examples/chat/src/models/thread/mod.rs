@@ -1,3 +1,7 @@
+pub mod reply;
+
+pub use reply::ReplyParams;
+
 use diesel::associations::HasTable;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::helper_types::{AsSelect, InnerJoin, Select};
@@ -14,7 +18,6 @@ use super::subscription::{ChannelSubscription, Subscription};
 use super::user::{User, UserPreview, UserPreviewSqlType};
 use super::{Channel, Reaction, ReactionPreview};
 use crate::app::{Connection, Notification};
-use crate::routes::threads::UpdateThreadScope;
 use crate::schema::{threads, users};
 use crate::util::Id;
 
@@ -148,6 +151,11 @@ pub struct UpdatedThread {
     thread: ThreadWithUser,
 }
 
+pub struct UpdateThreadScope {
+    author_id: Id,
+    update_target: Result<Id, ReplyParams>,
+}
+
 via_diesel::filters! {
     pub fn by_id(id == Id) on threads;
     pub fn by_user(user_id == Id) on threads;
@@ -168,6 +176,22 @@ impl NewThread {
             thread_id: self.thread_id,
             user_id: Some(user_id),
             body: self.body,
+        }
+    }
+}
+
+impl UpdateThreadScope {
+    pub fn thread(author_id: Id, target_id: Id) -> Self {
+        Self {
+            author_id,
+            update_target: Ok(target_id),
+        }
+    }
+
+    pub fn reply(author_id: Id, params: ReplyParams) -> Self {
+        Self {
+            author_id,
+            update_target: Err(params),
         }
     }
 }
@@ -240,9 +264,15 @@ impl Thread {
         scope: &UpdateThreadScope,
         changes: ChangeSet,
     ) -> via::Result<UpdatedThread> {
-        diesel::sql_query("SELECT * FROM update_thread($1, $2, $3)")
-            .bind::<sql_types::Uuid, _>(&scope.target_id)
-            .bind::<sql_types::Uuid, _>(&scope.user_id)
+        let (target_id, parent_id) = match scope.update_target.as_ref() {
+            Ok(id) => (id, None),
+            Err(params) => (&params.reply_id, Some(&params.thread_id)),
+        };
+
+        diesel::sql_query("SELECT * FROM update_thread($1, $2, $3, $4)")
+            .bind::<sql_types::Uuid, _>(target_id)
+            .bind::<sql_types::Uuid, _>(&scope.author_id)
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(parent_id)
             .bind::<sql_types::Text, _>(&changes.body)
             .get_result_async(connection)
             .await

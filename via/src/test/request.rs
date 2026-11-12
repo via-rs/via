@@ -3,16 +3,18 @@ use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::request::Builder;
 use http::{HeaderName, HeaderValue, Method, StatusCode, Uri, Version};
 use http_body::{Body, Frame, SizeHint};
+use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use serde::Serialize;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::task;
 
 use super::client::Client;
 use crate::error::{BoxError, Error};
 use crate::request::Request;
-use crate::response::{Response, ResponseBody};
+use crate::response::{ChannelBody, PipeTask, Response};
 
 pub struct RequestBuilder<App> {
     request: Builder,
@@ -22,7 +24,7 @@ pub struct RequestBuilder<App> {
 
 #[derive(Debug)]
 pub struct TestBody {
-    body: ResponseBody,
+    body: BoxBody<Bytes, BoxError>,
 }
 
 #[derive(Serialize)]
@@ -150,14 +152,17 @@ impl<App> RequestBuilder<App> {
 }
 
 impl TestBody {
-    pub(crate) fn new<T>(body: T) -> Self
+    pub(crate) fn new<T>(src: T) -> Self
     where
         T: Body<Data = Bytes> + Send + Sync + 'static,
         BoxError: From<T::Error>,
     {
-        Self {
-            body: ResponseBody::spawn(body.map_err(BoxError::from)),
-        }
+        let (tx, rx) = ChannelBody::new();
+        let boxed = BoxBody::new(rx);
+
+        task::spawn(PipeTask::new(src.map_err(BoxError::from), tx));
+
+        Self { body: boxed }
     }
 }
 
@@ -197,3 +202,15 @@ where
         Self::new(Full::from(body))
     }
 }
+
+// Error messages related to unsatisfied auto-derived trait bounds can become
+// pretty ambiguous with deep middleware compositions.
+//
+// This const assertion prevents a time sink. Pun intended.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    const fn assert_sync<T: Sync>() {}
+
+    assert_send::<TestBody>();
+    assert_sync::<TestBody>();
+};

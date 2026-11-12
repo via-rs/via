@@ -15,7 +15,7 @@ Add the following to dependencies section of your `Cargo.toml`:
 
 ```toml
 [dependencies]
-via = "=2.0.0-gm.77"
+via = "=2.0.0-gm.78"
 http = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -82,7 +82,7 @@ This project is inspired by:
 
 ## Dedication
 
-For Chester and Christina. Make them smile. Build something that you are
+For Chester and Cristina. Make them smile. Build something that you are
 proud of.
 
 ## License

@@ -1,7 +1,7 @@
 mod pipe;
 mod sender;
 
-pub(super) use pipe::PipeTask;
+pub use pipe::PipeTask;
 pub use sender::Sender;
 
 use bytes::Bytes;

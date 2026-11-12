@@ -1,6 +1,7 @@
 CREATE FUNCTION update_thread(
     target_id uuid,
     author_id uuid,
+    parent_id uuid,
     new_body text
 ) RETURNS TABLE (
   did_change boolean,
@@ -26,7 +27,12 @@ BEGIN
     WITH inserted AS (
         UPDATE threads
         SET body = new_body
-        WHERE threads.id = target_id AND threads.user_id = author_id
+        WHERE threads.id = target_id
+          AND threads.user_id = author_id
+          AND (
+            (parent_id IS NULL AND threads.thread_id IS NULL) OR
+            (parent_id IS NOT NULL AND threads.thread_id = parent_id)
+          )
         RETURNING
           *,
           OLD.body IS DISTINCT FROM NEW.body AS did_change

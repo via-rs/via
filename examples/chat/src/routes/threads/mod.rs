@@ -1,8 +1,7 @@
 via::resource!(app = Unicorn);
 
-pub mod helper;
+mod helper;
 
-pub use helper::UpdateThreadScope;
 pub(super) use helper::update_by_id;
 
 use diesel::{BoolExpressionMethods, QueryDsl};
@@ -13,8 +12,8 @@ use via::{Error, Payload, Response, ResultExt};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
-use crate::models::thread::{ChangeSet, by_channel, by_id, is_thread, recent};
-use crate::models::{Reaction, Thread, ThreadWithUser};
+use crate::models::Reaction;
+use crate::models::thread::{self, ChangeSet, Thread, ThreadWithUser, UpdateThreadScope};
 use crate::routes::channels::Subscriber;
 use crate::schema::threads;
 use crate::util::{Id, Iso8601, Session, hurry};
@@ -40,8 +39,8 @@ async fn index(request: Request, _: Next) -> via::Result {
 
         // Load the threads in the channel, paginated `by_keyset`.
         let threads = ThreadWithUser::query()
-            .filter(by_channel(channel_id).and(is_thread()))
-            .order(recent())
+            .filter(thread::by_channel(channel_id).and(thread::is_thread()))
+            .order(thread::recent())
             .page(by_keyset.of(threads::created_at, threads::id))
             .load_async(&mut connection)
             .await?;
@@ -79,12 +78,14 @@ async fn show(request: Request, _: Next) -> via::Result {
 
 /// Update an existing thread by id.
 async fn update(request: Request, _: Next) -> via::Result {
-    let scope = UpdateThreadScope {
-        user_id: request.me()?,
-        target_id: request.param("thread-id").parse()?,
-    };
+    let scope = UpdateThreadScope::thread(
+        // Get the active user id from the session.
+        request.me()?,
+        // Extract the thread id from the request uri path.
+        request.param("thread-id").parse()?,
+    );
 
-    update_by_id(request, scope).await
+    update_by_id(request, &scope).await
 }
 
 /// Delete a user account.

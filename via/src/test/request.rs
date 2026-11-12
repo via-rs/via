@@ -203,8 +203,8 @@ where
     }
 }
 
-// Error messages related to unsatisified auto-derived trait bounds can become
-// pretty ambigious with deep middleware compositions.
+// Error messages related to unsatisfied auto-derived trait bounds can become
+// pretty ambiguous with deep middleware compositions.
 //
 // This const assertion prevents a time sink. Pun intended.
 const _: () = {

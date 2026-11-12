@@ -58,7 +58,12 @@ type ReplyToResult = (
     Selectable,
     Serialize,
 )]
-#[diesel(belongs_to(Channel), belongs_to(Thread), belongs_to(User))]
+#[diesel(
+    belongs_to(Channel),
+    belongs_to(Thread),
+    belongs_to(User),
+    check_for_backend(Pg)
+)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
     id: Id,
@@ -108,18 +113,6 @@ pub struct ChangeSet {
     body: String,
 }
 
-#[derive(Debug, Deserialize, Queryable, QueryableByName, Selectable, Serialize)]
-#[diesel(table_name = threads)]
-#[diesel(check_for_backend(Pg))]
-pub struct ThreadWithUser {
-    #[diesel(embed)]
-    #[serde(flatten)]
-    thread: Thread,
-
-    #[diesel(embed)]
-    user: UserPreview,
-}
-
 #[derive(Deserialize, Serialize)]
 pub struct ThreadDetails {
     #[serde(flatten)]
@@ -131,6 +124,17 @@ pub struct ThreadDetails {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     replies: Vec<ThreadDetails>,
+}
+
+#[derive(Debug, Deserialize, Queryable, QueryableByName, Selectable, Serialize)]
+#[diesel(table_name = threads)]
+pub struct ThreadWithUser {
+    #[diesel(embed)]
+    #[serde(flatten)]
+    thread: Thread,
+
+    #[diesel(embed)]
+    user: UserPreview,
 }
 
 #[derive(Debug, QueryableByName, Serialize)]
@@ -309,14 +313,6 @@ impl HasTable for ThreadWithUser {
 
     fn table() -> Self::Table {
         threads::table
-    }
-}
-
-impl<'a> Identifiable for &'_ &'a ThreadWithUser {
-    type Id = <&'a Thread as Identifiable>::Id;
-
-    fn id(self) -> Self::Id {
-        Identifiable::id(*self)
     }
 }
 

@@ -202,3 +202,15 @@ where
         Self::new(Full::from(body))
     }
 }
+
+// Error messages related to unsatisified auto-derived trait bounds can become
+// pretty ambigious with deep middleware compositions.
+//
+// This const assertion prevents a time sink. Pun intended.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    const fn assert_sync<T: Sync>() {}
+
+    assert_send::<TestBody>();
+    assert_sync::<TestBody>();
+};

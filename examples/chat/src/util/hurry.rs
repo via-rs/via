@@ -1,6 +1,6 @@
 macro_rules! hurry {
     ($future:expr) => {
-        coop::unconstrained($future).await
+        tokio::task::coop::unconstrained($future).await
     };
 }
 

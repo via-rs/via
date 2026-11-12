@@ -39,9 +39,17 @@ pub struct Emoji {
     len: usize,
 }
 
-#[derive(Associations, Debug, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
-#[diesel(belongs_to(ThreadWithUser, foreign_key = thread_id), belongs_to(User))]
-#[diesel(table_name = reactions)]
+#[derive(
+    Associations,
+    Debug,
+    Deserialize,
+    Identifiable,
+    Queryable,
+    QueryableByName,
+    Selectable,
+    Serialize,
+)]
+#[diesel(belongs_to(User))]
 #[serde(rename_all = "camelCase")]
 pub struct Reaction {
     id: Id,
@@ -100,7 +108,7 @@ pub struct ReactionPreview {
     thread_id: Id,
 }
 
-#[derive(Debug, Deserialize, Queryable, Selectable, Serialize)]
+#[derive(Debug, Deserialize, Queryable, QueryableByName, Selectable, Serialize)]
 #[diesel(check_for_backend(Pg), table_name = reactions)]
 pub struct ReactionWithUser {
     #[diesel(embed)]
@@ -229,22 +237,6 @@ impl Reaction {
             .await?;
 
         Ok(ThreadDetails::grouped_by(threads, reactions))
-    }
-}
-
-impl ReactionPreview {
-    pub fn to_id(&self) -> Id {
-        self.thread_id
-    }
-}
-
-impl FromSqlRow<sql_types::Untyped, Pg> for ReactionWithUser {
-    fn build_from_row<'a>(row: &impl diesel::row::Row<'a, Pg>) -> deserialize::Result<Self> {
-        println!("build_from_row");
-        Ok(Self {
-            reaction: FromSqlRow::<ReactionSqlType, _>::build_from_row(row)?,
-            user: FromSqlRow::<UserPreviewSqlType, _>::build_from_row(&row.partial_row(6..9))?,
-        })
     }
 }
 

@@ -7,11 +7,12 @@ use via::{Error, Response, ResultExt, deny};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
-use crate::models::thread::{by_channel, by_thread, recent};
-use crate::models::{Reaction, Thread, ThreadWithUser};
+use super::threads::update_by_id;
+use crate::models::Reaction;
+use crate::models::thread::{self, Thread, ThreadWithUser, UpdateThreadScope};
 use crate::routes::channels::Subscriber;
 use crate::schema::threads;
-use crate::util::{Id, Iso8601};
+use crate::util::{Id, Iso8601, Session};
 use crate::{Next, Request, Unicorn};
 
 #[derive(Clone, Debug, Serialize)]
@@ -43,8 +44,8 @@ async fn index(request: Request, _: Next) -> via::Result {
 
         // Load the replies to the thread, paginated by `keyset_args`.
         let threads = ThreadWithUser::query()
-            .filter(by_channel(channel_id).and(by_thread(thread_id)))
-            .order(recent())
+            .filter(thread::by_channel(channel_id).and(thread::by_thread(thread_id)))
+            .order(thread::recent())
             .page(by_keyset.of(threads::created_at, threads::id))
             .load_async(&mut connection)
             .await?;
@@ -87,13 +88,16 @@ async fn show(request: Request, _: Next) -> via::Result {
     Response::build().data(reply)
 }
 
-/// Update an existing user.
-///
-/// Responds to `PATCH /users/:user-id`.
-///
-/// The active user must be the user identified by `:user-id`.
-async fn update(_: Request, _: Next) -> via::Result {
-    todo!()
+/// Update an existing reply by id.
+async fn update(request: Request, _: Next) -> via::Result {
+    let scope = UpdateThreadScope::reply(
+        // Get the active user id from the session.
+        request.me()?,
+        // Extract ReplyParams from the request uri path.
+        request.params()?,
+    );
+
+    update_by_id(request, &scope).await
 }
 
 /// Delete a user account.
@@ -103,15 +107,4 @@ async fn update(_: Request, _: Next) -> via::Result {
 /// The active user must be the user identified by `:user-id`.
 async fn destroy(_: Request, _: Next) -> via::Result {
     todo!()
-}
-
-impl<'a> TryFrom<PathParams<'a>> for ReplyParams {
-    type Error = Error;
-
-    fn try_from(params: PathParams<'a>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            thread_id: params.get("thread-id").parse()?,
-            reply_id: params.get("reply-id").parse()?,
-        })
-    }
 }

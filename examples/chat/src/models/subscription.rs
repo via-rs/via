@@ -158,7 +158,7 @@ impl ChannelSubscription {
     }
 
     pub fn channel_id(&self) -> Id {
-        *self.channel.id()
+        self.subscription.channel_id
     }
 
     pub fn channel(&self) -> &Channel {
@@ -167,5 +167,19 @@ impl ChannelSubscription {
 
     pub fn claims(&self) -> &AuthClaims {
         &self.subscription.claims
+    }
+
+    pub fn subscription(&self) -> &Subscription {
+        &self.subscription
+    }
+}
+
+impl Subscription {
+    pub fn channel_id(&self) -> Id {
+        self.channel_id
+    }
+
+    pub fn user_id(&self) -> Id {
+        self.user_id
     }
 }

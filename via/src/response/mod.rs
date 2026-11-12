@@ -17,7 +17,7 @@ pub use redirect::Redirect;
 pub use file::File;
 
 #[cfg(feature = "test-util")]
-pub use channel::{ChannelBody, PipeTask};
+pub(crate) use channel::{ChannelBody, PipeTask};
 
 use cookie::CookieJar;
 use delegate::delegate;

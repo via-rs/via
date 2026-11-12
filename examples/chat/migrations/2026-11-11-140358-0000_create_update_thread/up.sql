@@ -3,7 +3,7 @@ CREATE FUNCTION update_thread(
     author_id uuid,
     new_body text
 ) RETURNS TABLE (
-  was_updated boolean,
+  did_change boolean,
 
   id uuid,
   body text,
@@ -29,10 +29,10 @@ BEGIN
         WHERE threads.id = target_id AND threads.user_id = author_id
         RETURNING
           *,
-          OLD.body IS DISTINCT FROM NEW.body AS was_updated
+          OLD.body IS DISTINCT FROM NEW.body AS did_change
     )
     SELECT
-        t.was_updated,
+        t.did_change,
         t.id,
         t.body,
         t.channel_id,

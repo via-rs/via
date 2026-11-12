@@ -137,14 +137,11 @@ pub struct ThreadDetails {
 pub struct UpdatedThread {
     #[diesel(sql_type = sql_types::Bool)]
     #[serde(skip)]
-    pub was_updated: bool,
+    did_change: bool,
 
     #[diesel(embed)]
     #[serde(flatten)]
-    thread: Thread,
-
-    #[diesel(embed)]
-    user: UserPreview,
+    thread: ThreadWithUser,
 }
 
 via_diesel::filters! {
@@ -305,10 +302,6 @@ impl ThreadWithUser {
     pub fn channel_id(&self) -> Id {
         self.thread.channel_id
     }
-
-    pub fn was_updated(&self) -> bool {
-        self.thread.created_at != self.thread.updated_at
-    }
 }
 
 impl HasTable for ThreadWithUser {
@@ -332,6 +325,12 @@ impl<'a> Identifiable for &'a ThreadWithUser {
 
     fn id(self) -> Self::Id {
         Identifiable::id(&self.thread)
+    }
+}
+
+impl UpdatedThread {
+    pub fn did_change(&self) -> bool {
+        self.did_change
     }
 }
 

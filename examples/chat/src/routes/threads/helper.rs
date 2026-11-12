@@ -40,7 +40,7 @@ pub async fn update_by_id(request: Request, scope: UpdateThreadScope) -> via::Re
 
     // Respond with JSON if the thread was modified. Otherwise, return an empty
     // response with a 204 status code.
-    if thread.was_updated {
+    if thread.did_change() {
         Response::build().json(&thread)
     } else {
         Response::build().status(StatusCode::NO_CONTENT).finish()

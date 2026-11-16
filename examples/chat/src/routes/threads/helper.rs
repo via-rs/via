@@ -4,9 +4,10 @@ use serde::Serialize;
 use via::{Error, Payload, Response, ResultExt};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
+use via_pubsub::{Dispatch, OurEvent};
 
-use crate::models::thread::{self, UpdateThreadScope};
-use crate::models::{Reaction, Thread, ThreadWithUser};
+use crate::models::thread::{self, CreateThreadParams, NewThread, UpdateThreadScope};
+use crate::models::{Reaction, Subscription, Thread, ThreadWithUser};
 use crate::routes::channels::Subscriber;
 use crate::util::{Id, Iso8601, hurry};
 use crate::{Next, Request, Unicorn, schema::threads};
@@ -57,6 +58,46 @@ pub async fn page_by_keyset(request: Request) -> via::Result {
     feed.reverse(); // Presented as append-only.
 
     Response::build().data(feed)
+}
+
+pub async fn create_thread(request: Request) -> via::Result {
+    // Initialize the contextual parameters for creating a thread from the
+    // channel subscription for which the request was authorized.
+    let mut params = request
+        .channel()
+        .map(|channel| CreateThreadParams::try_from(channel.subscription()))
+        .or_forbidden()??;
+
+    // If a thread-id was supplied as a path parameter use it as the parent_id.
+    params.with_parent_id(request.param("thread-id").ok_and_then(|id| id.parse())?);
+
+    // Deserialize a NewThread from the request body.
+    let (body, app) = request.into_future();
+    let new_thread = body.timeout_after_secs(2).await?.data::<NewThread>()?;
+
+    // Checkout a database connection and perform the insert.
+    let thread = {
+        let mut connection = app.database().get().await?;
+
+        // Prefer passing a reference of NewThreadInChannel as it generates a
+        // raw SQL query that uses reference types as bind variables to prevent
+        // needlessly copying ids.
+        Thread::create(&mut connection, &new_thread.in_channel(params)).await?
+    };
+
+    // Generate the response with a reference to `thread` so we can move the
+    // original value into the relay event.
+    let response = Response::build()
+        .status(StatusCode::CREATED)
+        .data(&thread)?;
+
+    // Create a "relay" event with the newly created thread.
+    let event = OurEvent::relay(thread.channel_id(), thread.into());
+
+    // Dispatch the "relay" event to the subscribers in the channel.
+    app.pubsub().dispatch(event);
+
+    Ok(response)
 }
 
 /// Update an existing thread with the provided update scope.

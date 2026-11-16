@@ -195,8 +195,6 @@ impl ClientEvent {
                 // Set the user_id of the reply to the current user id.
                 init.set_author_id(*actor);
 
-                println!("{:?}", init);
-
                 // Acquire a database connection and perform the insert.
                 let thread = hurry!(async {
                     let mut connection = unicorn.database().get().await.or_break()?;

@@ -7,13 +7,12 @@ use via::{Error, Response, ResultExt, deny};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
-use super::threads::update_by_id;
-use crate::models::Reaction;
+use super::channels::Subscriber;
+use super::threads::{page_by_keyset, update_by_id};
+use crate::models::reaction::Reaction;
 use crate::models::thread::{self, Thread, ThreadWithUser, UpdateThreadScope};
-use crate::routes::channels::Subscriber;
-use crate::schema::threads;
 use crate::util::{Id, Iso8601, Session};
-use crate::{Next, Request, Unicorn};
+use crate::{Next, Request, Unicorn, schema::threads};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ReplyParams {
@@ -25,38 +24,8 @@ pub struct ReplyParams {
 ///
 /// Responds to:
 /// - `GET /api/channels/:channel-id/threads/:thread-id/replies`
-async fn index(request: Request, _: Next) -> via::Result {
-    // Get the channel id from the subscription we loaded during authorization.
-    // If the current user does not have an active subscription, 404 Not Found.
-    let channel_id = request.channel_id().or_not_found()?;
-
-    // Parse an `Id` from the :thread-id path parameter.
-    let thread_id = request.param("thread-id").parse()?;
-
-    // Source keyset arguments from the URI query.
-    // If the limit query param is > the default per page, 400 Bad Request.
-    let by_keyset = request.query::<Keyset<Iso8601, Id, PER_PAGE>>()?;
-
-    // Load the replies to the thread with `thread_id`.
-    let mut feed = {
-        // Acquire a database connection.
-        let mut connection = request.app().database().get().await?;
-
-        // Load the replies to the thread, paginated by `keyset_args`.
-        let threads = ThreadWithUser::query()
-            .filter(thread::by_channel(channel_id).and(thread::by_thread(thread_id)))
-            .order(thread::recent())
-            .page(by_keyset.of(threads::created_at, threads::id))
-            .load_async(&mut connection)
-            .await?;
-
-        // Side load the reactions to the threads in `threads`.
-        Reaction::to_threads(&mut connection, threads).await?
-    };
-
-    feed.reverse(); // Presented as append-only.
-
-    Response::build().data(feed)
+fn index(request: Request, _: Next) -> impl Future<Output = via::Result> {
+    page_by_keyset(request)
 }
 
 /// Create a new thread or reply to a thread.

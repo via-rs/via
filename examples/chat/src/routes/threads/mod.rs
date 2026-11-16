@@ -2,7 +2,7 @@ via::resource!(app = Unicorn);
 
 mod helper;
 
-pub(super) use helper::update_by_id;
+pub(super) use helper::{page_by_keyset, update_by_id};
 
 use diesel::{BoolExpressionMethods, QueryDsl};
 use http::StatusCode;
@@ -23,35 +23,8 @@ use crate::{Next, Request, Unicorn};
 ///
 /// Responds to:
 /// - `GET /api/channels/:channel-id/threads`
-async fn index(request: Request, _: Next) -> via::Result {
-    // Get the channel id from the subscription we loaded during authorization.
-    // If the current user does not have an active subscription, 404 Not Found.
-    let channel_id = request.channel_id().or_not_found()?;
-
-    // Source keyset arguments from the URI query.
-    // If the limit query param is > the default per page, 400 Bad Request.
-    let by_keyset = request.query::<Keyset<Iso8601, Id, PER_PAGE>>()?;
-
-    // Load a page of threads.
-    let mut feed = {
-        // Checkout a database connection.
-        let mut connection = request.app().database().get().await?;
-
-        // Load the threads in the channel, paginated `by_keyset`.
-        let threads = ThreadWithUser::query()
-            .filter(thread::by_channel(channel_id).and(thread::is_thread()))
-            .order(thread::recent())
-            .page(by_keyset.of(threads::created_at, threads::id))
-            .load_async(&mut connection)
-            .await?;
-
-        // Side load the reactions to the threads in `threads`.
-        Reaction::to_threads(&mut connection, threads).await?
-    };
-
-    feed.reverse(); // Presented as append-only.
-
-    Response::build().data(feed)
+fn index(request: Request, _: Next) -> impl Future<Output = via::Result> {
+    page_by_keyset(request)
 }
 
 /// Create a new thread or reply to a thread.

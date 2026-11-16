@@ -180,12 +180,14 @@ impl<'a, 'b> PathParam<'a, 'b> {
         F: FnOnce(&str) -> Result<T, E>,
         Error: From<E>,
     {
-        self.ok().and_then(|optional| {
-            optional
-                .as_deref()
-                .map(|value| op(value).or_bad_request())
-                .transpose()
-        })
+        let Some(encoded) = self.param.and_then(|param| param.slice(self.source)) else {
+            return Ok(None);
+        };
+
+        self.encoding
+            .decode_as(self.name, encoded)
+            .and_then(|decoded| op(decoded.as_ref()).or_bad_request())
+            .map(Some)
     }
 }
 
@@ -277,12 +279,14 @@ impl<'a, 'b> QueryParam<'a, 'b> {
         F: FnOnce(&str) -> Result<T, E>,
         Error: From<E>,
     {
-        self.ok().and_then(|option| {
-            option
-                .as_deref()
-                .map(|value| op(value).or_bad_request())
-                .transpose()
-        })
+        let Some(encoded) = self.slice() else {
+            return Ok(None);
+        };
+
+        self.encoding
+            .decode_as(self.name, encoded)
+            .and_then(|decoded| op(decoded.as_ref()).or_bad_request())
+            .map(Some)
     }
 }
 

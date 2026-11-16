@@ -14,7 +14,7 @@ mysql = ["diesel/mysql"]
 sqlite = ["diesel/sqlite"]
 
 [dependencies]
-diesel-async = "0.9"
+diesel-async = "0.10"
 diesel = "2"
 http = "1"
 serde = "1"

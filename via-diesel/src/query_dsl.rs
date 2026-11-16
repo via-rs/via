@@ -1,6 +1,7 @@
 use diesel::backend::Backend;
 use diesel::dsl::Limit;
 use diesel::query_builder::QueryFragment;
+use diesel::query_dsl::methods::LimitDsl;
 use diesel::result::{DatabaseErrorKind, Error as DieselError, QueryResult};
 use diesel_async::methods::{ExecuteDsl, LoadQuery};
 use diesel_async::return_futures::{GetResult, LoadFuture};
@@ -10,7 +11,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use via::err;
 
-pub trait AsyncQueryDsl<T>: Sized {
+pub trait AsyncQueryDsl<T>: RunQueryDsl<T> + Sized {
     fn execute_async<'a, 'b>(self, connection: &'a mut T) -> MapErr<T::ExecuteFuture<'a, 'b>>
     where
         T: AsyncConnectionCore + Send,
@@ -35,8 +36,9 @@ pub trait AsyncQueryDsl<T>: Sized {
         T::Backend: Default,
         <T::Backend as Backend>::QueryBuilder: Default,
         U: Send + 'a,
-        Self: diesel::query_dsl::methods::LimitDsl,
-        Limit<Self>: LoadQuery<'b, T, U> + QueryFragment<T::Backend> + Send + 'b,
+        Self: LimitDsl,
+        <Self as LimitDsl>::Output:
+            LoadQuery<'b, T, U> + RunQueryDsl<T> + QueryFragment<T::Backend> + Send + 'b,
     {
         AsyncQueryDsl::get_result_async(self.limit(1), connection)
     }

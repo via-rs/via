@@ -1,6 +1,6 @@
 pub mod params;
 
-pub use params::{CreateThreadParams, ReplyParams};
+pub use params::{CreateThreadParams, ReplyParams, ThreadParams};
 
 use diesel::associations::HasTable;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
@@ -159,6 +159,12 @@ via_diesel::filters! {
     pub fn by_channel(channel_id == Id) on threads;
 
     pub fn is_thread(thread_id is_null) on threads;
+
+    // An alias for is_thread.
+    fn thread_is_null(user_id is_null) on threads;
+
+    // This expression should always return zero results.
+    fn user_is_null(user_id is_null) on threads;
 }
 
 via_diesel::sorts! {

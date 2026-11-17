@@ -1,15 +1,15 @@
-use diesel::{BoolExpressionMethods, QueryDsl};
+use diesel::{BoolExpressionMethods, BoxableExpression, QueryDsl};
 use http::StatusCode;
 use serde::Serialize;
-use via::{Error, Payload, Response, ResultExt};
+use via::{Error, Payload, Response, ResultExt, deny};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 use via_pubsub::{Dispatch, OurEvent};
 
-use crate::models::thread::{self, CreateThreadParams, NewThread, UpdateThreadScope};
+use crate::models::thread::{self, CreateThreadParams, NewThread, ThreadParams, UpdateThreadScope};
 use crate::models::{Reaction, Subscription, Thread, ThreadWithUser};
 use crate::routes::channels::Subscriber;
-use crate::util::{Id, Iso8601, hurry};
+use crate::util::{Id, Iso8601, Session, hurry};
 use crate::{Next, Request, Unicorn, schema::threads};
 
 pub async fn page_by_keyset(request: Request) -> via::Result {
@@ -76,14 +76,14 @@ pub async fn create_thread(request: Request) -> via::Result {
     let new_thread = body.timeout_after_secs(2).await?.data::<NewThread>()?;
 
     // Checkout a database connection and perform the insert.
-    let thread = {
+    let thread = hurry!(async {
         let mut connection = app.database().get().await?;
 
         // Prefer passing a reference of NewThreadInChannel as it generates a
         // raw SQL query that uses reference types as bind variables to prevent
         // needlessly copying ids.
-        Thread::create(&mut connection, &new_thread.in_channel(params)).await?
-    };
+        Thread::create(&mut connection, &new_thread.in_channel(params)).await
+    })?;
 
     // Generate the response with a reference to `thread` so we can move the
     // original value into the relay event.
@@ -126,5 +126,29 @@ pub async fn update_by_id(request: Request, scope: &UpdateThreadScope) -> via::R
         Response::build().json(&thread)
     } else {
         Response::build().status(StatusCode::NO_CONTENT).finish()
+    }
+}
+
+/// Delete an existing thread by id.
+pub async fn delete_by_id(request: Request) -> via::Result {
+    // Deserialize the remaining delete arguments from the request URI path.
+    let mut params = request.params::<ThreadParams>()?;
+
+    // Set the user_id of params to the current user id.
+    params.with_user_id(request.me()?);
+
+    // Checkout a database connection and delete the thread.
+    if let 1.. = hurry!(async {
+        let mut connection = request.app().database().get().await?;
+        let by_params = params.to_boxed_expr();
+
+        diesel::delete(threads::table)
+            .filter(by_params)
+            .execute_async(&mut connection)
+            .await
+    })? {
+        Response::build().status(StatusCode::NO_CONTENT).finish()
+    } else {
+        deny!(404, "not found")
     }
 }

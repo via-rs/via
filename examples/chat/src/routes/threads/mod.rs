@@ -2,7 +2,7 @@ via::resource!(app = Unicorn);
 
 mod helper;
 
-pub(super) use helper::{create_thread, page_by_keyset, update_by_id};
+pub(super) use helper::{create_thread, delete_by_id, page_by_keyset, update_by_id};
 
 use diesel::{BoolExpressionMethods, QueryDsl};
 use http::StatusCode;
@@ -47,6 +47,7 @@ async fn show(request: Request, _: Next) -> via::Result {
 }
 
 /// Update an existing thread by id.
+/// The current user must be the owner of the thread in order to update it.
 async fn update(request: Request, _: Next) -> via::Result {
     let scope = UpdateThreadScope::thread(
         // Get the active user id from the session.
@@ -58,11 +59,8 @@ async fn update(request: Request, _: Next) -> via::Result {
     update_by_id(request, &scope).await
 }
 
-/// Delete a user account.
-///
-/// Responds to `DELETE /users/:user-id`.
-///
-/// The active user must be the user identified by `:user-id`.
-async fn destroy(_: Request, _: Next) -> via::Result {
-    todo!()
+/// Delete a thread by id.
+/// The current user must be the owner of the thread in order to delete it.
+fn destroy(request: Request, _: Next) -> impl Future<Output = via::Result> {
+    delete_by_id(request)
 }

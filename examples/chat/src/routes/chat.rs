@@ -193,18 +193,15 @@ impl ClientEvent {
         match self {
             ClientEvent::Reply(mut init) => {
                 // Set the user_id of the reply to the current user id.
-                init.user_id = Some(*actor);
-
-                // Copy channel_id so we can use it again as the event interest.
-                let interest = init.channel_id;
+                init.set_author_id(*actor);
 
                 // Acquire a database connection and perform the insert.
                 let thread = hurry!(async {
                     let mut connection = unicorn.database().get().await.or_break()?;
-                    Thread::create(&mut connection, init).await.or_continue()
+                    Thread::create(&mut connection, &init).await.or_continue()
                 })?;
 
-                Ok(OurEvent::relay(interest, thread.into()))
+                Ok(OurEvent::relay(init.channel_id(), thread.into()))
             }
             ClientEvent::Reaction(mut init) => {
                 // Set the user_id of the reaction to the current user id.

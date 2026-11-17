@@ -8,7 +8,7 @@ use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
 use super::channels::Subscriber;
-use super::threads::{page_by_keyset, update_by_id};
+use super::threads::{create_thread, page_by_keyset, update_by_id};
 use crate::models::reaction::Reaction;
 use crate::models::thread::{self, Thread, ThreadWithUser, UpdateThreadScope};
 use crate::util::{Id, Iso8601, Session};
@@ -28,13 +28,9 @@ fn index(request: Request, _: Next) -> impl Future<Output = via::Result> {
     page_by_keyset(request)
 }
 
-/// Create a new thread or reply to a thread.
-///
-/// Responds to:
-/// - `POST /api/channels/:channel-id/threads`
-/// - `POST /api/channels/:channel-id/threads/:thread-id/replies`
-async fn create(_: Request, _: Next) -> via::Result {
-    todo!()
+/// Create a reply to an existing thread.
+fn create(request: Request, _: Next) -> impl Future<Output = via::Result> {
+    create_thread(request)
 }
 
 /// Retrieve a reply by id.

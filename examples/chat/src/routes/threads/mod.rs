@@ -2,7 +2,7 @@ via::resource!(app = Unicorn);
 
 mod helper;
 
-pub(super) use helper::{page_by_keyset, update_by_id};
+pub(super) use helper::{create_thread, page_by_keyset, update_by_id};
 
 use diesel::{BoolExpressionMethods, QueryDsl};
 use http::StatusCode;
@@ -19,17 +19,14 @@ use crate::schema::threads;
 use crate::util::{Id, Iso8601, Session, hurry};
 use crate::{Next, Request, Unicorn};
 
-/// List threads.
-///
-/// Responds to:
-/// - `GET /api/channels/:channel-id/threads`
+/// List a page of threads in the provided keyset.
 fn index(request: Request, _: Next) -> impl Future<Output = via::Result> {
     page_by_keyset(request)
 }
 
-/// Create a new thread or reply to a thread.
-async fn create(_: Request, _: Next) -> via::Result {
-    todo!()
+/// Create a new thread in this channel.
+fn create(request: Request, _: Next) -> impl Future<Output = via::Result> {
+    create_thread(request)
 }
 
 /// Retrieve a thread or reply by id.

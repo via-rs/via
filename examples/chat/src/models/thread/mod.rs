@@ -1,6 +1,6 @@
-pub mod reply;
+pub mod params;
 
-pub use reply::ReplyParams;
+pub use params::{CreateThreadParams, ReplyParams};
 
 use diesel::associations::HasTable;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
@@ -53,6 +53,7 @@ type ReplyToResult = (
 
 #[derive(
     Associations,
+    Clone,
     Debug,
     Deserialize,
     Identifiable,
@@ -93,21 +94,16 @@ pub struct Thread {
 #[diesel(table_name = threads)]
 #[serde(rename_all = "camelCase")]
 pub struct NewThread {
-    pub channel_id: Option<Id>,
-    pub thread_id: Option<Id>,
-    pub user_id: Option<Id>,
     body: String,
 }
 
-#[derive(Debug, Deserialize, Insertable)]
-#[diesel(table_name = threads)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewThreadInChannel {
-    pub channel_id: Id,
-    pub user_id: Option<Id>,
-
-    thread_id: Option<Id>,
     body: String,
+
+    #[serde(flatten)]
+    params: CreateThreadParams,
 }
 
 #[derive(AsChangeset, Deserialize)]
@@ -170,13 +166,21 @@ via_diesel::sorts! {
 }
 
 impl NewThread {
-    fn in_channel(self, channel_id: Id, user_id: Id) -> NewThreadInChannel {
+    pub(crate) fn in_channel(self, params: CreateThreadParams) -> NewThreadInChannel {
         NewThreadInChannel {
-            channel_id,
-            thread_id: self.thread_id,
-            user_id: Some(user_id),
+            params,
             body: self.body,
         }
+    }
+}
+
+impl NewThreadInChannel {
+    pub(crate) fn channel_id(&self) -> Id {
+        self.params.channel_id
+    }
+
+    pub(crate) fn set_author_id(&mut self, id: Id) {
+        self.params.user_id = Some(id);
     }
 }
 
@@ -248,13 +252,15 @@ impl Thread {
 
     pub async fn create(
         connection: &mut Connection<'_>,
-        init: NewThreadInChannel,
+        init: &NewThreadInChannel,
     ) -> via::Result<ThreadWithUser> {
+        let author_id = init.params.user_id.as_ref().or_forbidden()?;
+
         diesel::sql_query("SELECT * FROM reply_to($1, $2, $3, $4)")
-            .bind::<sql_types::Uuid, _>(init.channel_id)
-            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(init.thread_id)
-            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(init.user_id)
-            .bind::<sql_types::Text, _>(init.body)
+            .bind::<sql_types::Uuid, _>(&init.params.channel_id)
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(init.params.parent_id.as_ref())
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(author_id)
+            .bind::<sql_types::Text, _>(init.body.as_str())
             .get_result_async(connection)
             .await
     }

@@ -127,11 +127,16 @@ async fn show(request: Request, _: Next) -> via::Result {
 /// The current user must be authorized to access the channel to which the
 /// thread belongs and own the thread. Otherwise, `404`.
 async fn update(request: Request, _: Next) -> via::Result {
+    // Get the current user id from the channel subscription.
+    let me = request
+        .channel()
+        .map(|channel| channel.subscription().user_id());
+
     // Deserialize the remaining delete arguments from the request URI path.
     let mut params = request.params::<ThreadParams>()?;
 
     // Set the user_id to that of the subscription resolved during authorization.
-    params.user_id = request.channel().map(|c| c.subscription().user_id());
+    params.user_id = me;
 
     // Aggregate the request body and deserialize a thread change set.
     let (body, app) = request.into_future();
@@ -162,31 +167,30 @@ async fn destroy(request: Request, _: Next) -> via::Result {
         .or_forbidden()?;
 
     // Deserialize the remaining delete arguments from the request URI path.
-    let mut params = request.params::<ThreadParams>()?;
-
-    // Set the user_id of params to the current user id.
-    params.user_id = Some(me);
+    let params = request.params::<ThreadParams>()?;
 
     // Checkout a database connection and delete the thread.
     if let 1.. = hurry!(async {
         if let Some(id) = params.reply_id.as_ref() {
             let mut connection = request.app().database().get().await?;
-            let by_id_and_thread_id = threads::id
+            let by_id_author_and_parent = threads::id
                 .eq(id)
+                .and(threads::user_id.eq(&me))
                 .and(threads::thread_id.eq(&params.thread_id));
 
             diesel::delete(threads::table)
-                .filter(by_id_and_thread_id)
+                .filter(by_id_author_and_parent)
                 .execute_async(&mut connection)
                 .await
         } else {
             let mut connection = request.app().database().get().await?;
-            let by_id_with_no_owner = threads::id
+            let by_id_and_author = threads::id
                 .eq(&params.thread_id)
+                .and(threads::user_id.eq(&me))
                 .and(threads::thread_id.is_null());
 
             diesel::delete(threads::table)
-                .filter(by_id_with_no_owner)
+                .filter(by_id_and_author)
                 .execute_async(&mut connection)
                 .await
         }

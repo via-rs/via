@@ -59,7 +59,7 @@ async fn index(request: Request, _: Next) -> via::Result {
 
     feed.reverse(); // Presented as append-only.
 
-    Response::build().data(feed)
+    Response::build().data(&feed)
 }
 
 async fn create(request: Request, _: Next) -> via::Result {

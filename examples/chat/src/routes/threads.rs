@@ -1,18 +1,20 @@
-use diesel::{BoolExpressionMethods, BoxableExpression, QueryDsl};
+via::resource!(app = Unicorn);
+
+use diesel::{BoolExpressionMethods, BoxableExpression, ExpressionMethods, QueryDsl};
 use http::StatusCode;
 use serde::Serialize;
-use via::{Error, Payload, Response, ResultExt, deny};
+use via::{Error, Payload, Response, ResultExt};
 use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 use via_pubsub::{Dispatch, OurEvent};
 
-use crate::models::thread::{self, CreateThreadParams, NewThread, ThreadParams, UpdateThreadScope};
-use crate::models::{Reaction, Subscription, Thread, ThreadWithUser};
+use crate::models::thread::{self, CreateThreadParams, NewThread, ThreadParams};
+use crate::models::{Reaction, Subscription, Thread, ThreadDetails, ThreadWithUser};
 use crate::routes::channels::Subscriber;
 use crate::util::{Id, Iso8601, Session, hurry};
 use crate::{Next, Request, Unicorn, schema::threads};
 
-pub async fn page_by_keyset(request: Request) -> via::Result {
+async fn index(request: Request, _: Next) -> via::Result {
     // Get the channel id from the subscription we loaded during authorization.
     // If the current user does not have an active subscription, 404 Not Found.
     let channel_id = request.channel_id().or_not_found()?;
@@ -60,7 +62,7 @@ pub async fn page_by_keyset(request: Request) -> via::Result {
     Response::build().data(feed)
 }
 
-pub async fn create_thread(request: Request) -> via::Result {
+async fn create(request: Request, _: Next) -> via::Result {
     // Initialize the contextual parameters for creating a thread from the
     // channel subscription for which the request was authorized.
     let mut params = request
@@ -69,20 +71,19 @@ pub async fn create_thread(request: Request) -> via::Result {
         .or_forbidden()??;
 
     // If a thread-id was supplied as a path parameter use it as the parent_id.
-    params.with_parent_id(request.param("thread-id").ok_and_then(|id| id.parse())?);
+    params.parent_id = request.param("thread-id").ok_and_then(|id| id.parse())?;
 
     // Deserialize a NewThread from the request body.
     let (body, app) = request.into_future();
     let new_thread = body.timeout_after_secs(2).await?.data::<NewThread>()?;
 
+    // Apply the context from the path parameters to the new thread.
+    let new_thread = new_thread.in_channel(params);
+
     // Checkout a database connection and perform the insert.
     let thread = hurry!(async {
         let mut connection = app.database().get().await?;
-
-        // Prefer passing a reference of NewThreadInChannel as it generates a
-        // raw SQL query that uses reference types as bind variables to prevent
-        // needlessly copying ids.
-        Thread::create(&mut connection, &new_thread.in_channel(params)).await
+        Thread::create(&mut connection, &new_thread).await
     })?;
 
     // Generate the response with a reference to `thread` so we can move the
@@ -100,24 +101,58 @@ pub async fn create_thread(request: Request) -> via::Result {
     Ok(response)
 }
 
-/// Update an existing thread with the provided update scope.
-///
-/// This function abstracts the update business logic for threads and replies
-/// into a single function without putting controller concerns in the Thread
-/// model.
+async fn show(request: Request, _: Next) -> via::Result {
+    // Parse an Id from the :thread-id path parameter.
+    let params = request.params::<ThreadParams>()?;
+
+    // Prefer checking out a database connection after branching on the
+    // conditional :reply-id path parameter.
+    let thread = match params.reply_id.as_ref() {
+        Some(id) => {
+            // Checkout a database connection.
+            let mut connection = request.app().database().get().await?;
+
+            // Find an individual reply to a thread.
+            ThreadDetails::find_reply(&mut connection, id).await?
+        }
+        None => {
+            // Checkout a database connection.
+            let mut connection = request.app().database().get().await?;
+
+            // Find an individual reply to a thread.
+            ThreadDetails::find_thread(&mut connection, &params.thread_id).await?
+        }
+    };
+
+    Response::build().data(&thread)
+}
+
+/// Update an existing thread.
 ///
 /// The current user must be authorized to access the channel to which the
-/// thread belongs and own the thread with `id = scope.target_id`. Otherwise,
-/// `404`.
-pub async fn update_by_id(request: Request, scope: &UpdateThreadScope) -> via::Result {
+/// thread belongs and own the thread. Otherwise, `404`.
+async fn update(request: Request, _: Next) -> via::Result {
+    // The current user id comes from the subscription for which the request
+    // was authorized.
+    let me = request
+        .channel()
+        .map(|channel| channel.subscription().user_id())
+        .or_forbidden()?;
+
+    // Deserialize the remaining delete arguments from the request URI path.
+    let mut params = request.params::<ThreadParams>()?;
+
+    // Set the user_id of params to the current user id.
+    params.user_id = Some(me);
+
     // Aggregate the request body and deserialize a thread change set.
     let (body, app) = request.into_future();
-    let changes = body.timeout_after_secs(2).await?.data()?;
+    let change_set = body.timeout_after_secs(2).await?.data()?;
 
     // Checkout a database connection and update the thread.
     let thread = hurry!(async {
         let mut connection = app.database().get().await?;
-        Thread::update(&mut connection, scope, changes).await
+        Thread::update(&mut connection, &params, &change_set).await
     })?;
 
     // Respond with JSON if the thread was modified. Otherwise, return an empty
@@ -130,25 +165,46 @@ pub async fn update_by_id(request: Request, scope: &UpdateThreadScope) -> via::R
 }
 
 /// Delete an existing thread by id.
-pub async fn delete_by_id(request: Request) -> via::Result {
+async fn destroy(request: Request, _: Next) -> via::Result {
+    // The current user id comes from the subscription for which the request
+    // was authorized.
+    let me = request
+        .channel()
+        .map(|channel| channel.subscription().user_id())
+        .or_forbidden()?;
+
     // Deserialize the remaining delete arguments from the request URI path.
     let mut params = request.params::<ThreadParams>()?;
 
     // Set the user_id of params to the current user id.
-    params.with_user_id(request.me()?);
+    params.user_id = Some(me);
 
     // Checkout a database connection and delete the thread.
     if let 1.. = hurry!(async {
-        let mut connection = request.app().database().get().await?;
-        let by_params = params.to_boxed_expr();
+        if let Some(id) = params.reply_id.as_ref() {
+            let mut connection = request.app().database().get().await?;
+            let by_id_and_thread_id = threads::id
+                .eq(id)
+                .and(threads::thread_id.eq(&params.thread_id));
 
-        diesel::delete(threads::table)
-            .filter(by_params)
-            .execute_async(&mut connection)
-            .await
+            diesel::delete(threads::table)
+                .filter(by_id_and_thread_id)
+                .execute_async(&mut connection)
+                .await
+        } else {
+            let mut connection = request.app().database().get().await?;
+            let by_id_with_no_owner = threads::id
+                .eq(&params.thread_id)
+                .and(threads::thread_id.is_null());
+
+            diesel::delete(threads::table)
+                .filter(by_id_with_no_owner)
+                .execute_async(&mut connection)
+                .await
+        }
     })? {
         Response::build().status(StatusCode::NO_CONTENT).finish()
     } else {
-        deny!(404, "not found")
+        via::deny!(403, "Forbidden")
     }
 }

@@ -105,21 +105,16 @@ async fn show(request: Request, _: Next) -> via::Result {
     // Parse an Id from the :thread-id path parameter.
     let params = request.params::<ThreadParams>()?;
 
-    // Prefer checking out a database connection after branching on the
-    // conditional :reply-id path parameter.
+    // Prefer branching before checking out a database connection.
     let thread = match params.reply_id.as_ref() {
+        // Find an individual reply to a thread.
         Some(id) => {
-            // Checkout a database connection.
             let mut connection = request.app().database().get().await?;
-
-            // Find an individual reply to a thread.
             ThreadDetails::find_reply(&mut connection, id).await?
         }
+        // Find a thread and the latest page of replies.
         None => {
-            // Checkout a database connection.
             let mut connection = request.app().database().get().await?;
-
-            // Find an individual reply to a thread.
             ThreadDetails::find_thread(&mut connection, &params.thread_id).await?
         }
     };

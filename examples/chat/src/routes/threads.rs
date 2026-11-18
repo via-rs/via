@@ -127,18 +127,11 @@ async fn show(request: Request, _: Next) -> via::Result {
 /// The current user must be authorized to access the channel to which the
 /// thread belongs and own the thread. Otherwise, `404`.
 async fn update(request: Request, _: Next) -> via::Result {
-    // The current user id comes from the subscription for which the request
-    // was authorized.
-    let me = request
-        .channel()
-        .map(|channel| channel.subscription().user_id())
-        .or_forbidden()?;
-
     // Deserialize the remaining delete arguments from the request URI path.
     let mut params = request.params::<ThreadParams>()?;
 
-    // Set the user_id of params to the current user id.
-    params.user_id = Some(me);
+    // Set the user_id to that of the subscription resolved during authorization.
+    params.user_id = request.channel().map(|c| c.subscription().user_id());
 
     // Aggregate the request body and deserialize a thread change set.
     let (body, app) = request.into_future();

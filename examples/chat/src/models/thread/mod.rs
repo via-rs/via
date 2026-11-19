@@ -320,6 +320,6 @@ impl<'a> Identifiable for &'a ThreadWithUser {
 
 impl UpdatedThread {
     pub fn changed(self) -> Option<ThreadWithUser> {
-        self.did_change.then(|| self.thread)
+        self.did_change.then_some(self.thread)
     }
 }

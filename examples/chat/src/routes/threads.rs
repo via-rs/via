@@ -141,8 +141,8 @@ async fn update(request: Request, _: Next) -> via::Result {
         // move the original value into the relay event.
         let response = Response::build().json(&changed)?;
 
-        // Dispatch the "edit-thread" event to the subscribers in the channel.
-        app.pubsub().dispatch(OurEvent::edit_thread(changed));
+        // Dispatch the "edit-reply" event to the subscribers in the channel.
+        app.pubsub().dispatch(OurEvent::edit_reply(changed));
 
         Ok(response)
     } else {
@@ -167,7 +167,13 @@ async fn destroy(request: Request, _: Next) -> via::Result {
             .execute_async(&mut connection)
             .await
     })? {
-        Response::build().status(StatusCode::NO_CONTENT).finish()
+        let response = Response::build().status(StatusCode::NO_CONTENT).finish()?;
+        let event = OurEvent::delete_reply(&context);
+
+        // Dispatch the "delete-reply" event to the subscribers in the channel.
+        request.app().pubsub().dispatch(event);
+
+        Ok(response)
     } else {
         via::deny!(403, "insufficient permission")
     }

@@ -3,12 +3,13 @@ use serde::{Deserialize, Serialize};
 use via_pubsub::OurEvent;
 
 use crate::models::reaction::ReactionWithUser;
-use crate::models::thread::{ThreadDelta, ThreadWithUser};
+use crate::models::thread::{ThreadDelta, ThreadMemberContext, ThreadWithUser};
 use crate::util::Id;
 
 pub trait Relay: Sized {
     fn new_reply(thread: ThreadWithUser) -> Self;
-    fn edit_thread(thread: ThreadWithUser) -> Self;
+    fn edit_reply(thread: ThreadWithUser) -> Self;
+    fn delete_reply(context: &ThreadMemberContext) -> Self;
 }
 
 /// A change notification.
@@ -17,7 +18,8 @@ pub trait Relay: Sized {
 pub enum Notification {
     Reaction(ReactionWithUser),
     NewReply(ThreadWithUser),
-    EditThread(ThreadDelta),
+    EditReply(ThreadDelta),
+    DeleteReply { id: Id },
 }
 
 impl Relay for OurEvent<Id, Notification> {
@@ -25,10 +27,19 @@ impl Relay for OurEvent<Id, Notification> {
         Self::relay(thread.channel_id(), Notification::NewReply(thread))
     }
 
-    fn edit_thread(thread: ThreadWithUser) -> Self {
+    fn edit_reply(thread: ThreadWithUser) -> Self {
         Self::relay(
             thread.channel_id(),
-            Notification::EditThread(thread.into_delta()),
+            Notification::EditReply(thread.into_delta()),
+        )
+    }
+
+    fn delete_reply(context: &ThreadMemberContext) -> Self {
+        Self::relay(
+            *context.channel_id(),
+            Notification::DeleteReply {
+                id: *context.reply_id().unwrap_or(context.thread_id()),
+            },
         )
     }
 }

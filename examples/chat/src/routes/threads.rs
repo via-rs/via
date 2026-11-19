@@ -175,6 +175,6 @@ async fn destroy(request: Request, _: Next) -> via::Result {
 
         Ok(response)
     } else {
-        via::deny!(403, "insufficient permission")
+        via::deny!(404, "not found")
     }
 }

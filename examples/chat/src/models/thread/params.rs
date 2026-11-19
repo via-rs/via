@@ -89,7 +89,8 @@ impl ThreadMemberContext {
                 threads::id
                     .eq(reply_id)
                     .and(threads::user_id.eq(self.user_id()))
-                    .and(threads::thread_id.eq(self.thread_id())),
+                    .and(threads::thread_id.eq(self.thread_id()))
+                    .and(threads::channel_id.eq(self.channel_id())),
             )
         } else {
             Box::new(
@@ -97,6 +98,7 @@ impl ThreadMemberContext {
                     .eq(self.thread_id())
                     .and(threads::user_id.eq(self.user_id()))
                     .and(threads::thread_id.is_null())
+                    .and(threads::channel_id.eq(self.channel_id()))
                     .nullable(),
             )
         }

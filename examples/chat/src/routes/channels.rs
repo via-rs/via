@@ -211,6 +211,11 @@ async fn destroy(request: Request, _: Next) -> via::Result {
             .execute_async(&mut connection)
             .await
     })? {
+        let deregister = OurEvent::deregister(None, *subscription.channel_id());
+
+        // Unsubscribe all users from the channel.
+        request.app().pubsub().dispatch(deregister);
+
         Response::build().status(StatusCode::NO_CONTENT).finish()
     } else {
         via::deny!(404, "not found")

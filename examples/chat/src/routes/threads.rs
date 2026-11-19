@@ -8,22 +8,16 @@ use via_diesel::paginate::{Keyset, LimitAndOffset, PER_PAGE};
 use via_diesel::{AsyncQueryDsl, Paginate};
 use via_pubsub::{Dispatch, OurEvent};
 
-use crate::models::thread::{self, CreateThreadParams, NewThread, ThreadParams};
+use super::channels::Subscriber;
+use super::chat::Relay;
+use crate::models::thread::{PutThread, ThreadCollectionContext, ThreadMemberContext, recent};
 use crate::models::{Reaction, Subscription, Thread, ThreadDetails, ThreadWithUser};
-use crate::routes::channels::Subscriber;
 use crate::util::{Id, Iso8601, Session, hurry};
 use crate::{Next, Request, Unicorn, schema::threads};
 
 async fn index(request: Request, _: Next) -> via::Result {
-    // Get the channel id from the subscription we loaded during authorization.
-    // If the current user does not have an active subscription, 404 Not Found.
-    let channel_id = request.channel_id().or_not_found()?;
-
-    // Parse an `Option<Id>` from the :thread-id path parameter.
-    //
-    // If this function is called from the replies resource, the `feed` will
-    // contain the replies to :thread-id for the provided keyset.
-    let parent_id = request.param("thread-id").ok_and_then(|id| id.parse())?;
+    // Extract contextual arguments from the request.
+    let context = ThreadCollectionContext::try_from(&request)?;
 
     // Source keyset arguments from the URI query.
     // If the limit query param is > the default per page, 400 Bad Request.
@@ -31,23 +25,33 @@ async fn index(request: Request, _: Next) -> via::Result {
         .query::<Keyset<Iso8601, Id, PER_PAGE>>()?
         .of(threads::created_at, threads::id);
 
+    // Preemptively free up stack space. This route requires multiple round
+    // trips to the database.
+    let (_, _, app) = request.into_parts();
+
     // Load a page of threads.
     let mut feed = {
         // Checkout a database connection.
-        let mut connection = request.app().database().get().await?;
+        let mut connection = app.database().get().await?;
 
         // Apply the order and keyset to the ThreadWithUser query.
         //
         // Paginating by keyset require boxing the query and we have to branch
         // on `parent_id` to support the replies resource.
-        let mut query = ThreadWithUser::query()
-            .order(thread::recent())
-            .page(by_keyset);
+        let mut query = ThreadWithUser::query().order(recent()).page(by_keyset);
 
-        if let Some(thread_id) = parent_id.as_ref() {
-            query = query.filter(thread::by_channel(channel_id).and(thread::by_thread(*thread_id)));
+        if let Some(thread_id) = context.thread_id() {
+            let expr = threads::channel_id
+                .eq(context.channel_id())
+                .and(threads::thread_id.eq(thread_id));
+
+            query = query.filter(expr);
         } else {
-            query = query.filter(thread::by_channel(channel_id).and(thread::is_thread()));
+            let expr = threads::channel_id
+                .eq(context.channel_id())
+                .and(threads::thread_id.is_null());
+
+            query = query.filter(expr);
         }
 
         // Load the threads in the channel, paginated `by_keyset`.
@@ -63,27 +67,17 @@ async fn index(request: Request, _: Next) -> via::Result {
 }
 
 async fn create(request: Request, _: Next) -> via::Result {
-    // Initialize the contextual parameters for creating a thread from the
-    // channel subscription for which the request was authorized.
-    let mut params = request
-        .channel()
-        .map(|channel| CreateThreadParams::try_from(channel.subscription()))
-        .or_forbidden()??;
-
-    // If a thread-id was supplied as a path parameter use it as the parent_id.
-    params.parent_id = request.param("thread-id").ok_and_then(|id| id.parse())?;
+    // Extract contextual arguments from the request.
+    let context = ThreadCollectionContext::try_from(&request)?;
 
     // Deserialize a NewThread from the request body.
     let (body, app) = request.into_future();
-    let new_thread = body.timeout_after_secs(2).await?.data::<NewThread>()?;
-
-    // Apply the context from the path parameters to the new thread.
-    let new_thread = new_thread.in_channel(params);
+    let new_thread = body.timeout_after_secs(2).await?.data::<PutThread>()?;
 
     // Checkout a database connection and perform the insert.
     let thread = hurry!(async {
         let mut connection = app.database().get().await?;
-        Thread::create(&mut connection, &new_thread).await
+        Thread::create(&mut connection, &context, new_thread).await
     })?;
 
     // Generate the response with a reference to `thread` so we can move the
@@ -92,31 +86,31 @@ async fn create(request: Request, _: Next) -> via::Result {
         .status(StatusCode::CREATED)
         .data(&thread)?;
 
-    // Create a "relay" event with the newly created thread.
-    let event = OurEvent::relay(thread.channel_id(), thread.into());
-
-    // Dispatch the "relay" event to the subscribers in the channel.
-    app.pubsub().dispatch(event);
+    // Dispatch the "new-reply" event to the subscribers in the channel.
+    app.pubsub().dispatch(OurEvent::new_reply(thread));
 
     Ok(response)
 }
 
 async fn show(request: Request, _: Next) -> via::Result {
-    // Parse an Id from the :thread-id path parameter.
-    let params = request.params::<ThreadParams>()?;
+    // Extract contextual arguments from the request.
+    let context = ThreadMemberContext::try_from(&request)?;
+
+    // Request is no longer required once `ThreadMemberContext` is extracted
+    // and this route requires making more than one database query over the
+    // same connection. Preemptively free up stack space by taking app out
+    // of request.
+    let (_, _, app) = request.into_parts();
 
     // Prefer branching before checking out a database connection.
-    let thread = match params.reply_id.as_ref() {
+    let thread = if let Some(reply_id) = context.reply_id() {
         // Find an individual reply to a thread.
-        Some(id) => {
-            let mut connection = request.app().database().get().await?;
-            ThreadDetails::find_reply(&mut connection, id).await?
-        }
-        // Find a thread and the latest page of replies.
-        None => {
-            let mut connection = request.app().database().get().await?;
-            ThreadDetails::find_thread(&mut connection, &params.thread_id).await?
-        }
+        let mut connection = app.database().get().await?;
+        ThreadDetails::find_reply(&mut connection, context.thread_id(), reply_id).await?
+    } else {
+        // Find an individual reply to a thread.
+        let mut connection = app.database().get().await?;
+        ThreadDetails::find_thread(&mut connection, context.thread_id()).await?
     };
 
     Response::build().data(&thread)
@@ -127,16 +121,8 @@ async fn show(request: Request, _: Next) -> via::Result {
 /// The current user must be authorized to access the channel to which the
 /// thread belongs and own the thread. Otherwise, `404`.
 async fn update(request: Request, _: Next) -> via::Result {
-    // Get the current user id from the channel subscription.
-    let me = request
-        .channel()
-        .map(|channel| channel.subscription().user_id());
-
-    // Deserialize the remaining delete arguments from the request URI path.
-    let mut params = request.params::<ThreadParams>()?;
-
-    // Set the user_id to that of the subscription resolved during authorization.
-    params.user_id = me;
+    // Extract contextual arguments from the request.
+    let context = ThreadMemberContext::try_from(&request)?;
 
     // Aggregate the request body and deserialize a thread change set.
     let (body, app) = request.into_future();
@@ -145,13 +131,20 @@ async fn update(request: Request, _: Next) -> via::Result {
     // Checkout a database connection and update the thread.
     let thread = hurry!(async {
         let mut connection = app.database().get().await?;
-        Thread::update(&mut connection, &params, &change_set).await
+        Thread::update(&mut connection, &context, change_set).await
     })?;
 
     // Respond with JSON if the thread was modified. Otherwise, return an empty
     // response with a 204 status code.
-    if thread.did_change() {
-        Response::build().json(&thread)
+    if let Some(changed) = thread.changed() {
+        // Generate the response with a reference to changed thread so we can
+        // move the original value into the relay event.
+        let response = Response::build().json(&changed)?;
+
+        // Dispatch the "edit-thread" event to the subscribers in the channel.
+        app.pubsub().dispatch(OurEvent::edit_thread(changed));
+
+        Ok(response)
     } else {
         Response::build().status(StatusCode::NO_CONTENT).finish()
     }
@@ -159,44 +152,23 @@ async fn update(request: Request, _: Next) -> via::Result {
 
 /// Delete an existing thread by id.
 async fn destroy(request: Request, _: Next) -> via::Result {
-    // The current user id comes from the subscription for which the request
-    // was authorized.
-    let me = request
-        .channel()
-        .map(|channel| channel.subscription().user_id())
-        .or_forbidden()?;
+    // Extract contextual arguments from the request.
+    let context = ThreadMemberContext::try_from(&request)?;
 
-    // Deserialize the remaining delete arguments from the request URI path.
-    let params = request.params::<ThreadParams>()?;
-
-    // Checkout a database connection and delete the thread.
     if let 1.. = hurry!(async {
-        if let Some(id) = params.reply_id.as_ref() {
-            let mut connection = request.app().database().get().await?;
-            let by_id_author_and_parent = threads::id
-                .eq(id)
-                .and(threads::user_id.eq(&me))
-                .and(threads::thread_id.eq(&params.thread_id));
+        // Checkout a database connection.
+        let mut connection = request.app().database().get().await?;
 
-            diesel::delete(threads::table)
-                .filter(by_id_author_and_parent)
-                .execute_async(&mut connection)
-                .await
-        } else {
-            let mut connection = request.app().database().get().await?;
-            let by_id_and_author = threads::id
-                .eq(&params.thread_id)
-                .and(threads::user_id.eq(&me))
-                .and(threads::thread_id.is_null());
-
-            diesel::delete(threads::table)
-                .filter(by_id_and_author)
-                .execute_async(&mut connection)
-                .await
-        }
+        // Peform the delete.
+        diesel::delete(threads::table)
+            // Convert the context derived from the request into a boxed filter
+            // expression that filters the delete by id, thread_id, and user_id.
+            .filter(context.to_delete_where())
+            .execute_async(&mut connection)
+            .await
     })? {
         Response::build().status(StatusCode::NO_CONTENT).finish()
     } else {
-        via::deny!(403, "Forbidden")
+        via::deny!(403, "insufficient permission")
     }
 }

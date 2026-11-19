@@ -14,11 +14,15 @@ use time::OffsetDateTime;
 use via_diesel::AsyncQueryDsl;
 
 use super::{ThreadWithUser, User, UserPreview};
-use crate::app::{Connection, Notification};
+use crate::app::Connection;
 use crate::models::ThreadDetails;
 use crate::models::user::UserPreviewSqlType;
+use crate::routes::chat::Notification;
 use crate::schema::reactions;
 use crate::util::Id;
+
+const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
+const USERNAMES_PER_REACTION: i32 = 6;
 
 type ReactionSqlType = (
     sql_types::Uuid,        // id
@@ -221,16 +225,25 @@ impl Reaction {
         reactions::table
     }
 
+    pub async fn to_thread(
+        connection: &mut Connection<'_>,
+        id: &Id,
+    ) -> via::Result<Vec<ReactionPreview>> {
+        diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
+            .bind::<sql_types::Array<sql_types::Uuid>, _>(vec![id])
+            .bind::<sql_types::Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
+            .bind::<sql_types::Integer, _>(USERNAMES_PER_REACTION)
+            .load_async(connection)
+            .await
+    }
+
     pub async fn to_threads(
         connection: &mut Connection<'_>,
         threads: Vec<ThreadWithUser>,
     ) -> via::Result<Vec<ThreadDetails>> {
-        const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
-        const USERNAMES_PER_REACTION: i32 = 6;
-
-        let thread_ids = threads.iter().map(|thread| thread.id()).copied().collect();
+        let thread_ids = threads.iter().map(|thread| thread.id()).collect();
         let reactions = diesel::sql_query("SELECT * FROM top_reactions_for($1, $2, $3)")
-            .bind::<sql_types::Array<sql_types::Uuid>, Vec<_>>(thread_ids)
+            .bind::<sql_types::Array<sql_types::Uuid>, Vec<&Id>>(thread_ids)
             .bind::<sql_types::Integer, _>(UNIQUE_REACTIONS_PER_CONVERSATION)
             .bind::<sql_types::Integer, _>(USERNAMES_PER_REACTION)
             .load_async(connection)

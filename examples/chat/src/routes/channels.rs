@@ -1,6 +1,6 @@
 via::resource!(app = Unicorn, guard = collection);
 
-use diesel::{BoolExpressionMethods, Identifiable, QueryDsl};
+use diesel::{BoolExpressionMethods, ExpressionMethods, Identifiable, QueryDsl};
 use http::StatusCode;
 use std::ops::ControlFlow;
 use tokio::task::coop;
@@ -12,8 +12,8 @@ use via_pubsub::{Dispatch, OurEvent};
 use crate::models::subscription::{self, AuthClaims, ChannelSubscription};
 use crate::models::thread::{self, ThreadDetails, ThreadWithUser};
 use crate::models::{Channel, Reaction};
-use crate::schema::{channels, subscriptions};
-use crate::util::{Id, Session};
+use crate::schema::{channels, subscriptions, threads};
+use crate::util::{Id, Session, hurry};
 use crate::{Next, Request, Unicorn};
 
 #[derive(Clone)]
@@ -21,7 +21,7 @@ struct Protected(ChannelSubscription);
 
 pub trait Subscriber {
     fn channel(&self) -> Option<&ChannelSubscription>;
-    fn channel_id(&self) -> Option<Id> {
+    fn channel_id(&self) -> Option<&Id> {
         self.channel().map(ChannelSubscription::channel_id)
     }
 }
@@ -120,19 +120,24 @@ async fn create(request: Request, _: Next) -> via::Result {
 /// The active user must be a member of the channel.
 async fn show(request: Request, _: Next) -> via::Result {
     // Clone the channel subscription we loaded during authorization.
-    let subscription = request.channel().cloned().or_not_found()?;
+    let channel = request.channel().cloned().or_not_found()?;
+
+    // Request is no longer required once `channel` is extracted and this route
+    // requires making more than one database query over the same connection.
+    // Preemptively free up stack space by taking app out of request.
+    let (_, _, app) = request.into_parts();
 
     // Load the associations for the channel in `subscription`.
     let threads = {
         // Acquire a database connection.
-        let mut connection = request.app().database().get().await?;
-
-        // Get the id of the channel from `subscription`.
-        let channel_id = subscription.channel_id();
+        let mut connection = app.database().get().await?;
+        let by_channel_and_threadness = threads::channel_id
+            .eq(channel.channel_id())
+            .and(threads::thread_id.is_null());
 
         // Load the first page of the most recent threads in the channel.
         let mut recent = ThreadWithUser::query()
-            .filter(thread::by_channel(channel_id).and(thread::is_thread()))
+            .filter(by_channel_and_threadness)
             .order(thread::recent())
             .limit(PER_PAGE)
             .load_async(&mut connection)
@@ -146,7 +151,7 @@ async fn show(request: Request, _: Next) -> via::Result {
     };
 
     // Render `threads` within the channel subscription.
-    Response::build().data(subscription.with_threads(threads))
+    Response::build().data(channel.with_threads(threads))
 }
 
 /// Update an existing channel.
@@ -176,7 +181,7 @@ async fn update(request: Request, _: Next) -> via::Result {
         let channel_id = subscription.channel_id();
 
         // Perform the update.
-        Channel::update(&mut connection, channel_id, change_set).await?
+        Channel::update(&mut connection, *channel_id, change_set).await?
     };
 
     Response::build().data(channel)
@@ -193,23 +198,23 @@ async fn destroy(request: Request, _: Next) -> via::Result {
 
     // Confirm that the user is a channel admin.
     if !subscription.claims().contains(AuthClaims::ADMINISTRATE) {
-        deny!(403, "deleting a channel requires a channel admin");
-    } else {
-        // Acquire a database connection.
-        let mut connection = request.app().database().get().await?;
-
-        // Get the channel id from `subscription`.
-        let id = subscription.channel_id();
-
-        // Unsubscribe all users from the channel.
-        let event = OurEvent::deregister(None, id);
-        request.app().pubsub().dispatch(event);
-
-        // Destroy the channel.
-        Channel::destroy(&mut connection, id).await?;
+        via::deny!(403, "deleting a channel requires a channel admin");
     }
 
-    Response::build().status(StatusCode::NO_CONTENT).finish()
+    if let 1.. = hurry!(async {
+        // Checkout a database connection.
+        let mut connection = request.app().database().get().await?;
+
+        // Peform the delete.
+        diesel::delete(channels::table)
+            .filter(channels::id.eq(subscription.channel_id()))
+            .execute_async(&mut connection)
+            .await
+    })? {
+        Response::build().status(StatusCode::NO_CONTENT).finish()
+    } else {
+        via::deny!(404, "not found")
+    }
 }
 
 impl Subscriber for Request {

@@ -1,96 +1,139 @@
-use diesel::pg::Pg;
-use diesel::{BoolExpressionMethods, BoxableExpression, NullableExpressionMethods, sql_types};
+use diesel::{
+    BoolExpressionMethods, BoxableExpression, ExpressionMethods, NullableExpressionMethods,
+};
+use diesel::{pg::Pg, sql_types};
 use serde::Deserialize;
 use via::request::PathParams;
 use via::{Error, ResultExt};
 
-use crate::models::Subscription;
+use super::JoinUsers;
+
+use crate::Request;
+use crate::models::subscription::SubscriptionKeys;
+use crate::models::{ChannelSubscription, Subscription};
+use crate::routes::channels::Subscriber;
 use crate::schema::threads;
-use crate::util::Id;
+use crate::util::{BoxedFilterExpr, Id};
 
-pub type ThreadParamsExpr<T> =
-    Box<dyn BoxableExpression<T, Pg, SqlType = sql_types::Nullable<sql_types::Bool>>>;
+pub struct ThreadCollectionContext {
+    thread_id: Option<Id>,
+    keys: SubscriptionKeys,
+}
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateThreadParams {
-    #[serde(rename = "threadId")]
-    pub parent_id: Option<Id>,
-
-    pub(super) channel_id: Id,
-    pub(super) user_id: Option<Id>,
+pub struct ThreadMemberContext {
+    params: ThreadParams,
+    keys: SubscriptionKeys,
 }
 
 #[derive(Debug)]
-pub struct ThreadParams {
-    pub thread_id: Id,
-    pub reply_id: Option<Id>,
-    pub user_id: Option<Id>,
+struct ThreadParams {
+    thread_id: Id,
+    reply_id: Option<Id>,
 }
 
-pub(super) struct UpdateThreadParams<'a> {
-    pub(super) primary_key: &'a Id,
-    pub(super) thread_id: Option<&'a Id>,
-    pub(super) user_id: &'a Id,
-}
+impl ThreadCollectionContext {
+    pub fn new(keys: SubscriptionKeys, thread_id: Option<Id>) -> Self {
+        Self { keys, thread_id }
+    }
 
-impl CreateThreadParams {
-    #[inline]
-    pub fn with_parent_id(&mut self, id: Option<Id>) {
-        self.parent_id = id;
+    pub fn channel_id(&self) -> &Id {
+        &self.keys.channel_id
+    }
+
+    pub fn thread_id(&self) -> Option<&Id> {
+        self.thread_id.as_ref()
+    }
+
+    pub fn user_id(&self) -> &Id {
+        &self.keys.user_id
+    }
+
+    pub fn to_where_clause(&self) -> BoxedFilterExpr<'_, JoinUsers> {
+        if let Some(thread_id) = self.thread_id() {
+            let expr = threads::channel_id
+                .eq(self.channel_id())
+                .and(threads::thread_id.eq(thread_id));
+
+            Box::new(expr)
+        } else {
+            let expr = threads::channel_id
+                .eq(self.channel_id())
+                .and(threads::thread_id.is_null())
+                .nullable();
+
+            Box::new(expr)
+        }
     }
 }
 
-impl TryFrom<&'_ Subscription> for CreateThreadParams {
+impl ThreadMemberContext {
+    pub fn channel_id(&self) -> &Id {
+        &self.keys.channel_id
+    }
+
+    pub fn thread_id(&self) -> &Id {
+        &self.params.thread_id
+    }
+
+    pub fn reply_id(&self) -> Option<&Id> {
+        self.params.reply_id.as_ref()
+    }
+
+    pub fn user_id(&self) -> &Id {
+        &self.keys.user_id
+    }
+
+    pub fn to_delete_where(&self) -> BoxedFilterExpr<'_, threads::table> {
+        if let Some(reply_id) = self.reply_id() {
+            Box::new(
+                threads::id
+                    .eq(reply_id)
+                    .and(threads::user_id.eq(self.user_id()))
+                    .and(threads::thread_id.eq(self.thread_id())),
+            )
+        } else {
+            Box::new(
+                threads::id
+                    .eq(self.thread_id())
+                    .and(threads::user_id.eq(self.user_id()))
+                    .and(threads::thread_id.is_null())
+                    .nullable(),
+            )
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a Request> for ThreadCollectionContext {
     type Error = Error;
 
-    fn try_from(subscription: &Subscription) -> Result<Self, Self::Error> {
+    fn try_from(request: &'a Request) -> Result<Self, Self::Error> {
         Ok(Self {
-            channel_id: subscription.channel_id(),
-            parent_id: None,
-            user_id: Some(subscription.user_id()),
+            // Load the channel subscription that we resolved during authorization.
+            keys: request
+                .channel()
+                .map(|channel| channel.keys())
+                .or_forbidden()?,
+
+            // Parse the optional thread-id parameter from the request URI Path.
+            thread_id: request.param("thread-id").ok_and_then(|id| id.parse())?,
         })
     }
 }
 
-impl ThreadParams {
-    pub fn id(&self) -> &Id {
-        match self {
-            Self {
-                thread_id: id,
-                reply_id: None,
-                ..
-            }
-            | Self {
-                reply_id: Some(id), ..
-            } => id,
-        }
-    }
+impl<'a> TryFrom<&'a Request> for ThreadMemberContext {
+    type Error = Error;
 
-    pub(super) fn try_as_update(&self) -> via::Result<UpdateThreadParams<'_>> {
-        match self {
-            Self {
-                thread_id: primary_key,
-                reply_id: None,
-                user_id: Some(user_id),
-            } => Ok(UpdateThreadParams {
-                primary_key,
-                thread_id: None,
-                user_id,
-            }),
-            Self {
-                thread_id,
-                reply_id: Some(primary_key),
-                user_id: Some(user_id),
-            } => Ok(UpdateThreadParams {
-                primary_key,
-                thread_id: Some(thread_id),
-                user_id,
-            }),
-            _ => {
-                via::deny!(403, "Forbidden");
-            }
-        }
+    fn try_from(request: &'a Request) -> Result<Self, Self::Error> {
+        Ok(Self {
+            // Load the channel subscription that we resolved during authorization.
+            keys: request
+                .channel()
+                .map(|channel| channel.keys())
+                .or_forbidden()?,
+
+            // Extract the thread params from the request URI path.
+            params: request.params()?,
+        })
     }
 }
 
@@ -101,7 +144,6 @@ impl<'a> TryFrom<PathParams<'a>> for ThreadParams {
         Ok(Self {
             thread_id: params.get("thread-id").parse()?,
             reply_id: params.get("reply-id").ok_and_then(|id| id.parse())?,
-            user_id: None,
         })
     }
 }

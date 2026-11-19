@@ -7,7 +7,7 @@ pub mod threads;
 pub mod users;
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
-mod chat;
+pub mod chat;
 
 #[cfg(any(feature = "tokio-tungstenite", feature = "tokio-websockets"))]
 pub use chat::chat;

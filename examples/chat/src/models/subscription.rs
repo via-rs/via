@@ -67,6 +67,11 @@ pub struct ChannelSubscription {
     subscription: Subscription,
 }
 
+pub struct SubscriptionKeys {
+    pub channel_id: Id,
+    pub user_id: Id,
+}
+
 bitflags! {
     #[derive(AsExpression, Clone, Debug, Deserialize, FromSqlRow, Serialize)]
     #[diesel(sql_type = sql_types::Integer)]
@@ -157,8 +162,8 @@ impl ChannelSubscription {
         self.subscription.id
     }
 
-    pub fn channel_id(&self) -> Id {
-        self.subscription.channel_id
+    pub fn channel_id(&self) -> &Id {
+        &self.subscription.channel_id
     }
 
     pub fn channel(&self) -> &Channel {
@@ -172,6 +177,15 @@ impl ChannelSubscription {
     pub fn subscription(&self) -> &Subscription {
         &self.subscription
     }
+
+    pub fn keys(&self) -> SubscriptionKeys {
+        let subscription = self.subscription();
+
+        SubscriptionKeys {
+            channel_id: subscription.channel_id,
+            user_id: subscription.user_id,
+        }
+    }
 }
 
 impl Subscription {
@@ -181,5 +195,14 @@ impl Subscription {
 
     pub fn user_id(&self) -> Id {
         self.user_id
+    }
+}
+
+impl SubscriptionKeys {
+    pub fn new(channel_id: Id, user_id: Id) -> Self {
+        Self {
+            channel_id,
+            user_id,
+        }
     }
 }

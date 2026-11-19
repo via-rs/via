@@ -1,3 +1,7 @@
+mod notification;
+
+pub(crate) use notification::{Notification, Relay};
+
 use serde::{Deserialize, Serialize};
 use std::ops::ControlFlow;
 use tokio::task::coop;
@@ -6,9 +10,10 @@ use via::ws::{self, Channel, Message, Request};
 use via::{Shared, deny};
 use via_pubsub::{Dispatch, OurEvent, PeerEvent, Publish, Receive, Scope};
 
-use crate::app::{Connection, Notification, Postgres, Unicorn};
+use crate::app::{Connection, Postgres, Unicorn};
 use crate::models::reaction::{NewReactionInChannel, Reaction};
-use crate::models::thread::{NewThreadInChannel, Thread};
+use crate::models::subscription::SubscriptionKeys;
+use crate::models::thread::{PutThread, Thread, ThreadCollectionContext};
 use crate::models::user::User;
 use crate::models::{ChannelSubscription, UserPreview, subscription};
 use crate::util::{Id, Session, hurry};
@@ -16,8 +21,17 @@ use crate::util::{Id, Session, hurry};
 #[derive(Deserialize)]
 #[serde(content = "data", rename_all = "lowercase", tag = "type")]
 enum ClientEvent {
-    Reply(NewThreadInChannel),
+    Reply(NewThreadOrReply),
     Reaction(NewReactionInChannel),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NewThreadOrReply {
+    channel_id: Id,
+    thread_id: Option<Id>,
+    #[serde(flatten)]
+    thread: PutThread,
 }
 
 pub async fn chat(mut client: Channel, request: Request<Unicorn>) -> ws::Result {
@@ -191,17 +205,21 @@ impl ClientEvent {
         unicorn: &Unicorn,
     ) -> ws::Result<OurEvent<Id, Notification>> {
         match self {
-            ClientEvent::Reply(mut init) => {
-                // Set the user_id of the reply to the current user id.
-                init.set_author_id(*actor);
+            ClientEvent::Reply(params) => {
+                let context = ThreadCollectionContext::new(
+                    SubscriptionKeys::new(params.channel_id, *actor),
+                    params.thread_id,
+                );
 
                 // Acquire a database connection and perform the insert.
                 let thread = hurry!(async {
                     let mut connection = unicorn.database().get().await.or_break()?;
-                    Thread::create(&mut connection, &init).await.or_continue()
+                    let result = Thread::create(&mut connection, &context, params.thread).await;
+
+                    result.or_continue()
                 })?;
 
-                Ok(OurEvent::relay(init.channel_id(), thread.into()))
+                Ok(OurEvent::new_reply(thread))
             }
             ClientEvent::Reaction(mut init) => {
                 // Set the user_id of the reaction to the current user id.

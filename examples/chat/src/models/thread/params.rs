@@ -1,8 +1,4 @@
-use diesel::{
-    BoolExpressionMethods, BoxableExpression, ExpressionMethods, NullableExpressionMethods,
-};
-use diesel::{pg::Pg, sql_types};
-use serde::Deserialize;
+use diesel::{BoolExpressionMethods, ExpressionMethods, NullableExpressionMethods};
 use via::request::PathParams;
 use via::{Error, ResultExt};
 
@@ -10,7 +6,6 @@ use super::JoinUsers;
 
 use crate::Request;
 use crate::models::subscription::SubscriptionKeys;
-use crate::models::{ChannelSubscription, Subscription};
 use crate::routes::channels::Subscriber;
 use crate::schema::threads;
 use crate::util::{BoxedFilterExpr, Id};
@@ -26,7 +21,7 @@ pub struct ThreadMemberContext {
 }
 
 #[derive(Debug)]
-struct ThreadParams {
+pub(crate) struct ThreadParams {
     thread_id: Id,
     reply_id: Option<Id>,
 }
@@ -66,6 +61,23 @@ impl ThreadCollectionContext {
     }
 }
 
+impl<'a> TryFrom<&'a Request> for ThreadCollectionContext {
+    type Error = Error;
+
+    fn try_from(request: &'a Request) -> Result<Self, Self::Error> {
+        Ok(Self {
+            // Load the channel subscription that we resolved during authorization.
+            keys: request
+                .channel()
+                .map(|channel| channel.keys())
+                .or_forbidden()?,
+
+            // Parse the optional thread-id parameter from the request URI Path.
+            thread_id: request.param("thread-id").ok_and_then(|id| id.parse())?,
+        })
+    }
+}
+
 impl ThreadMemberContext {
     pub fn channel_id(&self) -> &Id {
         &self.keys.channel_id
@@ -76,7 +88,7 @@ impl ThreadMemberContext {
     }
 
     pub fn reply_id(&self) -> Option<&Id> {
-        self.params.reply_id.as_ref()
+        self.params.reply_id()
     }
 
     pub fn user_id(&self) -> &Id {
@@ -105,23 +117,6 @@ impl ThreadMemberContext {
     }
 }
 
-impl<'a> TryFrom<&'a Request> for ThreadCollectionContext {
-    type Error = Error;
-
-    fn try_from(request: &'a Request) -> Result<Self, Self::Error> {
-        Ok(Self {
-            // Load the channel subscription that we resolved during authorization.
-            keys: request
-                .channel()
-                .map(|channel| channel.keys())
-                .or_forbidden()?,
-
-            // Parse the optional thread-id parameter from the request URI Path.
-            thread_id: request.param("thread-id").ok_and_then(|id| id.parse())?,
-        })
-    }
-}
-
 impl<'a> TryFrom<&'a Request> for ThreadMemberContext {
     type Error = Error;
 
@@ -136,6 +131,16 @@ impl<'a> TryFrom<&'a Request> for ThreadMemberContext {
             // Extract the thread params from the request URI path.
             params: request.params()?,
         })
+    }
+}
+
+impl ThreadParams {
+    pub(crate) fn thread_id(&self) -> &Id {
+        &self.thread_id
+    }
+
+    pub(crate) fn reply_id(&self) -> Option<&Id> {
+        self.reply_id.as_ref()
     }
 }
 

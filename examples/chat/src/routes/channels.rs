@@ -9,7 +9,7 @@ use via_diesel::paginate::PER_PAGE;
 use via_diesel::{AsyncQueryDsl, LimitAndPage, Paginate};
 use via_pubsub::{Dispatch, OurEvent};
 
-use crate::models::subscription::{self, AuthClaims, ChannelSubscription};
+use crate::models::subscription::{self, AuthClaims, ChannelSubscription, SubscriptionKeys};
 use crate::models::thread::{self, ThreadDetails, ThreadWithUser};
 use crate::models::{Channel, Reaction};
 use crate::schema::{channels, subscriptions, threads};
@@ -21,8 +21,13 @@ struct Protected(ChannelSubscription);
 
 pub trait Subscriber {
     fn channel(&self) -> Option<&ChannelSubscription>;
+
     fn channel_id(&self) -> Option<&Id> {
         self.channel().map(ChannelSubscription::channel_id)
+    }
+
+    fn channel_keys(&self) -> via::Result<SubscriptionKeys> {
+        self.channel().map(|channel| channel.keys()).or_forbidden()
     }
 }
 

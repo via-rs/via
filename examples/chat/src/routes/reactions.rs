@@ -1,46 +1,60 @@
-via::resource!(app = Unicorn);
+via::resource!(app = Unicorn, only = [collection, show, destroy]);
 
-use via::Error;
-use via::request::PathParams;
+use diesel::{ExpressionMethods, Identifiable, QueryDsl};
+use via::request::{PathParams, Payloadz};
+use via::{Payload, Response, deny};
+use via_diesel::paginate::{LimitAndOffset, LimitAndPage};
+use via_diesel::{AsyncQueryDsl, Paginate};
 
-use crate::util::Id;
+use crate::models::ReactionWithUser;
+use crate::models::reaction::{ReactionCollectionContext, ReactionMemberContext};
+use crate::schema::reactions;
+use crate::util::{Authenticator, Id, Session, hurry};
 use crate::{Next, Request, Unicorn};
 
-#[derive(Debug)]
-pub struct ReactionParams {
-    reaction_id: Id,
-    thread_id: Id,
-    reply_id: Option<Id>,
+/// List reactions to a thread or reply.
+async fn index(request: Request, _: Next) -> via::Result {
+    // Extract contextual arguments from the request.
+    let context = ReactionCollectionContext::try_from(&request)?;
+
+    // Extract pagination arguments from the URI query.
+    let by_number_with_limit = request.query::<LimitAndPage>()?;
+
+    // Load a page of reactions to the thread or reply id in context.
+    let reactions = hurry!(async {
+        // Checkout a database connection.
+        let mut connection = request.app().database().get().await?;
+
+        // Execute the query.
+        ReactionWithUser::query()
+            .filter(reactions::thread_id.eq(context.thread_id()))
+            .page(by_number_with_limit)
+            .load_async(&mut connection)
+            .await
+    })?;
+
+    Response::build().data(&reactions)
 }
 
-async fn index(_: Request, _: Next) -> via::Result {
-    via::deny!(500, "todo!")
+/// Create a new reaction to a thread.
+async fn create(request: Request, _: Next) -> via::Result {
+    // Extract contextual arguments from the request.
+    let _context = ReactionCollectionContext::try_from(&request)?;
+
+    todo!()
 }
 
-async fn create(_: Request, _: Next) -> via::Result {
-    via::deny!(500, "todo!")
+/// Retrieve a reaction to a thread or reply by id.
+async fn show(request: Request, _: Next) -> via::Result {
+    // Extract contextual arguments from the request.
+    let _context = ReactionMemberContext::try_from(&request)?;
+
+    todo!()
 }
 
-async fn show(_: Request, _: Next) -> via::Result {
-    via::deny!(500, "todo!")
-}
+/// Delete a reaction by id.
+async fn destroy(request: Request, _: Next) -> via::Result {
+    let _context = ReactionMemberContext::try_from(&request)?;
 
-async fn update(_: Request, _: Next) -> via::Result {
-    via::deny!(500, "todo!")
-}
-
-async fn destroy(_: Request, _: Next) -> via::Result {
-    via::deny!(500, "todo!")
-}
-
-impl<'a> TryFrom<PathParams<'a>> for ReactionParams {
-    type Error = Error;
-
-    fn try_from(params: PathParams<'a>) -> Result<Self, Self::Error> {
-        Ok(Self {
-            reaction_id: params.get("reaction-id").parse()?,
-            thread_id: params.get("thread-id").parse()?,
-            reply_id: params.get("reply-id").ok_and_then(str::parse)?,
-        })
-    }
+    todo!()
 }

@@ -1,6 +1,6 @@
-pub mod params;
+mod params;
 
-pub use params::{CreateThreadParams, ReplyParams};
+pub use params::{ThreadCollectionContext, ThreadMemberContext};
 
 use diesel::associations::HasTable;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
@@ -17,7 +17,7 @@ use via_diesel::{AsyncQueryDsl, Paginate};
 use super::subscription::{ChannelSubscription, Subscription};
 use super::user::{User, UserPreview, UserPreviewSqlType};
 use super::{Channel, Reaction, ReactionPreview};
-use crate::app::{Connection, Notification};
+use crate::app::Connection;
 use crate::schema::{threads, users};
 use crate::util::Id;
 
@@ -90,26 +90,19 @@ pub struct Thread {
     total_replies: i64,
 }
 
-#[derive(Debug, Deserialize, Insertable)]
-#[diesel(table_name = threads)]
-#[serde(rename_all = "camelCase")]
-pub struct NewThread {
-    body: String,
-}
-
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NewThreadInChannel {
+pub struct PutThread {
     body: String,
-
-    #[serde(flatten)]
-    params: CreateThreadParams,
 }
 
-#[derive(AsChangeset, Deserialize)]
-#[diesel(table_name = threads)]
-pub struct ChangeSet {
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadDelta {
+    id: Id,
     body: String,
+    user: UserPreview,
+    #[serde(with = "time::serde::rfc3339")]
+    updated_at: OffsetDateTime,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -147,61 +140,54 @@ pub struct UpdatedThread {
     thread: ThreadWithUser,
 }
 
-pub struct UpdateThreadScope {
-    author_id: Id,
-    update_target: Result<Id, ReplyParams>,
-}
-
-via_diesel::filters! {
-    pub fn by_id(id == Id) on threads;
-    pub fn by_user(user_id == Id) on threads;
-    pub fn by_thread(thread_id == Id) on threads;
-    pub fn by_channel(channel_id == Id) on threads;
-
-    pub fn is_thread(thread_id is_null) on threads;
-}
-
 via_diesel::sorts! {
     pub fn recent(#[desc] created_at, #[desc] id) on threads;
 }
 
-impl NewThread {
-    pub(crate) fn in_channel(self, params: CreateThreadParams) -> NewThreadInChannel {
-        NewThreadInChannel {
-            params,
-            body: self.body,
-        }
-    }
-}
-
-impl NewThreadInChannel {
-    pub(crate) fn channel_id(&self) -> Id {
-        self.params.channel_id
-    }
-
-    pub(crate) fn set_author_id(&mut self, id: Id) {
-        self.params.user_id = Some(id);
-    }
-}
-
-impl UpdateThreadScope {
-    pub fn thread(author_id: Id, target_id: Id) -> Self {
-        Self {
-            author_id,
-            update_target: Ok(target_id),
-        }
-    }
-
-    pub fn reply(author_id: Id, params: ReplyParams) -> Self {
-        Self {
-            author_id,
-            update_target: Err(params),
-        }
-    }
-}
-
 impl Thread {
-    pub async fn find(connection: &mut Connection<'_>, id: Id) -> via::Result<ThreadDetails> {
+    pub async fn create(
+        connection: &mut Connection<'_>,
+        context: &ThreadCollectionContext,
+        new_thread: PutThread,
+    ) -> via::Result<ThreadWithUser> {
+        // We use raw SQL to eagerly load the profile view of the author.
+        diesel::sql_query("SELECT * FROM reply_to($1, $2, $3, $4)")
+            .bind::<sql_types::Uuid, _>(context.channel_id())
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(context.thread_id())
+            .bind::<sql_types::Uuid, _>(context.user_id())
+            .bind::<sql_types::Text, _>(new_thread.body)
+            .get_result_async(connection)
+            .await
+    }
+
+    pub async fn update(
+        connection: &mut Connection<'_>,
+        context: &ThreadMemberContext,
+        change_set: PutThread,
+    ) -> via::Result<UpdatedThread> {
+        let mut parent_id = None;
+        let own_id = if let Some(id) = context.reply_id() {
+            parent_id = Some(context.thread_id());
+            id
+        } else {
+            context.thread_id()
+        };
+
+        diesel::sql_query("SELECT * FROM update_thread($1, $2, $3, $4)")
+            .bind::<sql_types::Uuid, _>(own_id)
+            .bind::<sql_types::Uuid, _>(context.user_id())
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(parent_id)
+            .bind::<sql_types::Text, _>(change_set.body)
+            .get_result_async(connection)
+            .await
+    }
+}
+
+impl ThreadDetails {
+    pub async fn find_thread(
+        connection: &mut Connection<'_>,
+        id: &Id,
+    ) -> via::Result<ThreadDetails> {
         let target = diesel::alias!(threads as target);
 
         let target_id = target.field(threads::id);
@@ -223,17 +209,17 @@ impl Thread {
 
         // Load the thread by id along with the first page of replies.
         let mut replies = {
-            let threads = threads::table
+            let threads = ThreadWithUser::query()
                 .inner_join(target.on(target_id.eq(id).and(belongs_to_target_root)))
-                .inner_join(users::table.on(users::id.eq(threads::user_id)))
-                .select(ThreadWithUser::as_select())
-                .filter(by_id(id).or(by_thread(id)))
+                .filter(threads::id.eq(id).and(threads::thread_id.is_null()))
+                .or_filter(threads::thread_id.eq(id))
                 .order(recent())
                 .limit(PER_PAGE + 1)
                 .load_async(connection)
                 .await?;
 
             // Side load the reactions to the threads in `threads`.
+            // Interweave the reactions in the thread to which they belong.
             Reaction::to_threads(connection, threads).await?
         };
 
@@ -241,64 +227,40 @@ impl Thread {
         // They are ordered by recent. Therefore, the parent is always last.
         let mut thread = replies.pop().or_not_found()?;
 
+        // Reverse the replies to match their render sequence.
+        replies.reverse();
+
         // Set the replies field of `thread` to `replies`.
         thread.replies = replies;
-
-        // Reverse the replies to match their render sequence.
-        thread.replies.reverse();
 
         Ok(thread)
     }
 
-    pub async fn create(
+    pub async fn find_reply(
         connection: &mut Connection<'_>,
-        init: &NewThreadInChannel,
-    ) -> via::Result<ThreadWithUser> {
-        let author_id = init.params.user_id.as_ref().or_forbidden()?;
+        parent_id: &Id,
+        reply_id: &Id,
+    ) -> via::Result<ThreadDetails> {
+        use crate::schema::threads::{id, thread_id};
 
-        diesel::sql_query("SELECT * FROM reply_to($1, $2, $3, $4)")
-            .bind::<sql_types::Uuid, _>(&init.params.channel_id)
-            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(init.params.parent_id.as_ref())
-            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(author_id)
-            .bind::<sql_types::Text, _>(init.body.as_str())
-            .get_result_async(connection)
-            .await
+        // Fetch the reply with the id = reply_id AND thread_id = parent_id.
+        let reply = ThreadWithUser::query()
+            .filter(id.eq(reply_id).and(thread_id.eq(parent_id)))
+            .first_async(connection)
+            .await?;
+
+        // Side load the reactions to the reply.
+        let reactions = Reaction::to_thread(connection, &reply.thread.id).await?;
+
+        // Group the reactions with the reply.
+        Ok(reply.into_details(reactions))
     }
 
-    pub async fn update(
-        connection: &mut Connection<'_>,
-        scope: &UpdateThreadScope,
-        changes: ChangeSet,
-    ) -> via::Result<UpdatedThread> {
-        let (target_id, parent_id) = match scope.update_target.as_ref() {
-            Ok(id) => (id, None),
-            Err(params) => (&params.reply_id, Some(&params.thread_id)),
-        };
-
-        diesel::sql_query("SELECT * FROM update_thread($1, $2, $3, $4)")
-            .bind::<sql_types::Uuid, _>(target_id)
-            .bind::<sql_types::Uuid, _>(&scope.author_id)
-            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(parent_id)
-            .bind::<sql_types::Text, _>(&changes.body)
-            .get_result_async(connection)
-            .await
+    pub fn channel_id(&self) -> &Id {
+        &self.thread.channel_id
     }
 
-    pub fn query() -> threads::table {
-        threads::table
-    }
-
-    pub fn with_user(self, user: UserPreview) -> ThreadWithUser {
-        ThreadWithUser { thread: self, user }
-    }
-
-    pub fn channel_id(&self) -> Id {
-        self.channel_id
-    }
-}
-
-impl ThreadDetails {
-    pub fn grouped_by(
+    pub(super) fn grouped_by(
         threads: Vec<ThreadWithUser>,
         reactions: Vec<ReactionPreview>,
     ) -> Vec<ThreadDetails> {
@@ -317,30 +279,26 @@ impl ThreadWithUser {
             .select(Self::as_select())
     }
 
-    pub fn into_details(self, reactions: Vec<ReactionPreview>) -> ThreadDetails {
+    pub fn channel_id(&self) -> Id {
+        self.thread.channel_id
+    }
+
+    pub(crate) fn into_delta(self) -> ThreadDelta {
+        ThreadDelta {
+            id: self.thread.id,
+            body: self.thread.body,
+            user: self.user,
+            updated_at: self.thread.updated_at,
+        }
+    }
+
+    fn into_details(self, reactions: Vec<ReactionPreview>) -> ThreadDetails {
         ThreadDetails {
             user: self.user,
             thread: self.thread,
             replies: Vec::new(),
             reactions,
         }
-    }
-
-    pub fn into_thread(
-        self,
-        reactions: Vec<ReactionPreview>,
-        replies: Vec<ThreadDetails>,
-    ) -> ThreadDetails {
-        ThreadDetails {
-            thread: self.thread,
-            reactions,
-            replies,
-            user: self.user,
-        }
-    }
-
-    pub fn channel_id(&self) -> Id {
-        self.thread.channel_id
     }
 }
 
@@ -361,13 +319,7 @@ impl<'a> Identifiable for &'a ThreadWithUser {
 }
 
 impl UpdatedThread {
-    pub fn did_change(&self) -> bool {
-        self.did_change
-    }
-}
-
-impl From<ThreadWithUser> for Notification {
-    fn from(thread: ThreadWithUser) -> Self {
-        Self::Reply(thread)
+    pub fn changed(self) -> Option<ThreadWithUser> {
+        self.did_change.then_some(self.thread)
     }
 }

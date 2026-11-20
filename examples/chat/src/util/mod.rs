@@ -9,6 +9,11 @@ pub use id::Id;
 pub use session::{Authenticator, Session};
 pub use timestamp::Iso8601;
 
+use diesel::{BoxableExpression, pg::Pg, sql_types};
+
+pub type BoxedFilterExpr<'a, T> =
+    Box<dyn BoxableExpression<T, Pg, SqlType = sql_types::Nullable<sql_types::Bool>> + 'a>;
+
 #[cfg(test)]
 pub mod test {
     use diesel::Identifiable;

@@ -79,9 +79,9 @@ impl Channel {
         })
     }
 
-    pub async fn destroy(connection: &mut Connection<'_>, id: Id) -> via::Result<usize> {
+    pub async fn destroy(connection: &mut Connection<'_>, id: &Id) -> via::Result<usize> {
         diesel::delete(channels::table)
-            .filter(by_id(id))
+            .filter(channels::id.eq(id))
             .execute_async(connection)
             .await
     }

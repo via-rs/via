@@ -4,7 +4,6 @@ use cookie::{Cookie, Key, SameSite};
 use diesel_async::AsyncPgConnection;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use http::StatusCode;
-use serde::{Deserialize, Serialize};
 use std::thread::available_parallelism;
 use time::OffsetDateTime;
 use via::error::{Catch, Propagate};
@@ -13,7 +12,8 @@ use via::{Response, deny};
 use via_pubsub::Redis;
 use zeroize::Zeroizing;
 
-use crate::models::{ReactionWithUser, ThreadWithUser, User};
+use crate::models::user::User;
+use crate::routes::chat::Notification;
 use crate::util::session::{CODEC, Identity, Unauthorized};
 use crate::util::{Authenticator, Id, Session};
 use crate::{Next, Request};
@@ -41,14 +41,6 @@ pub const SESSION: &str = "via-chat-session";
 
 pub type Postgres = AsyncDieselConnectionManager<AsyncPgConnection>;
 pub type Connection<'a> = PooledConnection<'a, Postgres>;
-
-/// A change notification.
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(content = "data", rename_all = "lowercase", tag = "type")]
-pub enum Notification {
-    Reaction(ReactionWithUser),
-    Reply(ThreadWithUser),
-}
 
 /// Our billion dollar chat application.
 /// This type defines the resources that are available to each request.

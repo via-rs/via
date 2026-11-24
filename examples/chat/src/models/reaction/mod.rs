@@ -10,7 +10,7 @@ use diesel::prelude::*;
 use diesel::{pg::Pg, sql_types};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use via_diesel::AsyncQueryDsl;
+use via_diesel::{AsyncQueryDsl, LimitAndPage, Paginate};
 
 use super::{ThreadWithUser, User, UserPreview};
 use crate::app::Connection;
@@ -115,7 +115,7 @@ impl Reaction {
     pub async fn create(
         connection: &mut Connection<'_>,
         context: &ReactionCollectionContext,
-        args: &NewReaction,
+        args: NewReaction,
     ) -> via::Result<ReactionWithUser> {
         diesel::sql_query("SELECT * FROM react_to($1, $2, $3)")
             .bind::<sql_types::Uuid, _>(context.reacted_to_id())
@@ -158,7 +158,32 @@ impl Reaction {
 }
 
 impl ReactionWithUser {
-    pub fn query() -> Select<JoinUsers, AsSelect<Self, Pg>> {
+    pub fn by_thread_and_id(
+        connection: &mut Connection<'_>,
+        context: &ReactionMemberContext,
+    ) -> impl Future<Output = via::Result<Self>> {
+        Self::query()
+            .filter(
+                reactions::thread_id
+                    .eq(context.reacted_to_id())
+                    .and(reactions::id.eq(context.reaction_id())),
+            )
+            .first_async(connection)
+    }
+
+    pub fn page_by_thread(
+        connection: &mut Connection<'_>,
+        thread_id: &Id,
+        limit_and_page: LimitAndPage<50>,
+    ) -> impl Future<Output = via::Result<Vec<Self>>> {
+        Self::query()
+            .filter(reactions::thread_id.eq(thread_id))
+            .page(limit_and_page)
+            .load_async(connection)
+    }
+
+    #[inline]
+    fn query() -> Select<JoinUsers, AsSelect<Self, Pg>> {
         reactions::table
             .inner_join(users::table)
             .select(Self::as_select())

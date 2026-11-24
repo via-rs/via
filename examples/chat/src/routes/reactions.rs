@@ -21,23 +21,18 @@ use crate::{Next, Request, Unicorn};
 
 /// List reactions to a thread or reply.
 async fn index(request: Request, _: Next) -> via::Result {
-    // Extract thread params arguments from the request URI path.
-    let params = request.params::<ThreadParams>()?;
+    // Extract contextual arguments from the request.
+    let context = ReactionCollectionContext::try_from(&request)?;
 
     // Extract pagination arguments from the URI query.
     let by_page = request.query::<LimitAndPage>()?;
 
     // Load a page of reactions to the thread or reply id in context.
     let reactions = hurry!(async {
-        // Checkout a database connection.
         let mut connection = request.app().database().get().await?;
+        let reacted_to_id = context.reacted_to_id();
 
-        // Execute the query.
-        ReactionWithUser::query()
-            .filter(reactions::thread_id.eq(params.reacted_to_id()))
-            .page(by_page)
-            .load_async(&mut connection)
-            .await
+        ReactionWithUser::page_by_thread(&mut connection, reacted_to_id, by_page).await
     })?;
 
     Response::build().data(&reactions)
@@ -52,10 +47,10 @@ async fn create(request: Request, _: Next) -> via::Result {
     let (body, app) = request.into_future();
     let new_reaction = body.timeout_after_secs(2).await?.data::<NewReaction>()?;
 
-    // Checkout a database connection and perform the insert.
+    // Checkout a database connection and insert the reaction.
     let reaction = hurry!(async {
         let mut connection = app.database().get().await?;
-        Reaction::create(&mut connection, &context, &new_reaction).await
+        Reaction::create(&mut connection, &context, new_reaction).await
     })?;
 
     // Generate the response with a reference to `thread` so we can move the
@@ -76,22 +71,10 @@ async fn show(request: Request, _: Next) -> via::Result {
     // Extract contextual arguments from the request.
     let context = ReactionMemberContext::try_from(&request)?;
 
-    // Find the reaction with id = `:reaction-id`.
+    // Find the reaction with `id = :reaction-id` with context.
     let reaction = hurry!(async {
-        // Acquire a database connection.
         let mut connection = request.app().database().get().await?;
-
-        // The reaction must be owned by the thread or reply id in the path
-        // prefix.
-        let by_thread_and_id = reactions::thread_id
-            .eq(context.reacted_to_id())
-            .and(reactions::id.eq(context.reaction_id()));
-
-        // Execute the query.
-        ReactionWithUser::query()
-            .filter(by_thread_and_id)
-            .first_async(&mut connection)
-            .await
+        ReactionWithUser::by_thread_and_id(&mut connection, &context).await
     })?;
 
     Response::build().data(&reaction)

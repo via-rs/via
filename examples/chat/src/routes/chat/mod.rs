@@ -27,9 +27,12 @@ enum ClientEvent {
 
 #[derive(Deserialize)]
 struct NewReactionToThreadOrReply {
+    #[serde(rename = "channelId")]
     channel_id: Id,
+
     #[serde(flatten)]
     params: ThreadParams,
+
     #[serde(flatten)]
     reaction: NewReaction,
 }
@@ -39,6 +42,7 @@ struct NewReactionToThreadOrReply {
 struct NewThreadOrReply {
     channel_id: Id,
     thread_id: Option<Id>,
+
     #[serde(flatten)]
     thread: PutThread,
 }

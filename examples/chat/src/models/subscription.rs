@@ -152,7 +152,7 @@ impl ChannelSubscription {
 }
 
 impl AuthorizedSubscription {
-    pub async fn find(
+    pub async fn fetch(
         connection: &mut Connection<'_>,
         keys: &SubscriptionKeys,
     ) -> via::Result<Self> {
@@ -166,7 +166,7 @@ impl AuthorizedSubscription {
         // Execute the query.
         let parcipitating = ChannelSubscription::query()
             .filter(by_parciptiation)
-            .first_async(connection)
+            .fetch_first_async(connection)
             .await?;
 
         // Rebuild the subscription keys with the values provided by diesel.

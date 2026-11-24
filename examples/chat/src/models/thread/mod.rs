@@ -1,7 +1,6 @@
 mod params;
 
-pub(super) use params::ThreadParams;
-pub use params::{ThreadCollectionContext, ThreadMemberContext};
+pub use params::{ThreadCollectionContext, ThreadMemberContext, ThreadParams};
 
 use diesel::associations::HasTable;
 use diesel::helper_types::{AsSelect, InnerJoin, Select};
@@ -249,8 +248,8 @@ impl ThreadWithUser {
             .select(Self::as_select())
     }
 
-    pub fn channel_id(&self) -> Id {
-        self.thread.channel_id
+    pub fn channel_id(&self) -> &Id {
+        &self.thread.channel_id
     }
 
     pub(crate) fn into_delta(self) -> ThreadDelta {

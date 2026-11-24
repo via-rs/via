@@ -1,4 +1,6 @@
+use delegate::delegate;
 use diesel::{BoolExpressionMethods, ExpressionMethods, NullableExpressionMethods};
+use serde::Deserialize;
 use via::request::PathParams;
 use via::{Error, ResultExt};
 
@@ -20,8 +22,9 @@ pub struct ThreadMemberContext {
     keys: SubscriptionKeys,
 }
 
-#[derive(Debug)]
-pub(crate) struct ThreadParams {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadParams {
     thread_id: Id,
     reply_id: Option<Id>,
 }
@@ -79,20 +82,20 @@ impl<'a> TryFrom<&'a Request> for ThreadCollectionContext {
 }
 
 impl ThreadMemberContext {
-    pub fn channel_id(&self) -> &Id {
-        &self.keys.channel_id
+    pub fn new(keys: SubscriptionKeys, params: ThreadParams) -> Self {
+        Self { keys, params }
     }
 
-    pub fn thread_id(&self) -> &Id {
-        &self.params.thread_id
-    }
+    delegate! {
+        to self.keys() {
+            pub fn channel_id(&self) -> &Id;
+            pub fn user_id(&self) -> &Id;
+        }
 
-    pub fn reply_id(&self) -> Option<&Id> {
-        self.params.reply_id()
-    }
-
-    pub fn user_id(&self) -> &Id {
-        &self.keys.user_id
+        to self.params() {
+            pub fn thread_id(&self) -> &Id;
+            pub fn reply_id(&self) -> Option<&Id>;
+        }
     }
 
     pub fn to_delete_where(&self) -> BoxedFilterExpr<'_, threads::table> {
@@ -115,6 +118,15 @@ impl ThreadMemberContext {
             )
         }
     }
+
+    pub(crate) fn params(&self) -> &ThreadParams {
+        &self.params
+    }
+
+    #[inline]
+    fn keys(&self) -> &SubscriptionKeys {
+        &self.keys
+    }
 }
 
 impl<'a> TryFrom<&'a Request> for ThreadMemberContext {
@@ -135,11 +147,11 @@ impl<'a> TryFrom<&'a Request> for ThreadMemberContext {
 }
 
 impl ThreadParams {
-    pub(crate) fn thread_id(&self) -> &Id {
+    pub fn thread_id(&self) -> &Id {
         &self.thread_id
     }
 
-    pub(crate) fn reply_id(&self) -> Option<&Id> {
+    pub fn reply_id(&self) -> Option<&Id> {
         self.reply_id.as_ref()
     }
 }

@@ -11,9 +11,9 @@ use via::{Shared, deny};
 use via_pubsub::{Dispatch, OurEvent, PeerEvent, Publish, Receive, Scope};
 
 use crate::app::{Connection, Postgres, Unicorn};
-use crate::models::reaction::{NewReactionInChannel, Reaction};
+use crate::models::reaction::{NewReaction, Reaction, ReactionCollectionContext};
 use crate::models::subscription::SubscriptionKeys;
-use crate::models::thread::{PutThread, Thread, ThreadCollectionContext};
+use crate::models::thread::{PutThread, Thread, ThreadCollectionContext, ThreadParams};
 use crate::models::user::User;
 use crate::models::{ChannelSubscription, UserPreview, subscription};
 use crate::util::{Id, Session, hurry};
@@ -22,7 +22,16 @@ use crate::util::{Id, Session, hurry};
 #[serde(content = "data", rename_all = "lowercase", tag = "type")]
 enum ClientEvent {
     Reply(NewThreadOrReply),
-    Reaction(NewReactionInChannel),
+    React(NewReactionToThreadOrReply),
+}
+
+#[derive(Deserialize)]
+struct NewReactionToThreadOrReply {
+    channel_id: Id,
+    #[serde(flatten)]
+    params: ThreadParams,
+    #[serde(flatten)]
+    reaction: NewReaction,
 }
 
 #[derive(Deserialize)]
@@ -221,20 +230,23 @@ impl ClientEvent {
 
                 Ok(OurEvent::new_reply(thread))
             }
-            ClientEvent::Reaction(mut init) => {
-                // Set the user_id of the reaction to the current user id.
-                init.user_id = Some(*actor);
-
-                // Copy channel_id so we can use it again as the event interest.
-                let interest = init.channel_id;
+            ClientEvent::React(react) => {
+                let context = ReactionCollectionContext::new(
+                    SubscriptionKeys::new(react.channel_id, *actor),
+                    react.params,
+                );
 
                 // Acquire a database connection and perform the insert.
                 let reaction = hurry!(async {
                     let mut connection = unicorn.database().get().await.or_break()?;
-                    Reaction::create(&mut connection, init).await.or_continue()
+                    let reaction = &react.reaction;
+
+                    Reaction::create(&mut connection, &context, reaction)
+                        .await
+                        .or_continue()
                 })?;
 
-                Ok(OurEvent::relay(interest, reaction.into()))
+                Ok(OurEvent::new_reaction(context.channel_id(), reaction))
             }
         }
     }

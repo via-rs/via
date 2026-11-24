@@ -2,7 +2,7 @@ mod emoji;
 mod params;
 
 pub use emoji::Emoji;
-pub use params::{ReactionCollectionContext, ReactionMemberContext};
+pub use params::{ReactionCollectionContext, ReactionMemberContext, WithReactedToId};
 
 use diesel::dsl::{AsSelect, Select};
 use diesel::helper_types::InnerJoin;
@@ -15,7 +15,6 @@ use via_diesel::AsyncQueryDsl;
 use super::{ThreadWithUser, User, UserPreview};
 use crate::app::Connection;
 use crate::models::ThreadDetails;
-use crate::routes::chat::Notification;
 use crate::schema::{reactions, users};
 use crate::util::Id;
 
@@ -59,7 +58,6 @@ pub struct ChangeSet {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewReaction {
-    thread_id: Id,
     emoji: Emoji,
 }
 
@@ -116,12 +114,13 @@ via_diesel::sorts! {
 impl Reaction {
     pub async fn create(
         connection: &mut Connection<'_>,
-        init: NewReactionInChannel,
+        context: &ReactionCollectionContext,
+        args: &NewReaction,
     ) -> via::Result<ReactionWithUser> {
         diesel::sql_query("SELECT * FROM react_to($1, $2, $3)")
-            .bind::<sql_types::Uuid, _>(init.thread_id)
-            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(init.user_id)
-            .bind::<sql_types::VarChar, _>(init.emoji)
+            .bind::<sql_types::Uuid, _>(context.reacted_to_id())
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(context.user_id())
+            .bind::<sql_types::VarChar, _>(&args.emoji)
             .get_result_async(connection)
             .await
     }
@@ -163,11 +162,5 @@ impl ReactionWithUser {
         reactions::table
             .inner_join(users::table)
             .select(Self::as_select())
-    }
-}
-
-impl From<ReactionWithUser> for Notification {
-    fn from(reaction: ReactionWithUser) -> Self {
-        Self::Reaction(reaction)
     }
 }

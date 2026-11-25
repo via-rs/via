@@ -205,4 +205,12 @@ impl SubscriptionKeys {
             user_id,
         }
     }
+
+    pub fn channel_id(&self) -> &Id {
+        &self.channel_id
+    }
+
+    pub fn user_id(&self) -> &Id {
+        &self.user_id
+    }
 }

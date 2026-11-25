@@ -1,47 +1,27 @@
-use diesel::deserialize::{self, FromSql, FromSqlRow};
+mod emoji;
+mod params;
+
+pub use emoji::Emoji;
+pub use params::{ReactionCollectionContext, ReactionMemberContext, WithReactedToId};
+
+use diesel::dsl::{AsSelect, Select};
 use diesel::helper_types::InnerJoin;
-use diesel::pg::{Pg, PgValue};
 use diesel::prelude::*;
-use diesel::serialize::{self, Output, ToSql};
-use diesel::{AsExpression, sql_types};
-use serde::de::{Deserializer, Error as DeError};
-use serde::{Deserialize, Serialize, Serializer};
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
-use std::ops::Deref;
-use std::str::FromStr;
+use diesel::{pg::Pg, sql_types};
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use via_diesel::AsyncQueryDsl;
 
 use super::{ThreadWithUser, User, UserPreview};
 use crate::app::Connection;
 use crate::models::ThreadDetails;
-use crate::models::user::UserPreviewSqlType;
-use crate::routes::chat::Notification;
-use crate::schema::reactions;
+use crate::schema::{reactions, users};
 use crate::util::Id;
 
 const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
 const USERNAMES_PER_REACTION: i32 = 6;
 
-type ReactionSqlType = (
-    sql_types::Uuid,        // id
-    sql_types::VarChar,     // email
-    sql_types::Uuid,        // thread_id
-    sql_types::Uuid,        // user_id
-    sql_types::Timestamptz, // created_at
-    sql_types::Timestamptz, // updated_at
-);
-
-#[derive(Debug)]
-pub struct InvalidEmojiError;
-
-#[derive(AsExpression, Clone, Debug, FromSqlRow)]
-#[diesel(sql_type = sql_types::VarChar)]
-pub struct Emoji {
-    buf: [u8; 16],
-    len: usize,
-}
+pub type JoinUsers = InnerJoin<reactions::table, users::table>;
 
 #[derive(
     Associations,
@@ -78,7 +58,6 @@ pub struct ChangeSet {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewReaction {
-    thread_id: Id,
     emoji: Emoji,
 }
 
@@ -132,91 +111,16 @@ via_diesel::sorts! {
     pub fn recent(#[desc] created_at, id) on reactions;
 }
 
-impl Error for InvalidEmojiError {}
-
-impl Display for InvalidEmojiError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "emoji exceeds max length.")
-    }
-}
-
-impl FromStr for Emoji {
-    type Err = InvalidEmojiError;
-
-    fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let mut emoji = Self {
-            buf: [0; 16],
-            len: input.len(),
-        };
-
-        if emoji.len > 16 {
-            Err(InvalidEmojiError)
-        } else {
-            emoji.buf[..emoji.len].copy_from_slice(input.as_bytes());
-            Ok(emoji)
-        }
-    }
-}
-
-impl Deref for Emoji {
-    type Target = str;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        let slice = &self.buf[..self.len];
-        // Safety: The bytes in self are guarenteed to be UTF-8.
-        unsafe { str::from_utf8_unchecked(slice) }
-    }
-}
-
-impl<'de> Deserialize<'de> for Emoji {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value: &str = Deserialize::deserialize(deserializer)?;
-        value.parse().map_err(D::Error::custom)
-    }
-}
-
-impl FromSql<sql_types::VarChar, Pg> for Emoji {
-    fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
-        Ok(str::from_utf8(value.as_bytes())?.parse()?)
-    }
-}
-
-impl Serialize for Emoji {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self)
-    }
-}
-
-impl ToSql<sql_types::VarChar, Pg> for Emoji {
-    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
-        <str as ToSql<sql_types::VarChar, Pg>>::to_sql(self, out)
-    }
-}
-
-impl NewReaction {
-    pub fn in_channel(self, channel_id: Id, user_id: Id) -> NewReactionInChannel {
-        NewReactionInChannel {
-            channel_id,
-            thread_id: self.thread_id,
-            user_id: Some(user_id),
-            emoji: self.emoji,
-        }
-    }
-}
-
 impl Reaction {
     pub async fn create(
         connection: &mut Connection<'_>,
-        init: NewReactionInChannel,
+        context: &ReactionCollectionContext,
+        args: &NewReaction,
     ) -> via::Result<ReactionWithUser> {
         diesel::sql_query("SELECT * FROM react_to($1, $2, $3)")
-            .bind::<sql_types::Uuid, _>(init.thread_id)
-            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(init.user_id)
-            .bind::<sql_types::VarChar, _>(init.emoji)
+            .bind::<sql_types::Uuid, _>(context.reacted_to_id())
+            .bind::<sql_types::Nullable<sql_types::Uuid>, _>(context.user_id())
+            .bind::<sql_types::VarChar, _>(&args.emoji)
             .get_result_async(connection)
             .await
     }
@@ -253,8 +157,10 @@ impl Reaction {
     }
 }
 
-impl From<ReactionWithUser> for Notification {
-    fn from(reaction: ReactionWithUser) -> Self {
-        Self::Reaction(reaction)
+impl ReactionWithUser {
+    pub fn query() -> Select<JoinUsers, AsSelect<Self, Pg>> {
+        reactions::table
+            .inner_join(users::table)
+            .select(Self::as_select())
     }
 }

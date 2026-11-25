@@ -1,55 +1,24 @@
 mod params;
 
-pub use params::{ThreadCollectionContext, ThreadMemberContext};
+pub use params::{ThreadCollectionContext, ThreadMemberContext, ThreadParams};
 
 use diesel::associations::HasTable;
-use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::helper_types::{AsSelect, InnerJoin, Select};
 use diesel::pg::Pg;
 use diesel::{prelude::*, sql_types};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use via::ResultExt;
-use via::request::PathParams;
-use via_diesel::paginate::{Keyset, PER_PAGE};
-use via_diesel::{AsyncQueryDsl, Paginate};
+use via_diesel::AsyncQueryDsl;
+use via_diesel::paginate::PER_PAGE;
 
-use super::subscription::{ChannelSubscription, Subscription};
-use super::user::{User, UserPreview, UserPreviewSqlType};
+use super::user::{User, UserPreview};
 use super::{Channel, Reaction, ReactionPreview};
 use crate::app::Connection;
 use crate::schema::{threads, users};
 use crate::util::Id;
 
 pub type JoinUsers = InnerJoin<threads::table, users::table>;
-pub type SelectThreadWithUser = Select<JoinUsers, AsSelect<ThreadWithUser, Pg>>;
-
-type ThreadSqlType = (
-    sql_types::Uuid,                      // id
-    sql_types::Text,                      // body
-    sql_types::Uuid,                      // channel_id
-    sql_types::Nullable<sql_types::Uuid>, // thread_id
-    sql_types::Uuid,                      // user_id
-    sql_types::Timestamptz,               // created_at
-    sql_types::Timestamptz,               // updated_at
-    sql_types::BigInt,                    // total_reactions
-    sql_types::BigInt,                    // total_replies
-);
-
-type ReplyToResult = (
-    sql_types::Uuid,                      // id
-    sql_types::Text,                      // body
-    sql_types::Uuid,                      // channel_id
-    sql_types::Nullable<sql_types::Uuid>, // thread_id
-    sql_types::Uuid,                      // user_id
-    sql_types::Timestamptz,               // created_at
-    sql_types::Timestamptz,               // updated_at
-    sql_types::BigInt,                    // total_reactions
-    sql_types::BigInt,                    // total_replies
-    sql_types::Uuid,                      // id
-    sql_types::Uuid,                      // id
-    sql_types::Text,                      // body
-);
 
 #[derive(
     Associations,
@@ -279,8 +248,8 @@ impl ThreadWithUser {
             .select(Self::as_select())
     }
 
-    pub fn channel_id(&self) -> Id {
-        self.thread.channel_id
+    pub fn channel_id(&self) -> &Id {
+        &self.thread.channel_id
     }
 
     pub(crate) fn into_delta(self) -> ThreadDelta {

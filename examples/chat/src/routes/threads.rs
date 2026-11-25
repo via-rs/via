@@ -106,11 +106,11 @@ async fn show(request: Request, _: Next) -> via::Result {
     let thread = if let Some(reply_id) = context.reply_id() {
         // Find an individual reply to a thread.
         let mut connection = app.database().get().await?;
-        ThreadDetails::find_reply(&mut connection, context.thread_id(), reply_id).await?
+        ThreadDetails::find_reply(&mut connection, &context, reply_id).await?
     } else {
         // Find an individual reply to a thread.
         let mut connection = app.database().get().await?;
-        ThreadDetails::find_thread(&mut connection, context.thread_id()).await?
+        ThreadDetails::find_thread(&mut connection, &context).await?
     };
 
     Response::build().data(&thread)

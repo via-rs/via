@@ -88,10 +88,10 @@ pub async fn authorization(mut request: Request, next: Next) -> via::Result {
         request.param("channel-id").parse()?,
     );
 
-    // Find the current user's subscription to the channel.
+    // Fetch the current user's subscription to the channel.
     let subscription = hurry!(async {
         let mut connection = request.app().database().get().await?;
-        AuthorizedSubscription::find(&mut connection, &keys).await
+        AuthorizedSubscription::fetch(&mut connection, &keys).await
     })?;
 
     // Insert the AuthorizedSubscription into the request extensions.

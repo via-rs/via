@@ -155,7 +155,7 @@ impl Thread {
 impl ThreadDetails {
     pub async fn find_thread(
         connection: &mut Connection<'_>,
-        id: &Id,
+        context: &ThreadMemberContext,
     ) -> via::Result<ThreadDetails> {
         let target = diesel::alias!(threads as target);
 
@@ -179,9 +179,22 @@ impl ThreadDetails {
         // Load the thread by id along with the first page of replies.
         let mut replies = {
             let threads = ThreadWithUser::query()
-                .inner_join(target.on(target_id.eq(id).and(belongs_to_target_root)))
-                .filter(threads::id.eq(id).and(threads::thread_id.is_null()))
-                .or_filter(threads::thread_id.eq(id))
+                .inner_join(
+                    target.on(target_id
+                        .eq(context.thread_id())
+                        .and(belongs_to_target_root)),
+                )
+                .filter(
+                    threads::id
+                        .eq(context.thread_id())
+                        .and(threads::thread_id.is_null())
+                        .and(threads::channel_id.eq(context.channel_id())),
+                )
+                .or_filter(
+                    threads::thread_id
+                        .eq(context.thread_id())
+                        .and(threads::channel_id.eq(context.channel_id())),
+                )
                 .order(recent())
                 .limit(PER_PAGE + 1)
                 .load_async(connection)
@@ -207,14 +220,17 @@ impl ThreadDetails {
 
     pub async fn find_reply(
         connection: &mut Connection<'_>,
-        parent_id: &Id,
-        reply_id: &Id,
+        context: &ThreadMemberContext,
+        id: &Id,
     ) -> via::Result<ThreadDetails> {
-        use crate::schema::threads::{id, thread_id};
+        let by_id_parent_and_channel = threads::id
+            .eq(id)
+            .and(threads::thread_id.eq(context.thread_id()))
+            .and(threads::channel_id.eq(context.channel_id()));
 
         // Fetch the reply with the id = reply_id AND thread_id = parent_id.
         let reply = ThreadWithUser::query()
-            .filter(id.eq(reply_id).and(thread_id.eq(parent_id)))
+            .filter(by_id_parent_and_channel)
             .first_async(connection)
             .await?;
 

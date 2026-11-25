@@ -25,9 +25,9 @@ async fn index(request: Request, _: Next) -> via::Result {
         .query::<Keyset<Iso8601, Id, PER_PAGE>>()?
         .of(threads::created_at, threads::id);
 
-    // Preemptively free up stack space. This route requires multiple round
-    // trips to the database.
-    let (_, _, app) = request.into_parts();
+    // Preemptively free up stack space.
+    // This route requires multiple round trips to the database.
+    let app = request.into_app();
 
     // Load a page of threads.
     let mut feed = {
@@ -100,7 +100,7 @@ async fn show(request: Request, _: Next) -> via::Result {
     // and this route requires making more than one database query over the
     // same connection. Preemptively free up stack space by taking app out
     // of request.
-    let (_, _, app) = request.into_parts();
+    let app = request.into_app();
 
     // Prefer branching before checking out a database connection.
     let thread = if let Some(reply_id) = context.reply_id() {

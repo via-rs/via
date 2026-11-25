@@ -398,6 +398,11 @@ impl<App> Request<App> {
     pub fn into_parts(self) -> (Envelope, RequestBody, Shared<App>) {
         (self.envelope, self.body, self.app)
     }
+
+    /// Consumes the request and returns the shared handle to `app`.
+    pub fn into_app(self) -> Shared<App> {
+        self.app
+    }
 }
 
 impl<App> Debug for Request<App> {

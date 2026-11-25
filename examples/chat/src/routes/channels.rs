@@ -106,10 +106,14 @@ async fn show(request: Request, _: Next) -> via::Result {
     // Clone the subscription we loaded during authorization.
     let subscription = request.subscription().cloned().or_not_found()?;
 
+    // Preemptively free up stack space.
+    // This route requires multiple round trips to the database.
+    let app = request.into_app();
+
     // The first page of recent threads in the channel in `subscription`.
     let mut threads = {
         // Acquire a database connection.
-        let mut connection = request.app().database().get().await?;
+        let mut connection = app.database().get().await?;
 
         // Query the database for the first page of recent threads.
         let threads =

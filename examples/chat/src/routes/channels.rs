@@ -4,74 +4,40 @@ use diesel::{BoolExpressionMethods, ExpressionMethods, Identifiable, QueryDsl};
 use http::StatusCode;
 use std::ops::ControlFlow;
 use tokio::task::coop;
-use via::{Payload, Response, ResultExt, deny};
+use via::{Payload, Response, ResultExt};
 use via_diesel::paginate::PER_PAGE;
 use via_diesel::{AsyncQueryDsl, LimitAndPage, Paginate};
 use via_pubsub::{Dispatch, OurEvent};
 
-use crate::models::subscription::{self, AuthClaims, ChannelSubscription, SubscriptionKeys};
+use crate::models::subscription::{
+    self, AuthorizedSubscription, ChannelSubscription, SubscriptionKeys,
+};
 use crate::models::thread::{self, ThreadDetails, ThreadWithUser};
-use crate::models::{Channel, Reaction};
+use crate::models::{Channel, ChannelWithThreads, Reaction};
 use crate::schema::{channels, subscriptions, threads};
 use crate::util::{Id, Session, hurry};
 use crate::{Next, Request, Unicorn};
 
 #[derive(Clone)]
-struct Protected(ChannelSubscription);
+struct Protected(AuthorizedSubscription);
+
+struct AuthorizationArgs {}
 
 pub trait Subscriber {
-    fn channel(&self) -> Option<&ChannelSubscription>;
-
-    fn channel_id(&self) -> Option<&Id> {
-        self.channel().map(ChannelSubscription::channel_id)
-    }
-
-    fn channel_keys(&self) -> via::Result<SubscriptionKeys> {
-        self.channel().map(|channel| channel.keys()).or_forbidden()
-    }
+    /// The authorized subscription to the channel with `id = :channel-id`.
+    ///
+    /// When `Some`, the current user has the minimum claims required to
+    /// participate.
+    fn subscription(&self) -> Option<&AuthorizedSubscription>;
 }
 
-pub async fn authorization(mut request: Request, next: Next) -> via::Result {
-    // Get the id of the user from the session.
-    let me = request.me()?;
-
-    // Parse an Id from the :channel-id path parameter.
-    let id = request.param("channel-id").parse::<Id>()?;
-
-    // Find the current user's subscription to the channel.
-    let channel = {
-        // Checkout a database connection.
-        let mut connection = request.app().database().get().await?;
-
-        // The user's subscription to the channel must exist and have the
-        // minimum auth claims in order to proceed.
-        let by_channel_and_user = subscription::by_channel(id)
-            .and(subscription::by_user(me))
-            .and(subscription::can_participate());
-
-        // Execute the query.
-        ChannelSubscription::query()
-            .filter(by_channel_and_user)
-            .first_async(&mut connection)
-            .await?
-    };
-
-    // Insert the subscription to the channel into the request extensions.
-    request.extensions_mut().insert(Protected(channel));
-
-    // Delegate to the next middleware.
-    next.call(request).await
-}
-
-/// List channels.
-///
-/// Responds to `GET /api/channels`.
+/// List the channels to which the current user is subscribed.
 async fn index(request: Request, _: Next) -> via::Result {
     // Get the id of the active user from the session.
     let me = request.me()?;
 
     // Source pagination arguments from the URI query.
-    let by_page_number = request.query::<LimitAndPage>()?;
+    let by_page = request.query::<LimitAndPage<50>>()?;
 
     // Load the active user's subscriptions.
     let channels = {
@@ -80,155 +46,151 @@ async fn index(request: Request, _: Next) -> via::Result {
 
         ChannelSubscription::query()
             .filter(subscription::by_user(me))
-            .page(by_page_number)
+            .page(by_page)
             .load_async(&mut connection)
             .await?
     };
 
-    Response::build().data(channels)
+    Response::build().data(&channels)
 }
 
 /// Create a new channel.
-///
-/// Responds to `POST /api/channels`.
 async fn create(request: Request, _: Next) -> via::Result {
-    // Get the id of the active user from the session.
+    // Get the id of the current user from the request session.
     let me = request.me()?;
 
     // Deserialize a NewChannel from the request body.
     let (body, app) = request.into_future();
     let new_channel = body.timeout_after_secs(2).await?.data()?;
 
-    // Insert the channel and associate it to the active user.
-    let channel = {
-        // Acquire a database connection.
+    // Insert the channel and associate it to the current user.
+    let channel = hurry!(async {
         let mut connection = app.database().get().await?;
-
-        // Insert the channel.
-        Channel::create(&mut connection, me, new_channel).await?
-    };
-
-    // Create a "register" event with the current user id and channel id.
-    let event = OurEvent::register(Some(me), *channel.id());
+        Channel::create(&mut connection, me, new_channel).await
+    })?;
 
     // Dispatch the "register" event so the current user receives update
     // notifications for changes that occur in `channel`.
+    //
+    // This notification must be dispatched before the response is generated.
+    let event = OurEvent::register(Some(me), *channel.id());
     app.pubsub().dispatch(event);
 
-    Response::build().status(StatusCode::CREATED).data(channel)
+    Response::build().status(StatusCode::CREATED).data(&channel)
+}
+
+pub async fn authorization(mut request: Request, next: Next) -> via::Result {
+    // Group authorization dependencies in `SubscriptionKeys`.
+    let keys = SubscriptionKeys::new(
+        // Load the current user id from the request session.
+        request.me()?,
+        // Parse an Id from the :channel-id request URI path parameter.
+        request.param("channel-id").parse()?,
+    );
+
+    // Find the current user's subscription to the channel.
+    let subscription = hurry!(async {
+        let mut connection = request.app().database().get().await?;
+        AuthorizedSubscription::find(&mut connection, &keys).await
+    })?;
+
+    // Insert the AuthorizedSubscription into the request extensions.
+    request.extensions_mut().insert(Protected(subscription));
+
+    // Delegate to the next middleware.
+    next.call(request).await
 }
 
 /// Find a channel by id.
-///
-/// Responds to `GET /api/channels/:channel-id`.
-///
-/// The active user must be a member of the channel.
 async fn show(request: Request, _: Next) -> via::Result {
-    // Clone the channel subscription we loaded during authorization.
-    let channel = request.channel().cloned().or_not_found()?;
+    // Clone the subscription we loaded during authorization.
+    let subscription = request.subscription().cloned().or_not_found()?;
 
-    // Request is no longer required once `channel` is extracted and this route
-    // requires making more than one database query over the same connection.
-    // Preemptively free up stack space by taking app out of request.
-    let (_, _, app) = request.into_parts();
-
-    // Load the associations for the channel in `subscription`.
-    let threads = {
+    // The first page of recent threads in the channel in `subscription`.
+    let mut threads = {
         // Acquire a database connection.
-        let mut connection = app.database().get().await?;
-        let by_channel_and_threadness = threads::channel_id
-            .eq(channel.channel_id())
-            .and(threads::thread_id.is_null());
+        let mut connection = request.app().database().get().await?;
 
-        // Load the first page of the most recent threads in the channel.
-        let mut recent = ThreadWithUser::query()
-            .filter(by_channel_and_threadness)
-            .order(thread::recent())
-            .limit(PER_PAGE)
-            .load_async(&mut connection)
-            .await?;
-
-        // Reverse the first page of threads to match their render sequence.
-        recent.reverse();
+        // Query the database for the first page of recent threads.
+        let threads =
+            ThreadWithUser::recent_in_channel(&mut connection, subscription.channel_id()).await?;
 
         // Side load the top reactions to the threads in `threads`.
-        Reaction::to_threads(&mut connection, recent).await?
+        Reaction::to_threads(&mut connection, threads).await?
     };
 
-    // Render `threads` within the channel subscription.
-    Response::build().data(channel.with_threads(threads))
+    // Reverse the order of threads to match their render sequence.
+    threads.reverse();
+
+    // Group `threads` within `subscription`.
+    let channel = ChannelWithThreads::new(subscription, threads);
+
+    Response::build().data(&channel)
 }
 
-/// Update an existing channel.
-///
-/// The active user must be a channel admin.
-///
-/// Responds to `PATCH /api/channels/:channel-id`.
+/// Update a channel by id. Admin permissions are required.
 async fn update(request: Request, _: Next) -> via::Result {
-    // Clone the subscription we loaded during authorization.
-    let subscription = request.channel().cloned().or_not_found()?;
-
-    // Confirm that the user is a channel admin.
-    if !subscription.claims().contains(AuthClaims::ADMINISTRATE) {
-        deny!(403, "updating a channel requires a channel admin");
-    }
+    // Extract SubscriptionKeys from the request subscription if the user is an
+    // admin. Otherwise, 403 forbidden.
+    let keys = request
+        .subscription()
+        .and_then(|subscription| subscription.is_admin().then(|| subscription.to_keys()))
+        .or_forbidden()?;
 
     // Aggregate the request body and deserialize a channel change set.
     let (body, app) = request.into_future();
     let change_set = body.timeout_after_secs(2).await?.data()?;
 
     // Apply the change set to the channel.
-    let channel = {
+    let channel = hurry!(async {
         // Acquire a database connection.
         let mut connection = app.database().get().await?;
 
-        // Get the channel id from subscription.
-        let channel_id = subscription.channel_id();
-
         // Perform the update.
-        Channel::update(&mut connection, *channel_id, change_set).await?
-    };
+        Channel::update(&mut connection, keys.channel_id(), change_set).await
+    })?;
 
-    Response::build().data(channel)
+    Response::build().data(&channel)
 }
 
-/// Delete a channel.
-///
-/// The active user must be a channel admin.
-///
-/// Responds to `DELETE /api/channels/:channel-id`.
+/// Delete a channel by id. Admin permissions are required.
 async fn destroy(request: Request, _: Next) -> via::Result {
-    // Clone the subscription we loaded during authorization.
-    let subscription = request.channel().cloned().or_not_found()?;
+    // Extract SubscriptionKeys from the request subscription if the user is an
+    // admin. Otherwise, 403 forbidden.
+    let keys = request
+        .subscription()
+        .and_then(|subscription| subscription.is_admin().then(|| subscription.to_keys()))
+        .or_forbidden()?;
 
     // Confirm that the user is a channel admin.
-    if !subscription.claims().contains(AuthClaims::ADMINISTRATE) {
-        via::deny!(403, "deleting a channel requires a channel admin");
-    }
-
     if let 1.. = hurry!(async {
         // Checkout a database connection.
         let mut connection = request.app().database().get().await?;
 
         // Peform the delete.
         diesel::delete(channels::table)
-            .filter(channels::id.eq(subscription.channel_id()))
+            .filter(channels::id.eq(keys.channel_id()))
             .execute_async(&mut connection)
             .await
     })? {
-        let deregister = OurEvent::deregister(None, *subscription.channel_id());
-
         // Unsubscribe all users from the channel.
-        request.app().pubsub().dispatch(deregister);
+        request
+            .app()
+            .pubsub()
+            .dispatch(OurEvent::deregister(None, *keys.channel_id()));
 
         Response::build().status(StatusCode::NO_CONTENT).finish()
     } else {
-        via::deny!(404, "not found")
+        via::deny!(404, "not found");
     }
 }
 
 impl Subscriber for Request {
-    fn channel(&self) -> Option<&ChannelSubscription> {
-        self.extensions().get().map(|Protected(channel)| channel)
+    fn subscription(&self) -> Option<&AuthorizedSubscription> {
+        if let Some(Protected(subscription)) = self.extensions().get() {
+            Some(subscription)
+        } else {
+            None
+        }
     }
 }

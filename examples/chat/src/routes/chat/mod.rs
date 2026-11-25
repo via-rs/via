@@ -220,7 +220,7 @@ impl ClientEvent {
         match self {
             ClientEvent::Reply(params) => {
                 let context = ThreadCollectionContext::new(
-                    SubscriptionKeys::new(params.channel_id, *actor),
+                    SubscriptionKeys::new(*actor, params.channel_id),
                     params.thread_id,
                 );
 
@@ -236,16 +236,15 @@ impl ClientEvent {
             }
             ClientEvent::React(react) => {
                 let context = ReactionCollectionContext::new(
-                    SubscriptionKeys::new(react.channel_id, *actor),
+                    SubscriptionKeys::new(*actor, react.channel_id),
                     react.params,
                 );
 
                 // Acquire a database connection and perform the insert.
                 let reaction = hurry!(async {
                     let mut connection = unicorn.database().get().await.or_break()?;
-                    let reaction = &react.reaction;
 
-                    Reaction::create(&mut connection, &context, reaction)
+                    Reaction::create(&mut connection, &context, react.reaction)
                         .await
                         .or_continue()
                 })?;

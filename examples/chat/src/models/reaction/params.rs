@@ -73,8 +73,8 @@ impl<'a> TryFrom<&'a Request> for ReactionMemberContext {
         Ok(Self {
             // Load the channel subscription that we resolved during authorization.
             keys: request
-                .channel()
-                .map(|channel| channel.keys())
+                .subscription()
+                .map(|channel| channel.to_keys())
                 .or_forbidden()?,
 
             // Extract the thread params from the request URI path.

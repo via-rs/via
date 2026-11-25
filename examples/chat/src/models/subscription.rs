@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use delegate::delegate;
 use diesel::deserialize::{self, FromSql, FromSqlRow};
 use diesel::helper_types::{AsSelect, InnerJoin, Select};
 use diesel::pg::{Pg, PgValue};
@@ -11,13 +12,12 @@ use via::error::Propagate;
 use via::ws;
 use via_diesel::AsyncQueryDsl;
 
-use super::{Channel, ChannelWithThreads, ThreadDetails, UserPreview};
+use super::Channel;
 use crate::app::Connection;
-use crate::schema::{channels, subscriptions, users};
+use crate::schema::{channels, subscriptions};
 use crate::util::Id;
 
 type JoinChannels = InnerJoin<subscriptions::table, channels::table>;
-type JoinChannelsAndUsers = InnerJoin<JoinChannels, users::table>;
 
 #[derive(Clone, Debug, Identifiable, Queryable, Selectable, Serialize)]
 #[diesel(check_for_backend(Pg))]
@@ -28,9 +28,6 @@ pub struct Subscription {
 
     #[serde(skip)]
     user_id: Id,
-
-    #[serde(skip)]
-    channel_id: Id,
 
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
@@ -56,6 +53,14 @@ pub struct ChangeSet {
     claims: AuthClaims,
 }
 
+#[derive(Clone, Serialize)]
+pub struct AuthorizedSubscription {
+    channel: Channel,
+    claims: AuthClaims,
+    #[serde(skip)]
+    keys: SubscriptionKeys,
+}
+
 #[derive(Clone, Queryable, Selectable, Serialize)]
 #[diesel(table_name = subscriptions)]
 pub struct ChannelSubscription {
@@ -67,9 +72,10 @@ pub struct ChannelSubscription {
     subscription: Subscription,
 }
 
+#[derive(Clone)]
 pub struct SubscriptionKeys {
-    pub channel_id: Id,
-    pub user_id: Id,
+    channel_id: Id,
+    user_id: Id,
 }
 
 bitflags! {
@@ -86,7 +92,7 @@ bitflags! {
 via_diesel::filters! {
     pub fn by_id(id == Id) on subscriptions;
     pub fn by_user(user_id == Id) on subscriptions;
-    pub fn by_channel(channel_id == Id) on subscriptions;
+    pub fn by_channel(channel_id == &Id) on subscriptions;
 }
 
 via_diesel::sorts! {
@@ -112,16 +118,6 @@ impl FromSql<sql_types::Integer, Pg> for AuthClaims {
 impl ToSql<sql_types::Integer, Pg> for AuthClaims {
     fn to_sql<'a>(&'a self, output: &mut Output<'a, '_, Pg>) -> serialize::Result {
         <_ as ToSql<sql_types::Integer, _>>::to_sql(&self.bits(), &mut output.reborrow())
-    }
-}
-
-impl Subscription {
-    pub fn users() -> InnerJoin<subscriptions::table, users::table> {
-        subscriptions::table.inner_join(users::table)
-    }
-
-    pub fn query() -> Select<subscriptions::table, AsSelect<Self, Pg>> {
-        subscriptions::table.select(Self::as_select())
     }
 }
 
@@ -153,53 +149,64 @@ impl ChannelSubscription {
             .inner_join(channels::table)
             .select(Self::as_select())
     }
-
-    pub fn with_threads(self, threads: Vec<ThreadDetails>) -> ChannelWithThreads {
-        ChannelWithThreads::new(self, threads)
-    }
-
-    pub fn id(&self) -> Id {
-        self.subscription.id
-    }
-
-    pub fn channel_id(&self) -> &Id {
-        &self.subscription.channel_id
-    }
-
-    pub fn channel(&self) -> &Channel {
-        &self.channel
-    }
-
-    pub fn claims(&self) -> &AuthClaims {
-        &self.subscription.claims
-    }
-
-    pub fn subscription(&self) -> &Subscription {
-        &self.subscription
-    }
-
-    pub fn keys(&self) -> SubscriptionKeys {
-        let subscription = self.subscription();
-
-        SubscriptionKeys {
-            channel_id: subscription.channel_id,
-            user_id: subscription.user_id,
-        }
-    }
 }
 
-impl Subscription {
-    pub fn channel_id(&self) -> Id {
-        self.channel_id
+impl AuthorizedSubscription {
+    pub async fn find(
+        connection: &mut Connection<'_>,
+        keys: &SubscriptionKeys,
+    ) -> via::Result<Self> {
+        // The user in `keys` must have the minimum auth claims required to
+        // participate in the channel.
+        let by_parciptiation = subscriptions::channel_id
+            .eq(keys.channel_id)
+            .and(subscriptions::user_id.eq(keys.user_id))
+            .and(can_participate());
+
+        // Execute the query.
+        let parcipitating = ChannelSubscription::query()
+            .filter(by_parciptiation)
+            .first_async(connection)
+            .await?;
+
+        // Rebuild the subscription keys with the values provided by diesel.
+        let keys = SubscriptionKeys {
+            channel_id: parcipitating.channel.id,
+            user_id: parcipitating.subscription.user_id,
+        };
+
+        Ok(Self {
+            channel: parcipitating.channel,
+            claims: parcipitating.subscription.claims,
+            keys,
+        })
     }
 
-    pub fn user_id(&self) -> Id {
-        self.user_id
+    delegate! {
+        to self.keys() {
+            pub fn channel_id(&self) -> &Id;
+            pub fn user_id(&self) -> &Id;
+        }
+    }
+
+    pub fn is_admin(&self) -> bool {
+        self.claims.contains(AuthClaims::ADMINISTRATE)
+    }
+
+    pub fn to_keys(&self) -> SubscriptionKeys {
+        SubscriptionKeys {
+            channel_id: *self.channel_id(),
+            user_id: *self.user_id(),
+        }
+    }
+
+    fn keys(&self) -> &SubscriptionKeys {
+        &self.keys
     }
 }
 
 impl SubscriptionKeys {
-    pub fn new(channel_id: Id, user_id: Id) -> Self {
+    pub fn new(user_id: Id, channel_id: Id) -> Self {
         Self {
             channel_id,
             user_id,

@@ -248,6 +248,22 @@ impl ThreadWithUser {
             .select(Self::as_select())
     }
 
+    pub async fn recent_in_channel(
+        connection: &mut Connection<'_>,
+        channel_id: &Id,
+    ) -> via::Result<Vec<Self>> {
+        let by_channel_and_threadness = threads::channel_id
+            .eq(channel_id)
+            .and(threads::thread_id.is_null());
+
+        Self::query()
+            .filter(by_channel_and_threadness)
+            .order(recent())
+            .limit(PER_PAGE)
+            .load_async(connection)
+            .await
+    }
+
     pub fn channel_id(&self) -> &Id {
         &self.thread.channel_id
     }

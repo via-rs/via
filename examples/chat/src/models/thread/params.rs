@@ -5,7 +5,6 @@ use via::request::PathParams;
 use via::{Error, ResultExt};
 
 use super::JoinUsers;
-
 use crate::Request;
 use crate::models::subscription::SubscriptionKeys;
 use crate::routes::channels::Subscriber;
@@ -34,16 +33,15 @@ impl ThreadCollectionContext {
         Self { keys, thread_id }
     }
 
-    pub fn channel_id(&self) -> &Id {
-        &self.keys.channel_id
+    delegate! {
+        to self.keys() {
+            pub fn channel_id(&self) -> &Id;
+            pub fn user_id(&self) -> &Id;
+        }
     }
 
     pub fn thread_id(&self) -> Option<&Id> {
         self.thread_id.as_ref()
-    }
-
-    pub fn user_id(&self) -> &Id {
-        &self.keys.user_id
     }
 
     pub fn to_where_clause(&self) -> BoxedFilterExpr<'_, JoinUsers> {
@@ -62,6 +60,10 @@ impl ThreadCollectionContext {
             Box::new(expr)
         }
     }
+
+    fn keys(&self) -> &SubscriptionKeys {
+        &self.keys
+    }
 }
 
 impl<'a> TryFrom<&'a Request> for ThreadCollectionContext {
@@ -69,10 +71,10 @@ impl<'a> TryFrom<&'a Request> for ThreadCollectionContext {
 
     fn try_from(request: &'a Request) -> Result<Self, Self::Error> {
         Ok(Self {
-            // Load the channel subscription that we resolved during authorization.
+            // Load the channel subscription keys from authorization.
             keys: request
-                .channel()
-                .map(|channel| channel.keys())
+                .subscription()
+                .map(|subscription| subscription.to_keys())
                 .or_forbidden()?,
 
             // Parse the optional thread-id parameter from the request URI Path.
@@ -134,10 +136,10 @@ impl<'a> TryFrom<&'a Request> for ThreadMemberContext {
 
     fn try_from(request: &'a Request) -> Result<Self, Self::Error> {
         Ok(Self {
-            // Load the channel subscription that we resolved during authorization.
+            // Load the channel subscription keys from authorization.
             keys: request
-                .channel()
-                .map(|channel| channel.keys())
+                .subscription()
+                .map(|subscription| subscription.to_keys())
                 .or_forbidden()?,
 
             // Extract the thread params from the request URI path.

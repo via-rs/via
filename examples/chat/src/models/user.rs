@@ -1,6 +1,6 @@
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use diesel::deserialize::{self, FromSql, FromSqlRow};
-use diesel::helper_types::{AsSelect, InnerJoin, InnerJoinOn, Select};
+use diesel::helper_types::{AsSelect, Select};
 use diesel::pg::{Pg, PgValue};
 use diesel::prelude::*;
 use diesel::serialize::{self, Output, ToSql};
@@ -8,21 +8,13 @@ use diesel::{AsExpression, dsl::count, sql_types};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::{self, Debug, Formatter};
 use time::OffsetDateTime;
-use via::{ResultExt, deny};
 use via_diesel::AsyncQueryDsl;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::app::Connection;
 use crate::models::subscription::{self, ChannelSubscription};
-use crate::schema::{channels, subscriptions, users};
+use crate::schema::users;
 use crate::util::{Id, session::Unauthorized};
-
-type JoinSubscriptions = InnerJoin<users::table, subscriptions::table>;
-
-type JoinChannels = InnerJoinOn<JoinSubscriptions, channels::table, ThroughSubscriptions>;
-type ThroughSubscriptions = diesel::dsl::Eq<subscriptions::channel_id, channels::id>;
-
-pub(super) type UserPreviewSqlType = (sql_types::Uuid, sql_types::Text, sql_types::Text);
 
 #[derive(Clone, Deserialize, Identifiable, Queryable, Selectable, Serialize)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
@@ -179,7 +171,7 @@ impl User {
 
             // If an error occurs, respond with a 400 Bad Request status code.
             if verify_result.is_err() {
-                deny!(400, "passwords must match");
+                via::deny!(400, "passwords must match");
             }
         }
 
@@ -286,11 +278,6 @@ impl UserWithSubscriptions {
 }
 
 impl Password {
-    #[inline]
-    fn as_bytes(&self) -> &[u8] {
-        self.hash.as_bytes()
-    }
-
     #[inline]
     fn hash(&self) -> via::Result<PasswordHash> {
         match PasswordHash::new(self.hash.as_str()) {

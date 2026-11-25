@@ -7,8 +7,8 @@ use std::sync::Arc;
 use time::OffsetDateTime;
 use via_diesel::AsyncQueryDsl;
 
-use super::subscription::NewSubscription;
-use super::{ChannelSubscription, ThreadDetails};
+use super::subscription::{AuthorizedSubscription, NewSubscription};
+use super::thread::ThreadDetails;
 use crate::app::Connection;
 use crate::schema::{channels, subscriptions};
 use crate::util::Id;
@@ -20,7 +20,8 @@ pub struct Name(Arc<str>);
 #[derive(Clone, Identifiable, Queryable, Selectable, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Channel {
-    id: Id,
+    pub(super) id: Id,
+
     name: Option<Name>,
 
     #[serde(with = "time::serde::rfc3339")]
@@ -45,7 +46,7 @@ pub struct ChangeSet {
 #[derive(Serialize)]
 pub struct ChannelWithThreads {
     #[serde(flatten)]
-    channel: ChannelSubscription,
+    subscription: AuthorizedSubscription,
     threads: Vec<ThreadDetails>,
 }
 
@@ -88,11 +89,11 @@ impl Channel {
 
     pub async fn update(
         connection: &mut Connection<'_>,
-        id: Id,
+        id: &Id,
         changes: ChangeSet,
     ) -> via::Result<Self> {
         diesel::update(channels::table)
-            .filter(by_id(id))
+            .filter(channels::id.eq(id))
             .set(changes)
             .returning(Self::as_returning())
             .get_result_async(connection)
@@ -101,8 +102,11 @@ impl Channel {
 }
 
 impl ChannelWithThreads {
-    pub fn new(channel: ChannelSubscription, threads: Vec<ThreadDetails>) -> Self {
-        Self { channel, threads }
+    pub fn new(subscription: AuthorizedSubscription, threads: Vec<ThreadDetails>) -> Self {
+        Self {
+            subscription,
+            threads,
+        }
     }
 }
 

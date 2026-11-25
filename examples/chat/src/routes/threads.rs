@@ -116,10 +116,10 @@ async fn show(request: Request, _: Next) -> via::Result {
     Response::build().data(&thread)
 }
 
-/// Update an existing thread.
+/// Update a thread or reply by id.
 ///
 /// The current user must be authorized to access the channel to which the
-/// thread belongs and own the thread. Otherwise, `404`.
+/// thread belongs and own the thread. Otherwise, `403`.
 async fn update(request: Request, _: Next) -> via::Result {
     // Extract contextual arguments from the request.
     let context = ThreadMemberContext::try_from(&request)?;
@@ -135,7 +135,7 @@ async fn update(request: Request, _: Next) -> via::Result {
     })?;
 
     // Respond with JSON if the thread was modified. Otherwise, return an empty
-    // response with a 204 status code.
+    // response with 204 No Content.
     if let Some(changed) = thread.changed() {
         // Generate the response with a reference to changed thread so we can
         // move the original value into the relay event.
@@ -150,7 +150,7 @@ async fn update(request: Request, _: Next) -> via::Result {
     }
 }
 
-/// Delete an existing thread by id.
+/// Delete a thread or reply by id.
 async fn destroy(request: Request, _: Next) -> via::Result {
     // Extract contextual arguments from the request.
     let context = ThreadMemberContext::try_from(&request)?;
@@ -167,11 +167,24 @@ async fn destroy(request: Request, _: Next) -> via::Result {
             .execute_async(&mut connection)
             .await
     })? {
+        // Generate the response before dispatching the notification. Usually
+        // we do this because the dispatched event must own the data that it
+        // serializes because it occurs in a dedicated task.
+        //
+        // In this case, we are doing it for consistency. The implications of
+        // an error occurring before dispatch is that the current user will not
+        // know whether or not the DELETE request failed.
+        //
+        // The resulting user experience is effectively the same for the other
+        // subscribers of the channel. Therefore, we're going to favor
+        // consistency.
         let response = Response::build().status(StatusCode::NO_CONTENT).finish()?;
-        let event = OurEvent::delete_reply(&context);
 
         // Dispatch the "delete-reply" event to the subscribers in the channel.
-        request.app().pubsub().dispatch(event);
+        request
+            .app()
+            .pubsub()
+            .dispatch(OurEvent::delete_reply(&context));
 
         Ok(response)
     } else {

@@ -15,7 +15,7 @@ use crate::models::reaction::{
 use crate::models::thread::ThreadParams;
 use crate::models::{Reaction, ReactionWithUser};
 use crate::routes::channels::Subscriber;
-use crate::schema::reactions;
+use crate::schema::{channels, reactions, threads};
 use crate::util::{Authenticator, Id, Session, hurry};
 use crate::{Next, Request, Unicorn};
 
@@ -30,9 +30,7 @@ async fn index(request: Request, _: Next) -> via::Result {
     // Load a page of reactions to the thread or reply id in context.
     let reactions = hurry!(async {
         let mut connection = request.app().database().get().await?;
-        let reacted_to_id = context.reacted_to_id();
-
-        ReactionWithUser::page_by_thread(&mut connection, reacted_to_id, by_page).await
+        ReactionWithUser::page_by_context(&mut connection, &context, by_page).await
     })?;
 
     Response::build().data(&reactions)
@@ -74,7 +72,7 @@ async fn show(request: Request, _: Next) -> via::Result {
     // Find the reaction with `id = :reaction-id` with context.
     let reaction = hurry!(async {
         let mut connection = request.app().database().get().await?;
-        ReactionWithUser::by_thread_and_id(&mut connection, &context).await
+        ReactionWithUser::find_by_context(&mut connection, &context).await
     })?;
 
     Response::build().data(&reaction)
@@ -91,14 +89,19 @@ async fn destroy(request: Request, _: Next) -> via::Result {
 
         // Deletes must be performed from the thread id path prefix that owns
         // the reaction by the user to which the reaction belongs.
-        let by_thread_user_and_id = reactions::thread_id
+        let by_channel_thread_user_and_id = reactions::thread_id
             .eq(context.reacted_to_id())
             .and(reactions::user_id.eq(context.user_id()))
-            .and(reactions::id.eq(context.reaction_id()));
+            .and(reactions::id.eq(context.reaction_id()))
+            .and(diesel::dsl::exists(
+                threads::table
+                    .filter(threads::id.eq(reactions::thread_id))
+                    .filter(threads::channel_id.eq(context.channel_id())),
+            ));
 
         // Peform the delete.
         diesel::delete(reactions::table)
-            .filter(by_thread_user_and_id)
+            .filter(by_channel_thread_user_and_id)
             .execute_async(&mut connection)
             .await
     })? {

@@ -15,13 +15,14 @@ use via_diesel::{AsyncQueryDsl, LimitAndPage, Paginate};
 use super::{ThreadWithUser, User, UserPreview};
 use crate::app::Connection;
 use crate::models::ThreadDetails;
-use crate::schema::{reactions, users};
+use crate::schema::{reactions, threads, users};
 use crate::util::Id;
 
 const UNIQUE_REACTIONS_PER_CONVERSATION: i32 = 12;
 const USERNAMES_PER_REACTION: i32 = 6;
 
-pub type JoinUsers = InnerJoin<reactions::table, users::table>;
+type JoinUsers = InnerJoin<reactions::table, users::table>;
+type JoinUsersAndThreads = InnerJoin<JoinUsers, threads::table>;
 
 #[derive(
     Associations,
@@ -158,34 +159,39 @@ impl Reaction {
 }
 
 impl ReactionWithUser {
-    pub fn by_thread_and_id(
+    pub fn find_by_context(
         connection: &mut Connection<'_>,
         context: &ReactionMemberContext,
     ) -> impl Future<Output = via::Result<Self>> {
+        let by_channel_thread_and_id = reactions::id
+            .eq(context.reaction_id())
+            .and(threads::channel_id.eq(context.channel_id()))
+            .and(reactions::thread_id.eq(context.reacted_to_id()));
+
         Self::query()
-            .filter(
-                reactions::thread_id
-                    .eq(context.reacted_to_id())
-                    .and(reactions::id.eq(context.reaction_id())),
-            )
+            .filter(by_channel_thread_and_id)
             .first_async(connection)
     }
 
-    pub fn page_by_thread(
+    pub fn page_by_context(
         connection: &mut Connection<'_>,
-        thread_id: &Id,
+        context: &ReactionCollectionContext,
         limit_and_page: LimitAndPage<50>,
     ) -> impl Future<Output = via::Result<Vec<Self>>> {
+        let by_channel_and_thread = threads::channel_id
+            .eq(context.channel_id())
+            .and(reactions::thread_id.eq(context.reacted_to_id()));
+
         Self::query()
-            .filter(reactions::thread_id.eq(thread_id))
+            .filter(by_channel_and_thread)
             .page(limit_and_page)
             .load_async(connection)
     }
 
-    #[inline]
-    fn query() -> Select<JoinUsers, AsSelect<Self, Pg>> {
+    fn query() -> Select<JoinUsersAndThreads, AsSelect<Self, Pg>> {
         reactions::table
             .inner_join(users::table)
+            .inner_join(threads::table)
             .select(Self::as_select())
     }
 }

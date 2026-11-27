@@ -140,9 +140,12 @@ fn routes(home: via::Route<Unicorn>) {
                         .route("/reactions", reactions::collection())
                         .route("/:reaction-id", reactions::member());
                 });
+
+            // The ./channels/:channel-id/users route.
+            path.route("/users", via::get(channels::users));
         });
 
     // The /api/users resource.
-    path.route("/users", users::collection(auth_required))
+    path.route("/users", users::collection())
         .route("/:user-id", users::member(auth_required));
 }

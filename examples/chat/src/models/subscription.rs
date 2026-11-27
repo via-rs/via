@@ -14,6 +14,7 @@ use via_diesel::AsyncQueryDsl;
 
 use super::Channel;
 use crate::app::Connection;
+use crate::models::UserPreview;
 use crate::schema::{channels, subscriptions};
 use crate::util::Id;
 
@@ -67,6 +68,17 @@ pub struct ChannelSubscription {
     #[diesel(embed)]
     #[serde(flatten)]
     channel: Channel,
+
+    #[diesel(embed)]
+    subscription: Subscription,
+}
+
+#[derive(Queryable, Selectable, Serialize)]
+#[diesel(table_name = subscriptions)]
+pub struct UserSubscription {
+    #[diesel(embed)]
+    #[serde(flatten)]
+    user: UserPreview,
 
     #[diesel(embed)]
     subscription: Subscription,

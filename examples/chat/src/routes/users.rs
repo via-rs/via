@@ -109,5 +109,5 @@ fn hey_its_me(request: &Request) -> via::Result<Id> {
     let id = request.param("user-id").parse::<Id>()?;
 
     // Deny the request if the current user's id is not :user-id.
-    (&me == &id).then_some(me).or_forbidden()
+    (me == id).then_some(me).or_forbidden()
 }

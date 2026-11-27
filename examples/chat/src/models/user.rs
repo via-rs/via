@@ -4,7 +4,7 @@ use diesel::helper_types::{AsSelect, Select};
 use diesel::pg::{Pg, PgValue};
 use diesel::prelude::*;
 use diesel::serialize::{self, Output, ToSql};
-use diesel::{AsExpression, dsl::count, sql_types};
+use diesel::{AsExpression, sql_types};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::{self, Debug, Formatter};
 use time::OffsetDateTime;
@@ -12,7 +12,6 @@ use via_diesel::AsyncQueryDsl;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::app::Connection;
-use crate::models::subscription::{self, ChannelSubscription};
 use crate::schema::users;
 use crate::util::{Id, session::Unauthorized};
 
@@ -53,13 +52,6 @@ pub struct UserPreview {
     id: Id,
     email: String,
     username: String,
-}
-
-pub struct UserWithSubscriptions {
-    id: Id,
-    email: String,
-    username: String,
-    subscriptions: Vec<ChannelSubscription>,
 }
 
 #[derive(Deserialize)]
@@ -196,12 +188,12 @@ impl User {
 
     pub async fn update(
         connection: &mut Connection<'_>,
-        id: Id,
-        changes: ChangeSet,
+        id: &Id,
+        change_set: ChangeSet,
     ) -> via::Result<Self> {
         diesel::update(users::table)
-            .filter(by_id(id))
-            .set(changes)
+            .filter(users::id.eq(id))
+            .set(change_set)
             .returning(Self::as_returning())
             .get_result_async(connection)
             .await
@@ -211,41 +203,14 @@ impl User {
         users::table.select(Self::as_select())
     }
 
-    pub async fn exists(connection: &mut Connection<'_>, id: Id) -> via::Result<()> {
-        let total = users::table
-            .select(count(users::id))
-            .filter(by_id(id))
-            .get_result_async::<i64>(connection)
-            .await?;
-
-        if total == 1 {
-            Ok(())
-        } else {
-            Err(Unauthorized.into())
-        }
-    }
-
-    pub async fn with_subscriptions(
+    pub fn exists(
         connection: &mut Connection<'_>,
-        id: Id,
-    ) -> via::Result<UserWithSubscriptions> {
-        let user = UserPreview::query()
-            .filter(by_id(id))
-            .first_async(connection)
-            .await?;
-
-        let subscriptions = ChannelSubscription::query()
-            .filter(subscription::by_user(id).and(subscription::can_participate()))
-            .limit(100)
-            .load_async(connection)
-            .await?;
-
-        Ok(UserWithSubscriptions {
-            id: user.id,
-            email: user.email,
-            username: user.username,
-            subscriptions,
-        })
+        id: &Id,
+    ) -> impl Future<Output = via::Result<Id>> {
+        users::table
+            .select(users::id)
+            .filter(users::id.eq(id))
+            .get_result_async(connection)
     }
 }
 
@@ -256,24 +221,6 @@ impl UserPreview {
 
     pub fn id(&self) -> Id {
         self.id
-    }
-}
-
-impl UserWithSubscriptions {
-    pub fn id(&self) -> Id {
-        self.id
-    }
-
-    pub fn subscriptions(&self) -> impl Iterator<Item = &ChannelSubscription> {
-        self.subscriptions.iter()
-    }
-
-    pub fn to_preview(&self) -> UserPreview {
-        UserPreview {
-            id: self.id,
-            email: self.email.clone(),
-            username: self.username.clone(),
-        }
     }
 }
 

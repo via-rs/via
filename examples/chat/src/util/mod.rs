@@ -64,7 +64,7 @@ pub mod test {
         // for `Unicorn`. Then, extract the cookie from the returned response.
         let Some(session) = client
             .app()
-            .login(user.clone())?
+            .login(&user)?
             .cookies()
             .signed(&signer)
             .get(SESSION)

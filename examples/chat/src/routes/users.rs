@@ -6,50 +6,25 @@
 //! After an account is created, the response updates the session cookie to
 //! authenticate the new user.
 
-via::resource!(app = Unicorn, guard = [index, member]);
+via::resource!(app = Unicorn, guard = member, only = [create, member]);
 
-use diesel::{Identifiable, QueryDsl};
+use diesel::{ExpressionMethods, Identifiable, QueryDsl};
+use http::StatusCode;
 use via::request::Payloadz;
-use via::{Payload, Response, deny};
+use via::{Payload, Response, ResultExt, deny};
 use via_diesel::paginate::{LimitAndOffset, LimitAndPage};
 use via_diesel::{AsyncQueryDsl, Paginate};
 
-use crate::models::user::{User, by_id, by_username_asc};
-use crate::util::{Authenticator, Id, Session};
+use crate::models::user::{self, User, by_id, by_username_asc};
+use crate::schema::users;
+use crate::util::{Authenticator, Id, Session, hurry};
 use crate::{Next, Request, Unicorn};
 
-/// List users.
-///
-/// Responds to `GET /users`.
-async fn index(request: Request, _: Next) -> via::Result {
-    // Source pagination arguments from the URI query.
-    let by_page_number = request.query::<LimitAndPage>()?;
-
-    // Load a page of users, sorted alphabetically by their username.
-    let users = {
-        // Checkout a database connection.
-        let mut connection = request.app().database().get().await?;
-
-        // Execute the query.
-        User::query()
-            .order(by_username_asc())
-            .page(by_page_number)
-            .load_async(&mut connection)
-            .await?
-    };
-
-    Response::build().data(users)
-}
-
-/// Create a new user account.
-///
-/// Responds to `POST /users`.
-///
-/// On success, the session cookie is updated to authenticate the new account.
+/// Create a new user.
 async fn create(request: Request, _: Next) -> via::Result {
     // Deny the request if it comes from an authenticated user.
     if request.me().is_ok() {
-        deny!(403, "logout before creating a new account");
+        via::deny!(403, "you must first logout before creating a new account");
     }
 
     // Deserialize a NewUser from the request body.
@@ -60,88 +35,79 @@ async fn create(request: Request, _: Next) -> via::Result {
     // plaintext password prevents the secret from lingering in memory.
 
     // Insert the user into the users table.
-    let user = {
-        // Acquire a database connection.
+    let user = hurry!(async {
         let mut connection = app.database().get().await?;
+        User::create(&mut connection, new_user).await
+    })?;
 
-        // Perform the insert.
-        User::create(&mut connection, new_user).await?
-    };
-
-    app.login(user)
+    // Refresh the session and generate a response.
+    app.login(&user)
 }
 
-/// Retrieve a user by id.
-///
-/// Responds to `GET /users/:user-id`.
+/// Find a user by id.
 async fn show(request: Request, _: Next) -> via::Result {
     // Parse an Id from the :user-id path parameter.
     let id = request.param("user-id").parse::<Id>()?;
 
     // Find the user with id = `:user-id`.
-    let user = {
-        // Acquire a database connection.
+    let user = hurry!(async {
         let mut connection = request.app().database().get().await?;
 
-        // Execute the query.
         User::query()
-            .filter(by_id(id))
+            .filter(users::id.eq(&id))
             .first_async(&mut connection)
-            .await?
-    };
+            .await
+    })?;
 
-    Response::build().data(user)
+    Response::build().data(&user)
 }
 
-/// Update an existing user.
-///
-/// Responds to `PATCH /users/:user-id`.
-///
-/// The active user must be the user identified by `:user-id`.
+/// Update a user by id.
 async fn update(request: Request, _: Next) -> via::Result {
-    // Parse an Id from the :user-id path parameter.
-    let id = request.param("user-id").parse::<Id>()?;
-
-    // Confirm that the active user is the owner of the account.
-    if !request.me().is_ok_and(|me| id == me) {
-        deny!(403, "only the account owner can update a user");
-    }
+    // Confirm that the request target is owned by the current user.
+    let me = hey_its_me(&request)?;
 
     // Aggregate the request body and deserialize a user change set.
     let (body, app) = request.into_future();
     let changes = body.timeout_after_secs(2).await?.data()?;
 
-    // Apply the change set to the active user.
-    let user = {
-        // Acquire a database connection.
+    // Apply the change set to the current user.
+    let user = hurry!(async {
         let mut connection = app.database().get().await?;
+        User::update(&mut connection, &me, changes).await
+    })?;
 
-        // Perform the update.
-        User::update(&mut connection, id, changes).await?
-    };
-
-    Response::build().data(user)
+    Response::build().data(&user)
 }
 
-/// Delete a user account.
-///
-/// Responds to `DELETE /users/:user-id`.
-///
-/// The active user must be the user identified by `:user-id`.
+/// Delete a user by id.
 async fn destroy(request: Request, _: Next) -> via::Result {
+    // Confirm that the request target is owned by the current user.
+    let me = hey_its_me(&request)?;
+
+    // Checkout a database connection and then delete the user.
+    let _: Id = hurry!(async {
+        let mut connection = request.app().database().get().await?;
+
+        diesel::delete(users::table)
+            .filter(users::id.eq(&me))
+            .returning(users::id)
+            .get_result_async(&mut connection)
+            .await
+    })?;
+
+    Response::build().status(StatusCode::NO_CONTENT).finish()
+}
+
+/// Confirm that the request target is the currently authenticated user.
+/// Returns the id of the current user if the `:user-id` path param is a match.
+fn hey_its_me(request: &Request) -> via::Result<Id> {
+    // Get the id of the current user from the session.
+    let me = request.me()?;
+
     // Parse an Id from the :user-id path parameter.
     let id = request.param("user-id").parse::<Id>()?;
 
-    // Confirm that the active user is the owner of the account.
-    if !request.me().is_ok_and(|me| id == me) {
-        deny!(403, "only the account owner can delete a user");
-    } else {
-        // Acquire a database connection.
-        let mut connection = request.app().database().get().await?;
-
-        // Perform the delete.
-        User::destroy(&mut connection, id).await?;
-    }
-
-    Response::build().status(204).finish()
+    // Deny the request if the current user's id is not :user-id.
+    PartialEq::eq(&me, &id).then_some(me).or_forbidden()
 }

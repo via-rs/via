@@ -1,6 +1,7 @@
 use base64::engine::Engine;
 use bb8::{Pool, PooledConnection};
 use cookie::{Cookie, Key, SameSite};
+use diesel::Identifiable;
 use diesel_async::AsyncPgConnection;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use http::StatusCode;
@@ -15,7 +16,7 @@ use zeroize::Zeroizing;
 use crate::models::user::User;
 use crate::routes::chat::Notification;
 use crate::util::session::{CODEC, Identity, Unauthorized};
-use crate::util::{Authenticator, Id, Session};
+use crate::util::{Authenticator, Id, Session, hurry};
 use crate::{Next, Request};
 
 const DATABASE_URL: &str = "DATABASE_URL";
@@ -90,24 +91,18 @@ pub fn restore_session(request: &mut Request) -> Result<(), Catch> {
     Ok(())
 }
 
-/// Verify that the active user still has an account.
+/// Verify that the current user still has an account.
 pub async fn verify_session(mut request: Request, next: Next) -> via::Result {
-    // Get the id of the active user from the session.
+    // Get the id of the current user from the session.
     let me = request.me()?;
 
-    // If `Ok(())`, the account is valid.
-    let result = {
-        // Acquire a database connection.
+    // Checkout a database connection and confirm that the user exists.
+    let identity = match hurry!(async {
         let mut connection = request.app().database().get().await?;
-
-        // Execute the query.
-        User::exists(&mut connection, me).await
-    };
-
-    // Verify the active user's account and create a fresh identity token.
-    let identity = match result {
+        User::exists(&mut connection, &me).await
+    }) {
         // The account is valid, create a fresh identity token.
-        Ok(_) => Identity::new(me),
+        Ok(ref id) => Identity::new(id),
 
         // The user does not exist, destroy the session.
         Err(error) if error.status() == StatusCode::UNAUTHORIZED => {
@@ -245,9 +240,9 @@ impl Unicorn {
 }
 
 impl Authenticator for Unicorn {
-    fn login(&self, user: User) -> via::Result {
+    fn login(&self, user: &User) -> via::Result {
         // Create a new identity token for `user`.
-        let identity = Identity::new(*diesel::Identifiable::id(&user));
+        let identity = Identity::new(user.id());
 
         // Build a response containing `user` as json.
         let mut response = Response::build().status(StatusCode::CREATED).data(user)?;

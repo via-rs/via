@@ -5,12 +5,13 @@ use diesel::{AsExpression, deserialize, sql_types};
 use serde::{Deserialize, Serialize, Serializer};
 use std::sync::Arc;
 use time::OffsetDateTime;
-use via_diesel::AsyncQueryDsl;
+use via_diesel::{AsyncQueryDsl, LimitAndPage, Paginate};
 
 use super::subscription::{AuthorizedSubscription, NewSubscription};
 use super::thread::ThreadDetails;
 use crate::app::Connection;
-use crate::schema::{channels, subscriptions};
+use crate::models::subscription::{UserSubscription, can_participate};
+use crate::schema::{channels, subscriptions, users};
 use crate::util::Id;
 
 #[derive(AsExpression, Clone, Debug, FromSqlRow)]
@@ -98,6 +99,19 @@ impl Channel {
             .returning(Self::as_returning())
             .get_result_async(connection)
             .await
+    }
+
+    pub fn members(
+        connection: &mut Connection<'_>,
+        id: &Id,
+        page: LimitAndPage<50>,
+    ) -> impl Future<Output = via::Result<Vec<UserSubscription>>> {
+        subscriptions::table
+            .inner_join(users::table)
+            .select(UserSubscription::as_select())
+            .filter(subscriptions::channel_id.eq(id).and(can_participate()))
+            .page(page)
+            .load_async(connection)
     }
 }
 

@@ -189,6 +189,26 @@ async fn destroy(request: Request, _: Next) -> via::Result {
     }
 }
 
+/// List the participants of the channel.
+pub async fn users(request: Request, _: Next) -> via::Result {
+    // Extract the channel id from the request subscription.
+    let id = request
+        .subscription()
+        .map(|subscription| *subscription.channel_id())
+        .or_forbidden()?;
+
+    // Extract pagination arguments from the URI query params.
+    let page = request.query::<LimitAndPage<50>>()?;
+
+    // Load a page of participants for this channel.
+    let participants = hurry!(async {
+        let mut connection = request.app().database().get().await?;
+        Channel::members(&mut connection, &id, page).await
+    })?;
+
+    Response::build().data(&participants)
+}
+
 impl Subscriber for Request {
     fn subscription(&self) -> Option<&AuthorizedSubscription> {
         if let Some(Protected(subscription)) = self.extensions().get() {

@@ -24,7 +24,7 @@ pub struct Identity([u8; TOKEN_LEN]);
 pub struct Unauthorized;
 
 pub trait Authenticator {
-    fn login(&self, user: User) -> via::Result;
+    fn login(&self, user: &User) -> via::Result;
     fn logout(&self, response: &mut Response);
 }
 
@@ -65,7 +65,7 @@ fn in_an_hour() -> i64 {
 
 impl Identity {
     #[inline(always)]
-    pub fn new(id: Id) -> Self {
+    pub fn new(id: &Id) -> Self {
         let mut buf = [0; TOKEN_LEN];
 
         buf[0] = TOKEN_VERSION;
